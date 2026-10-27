@@ -5370,6 +5370,7 @@ def test_pre_submit_handoff_rejects_unreviewed_dependency(tmp_path, family, depe
     "generation",
     [
         "current",
+        "issuer_bytes_source",
         "quantity_source",
         "stopped_preparation",
         "execution_exact",
@@ -5424,6 +5425,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
         "current": handoff.REVIEWED_SELL_CANCEL_PROFILE,
+        "issuer_bytes_source": handoff.REVIEWED_ISSUER_BYTES_PROFILE,
         "inventory_origin_source": handoff.REVIEWED_INVENTORY_ORIGIN_PROFILE,
         "quantity_source": handoff.REVIEWED_QUANTITY_SOURCE_PROFILE,
         "stopped_preparation": handoff.REVIEWED_STOPPED_PREPARATION_PROFILE,
@@ -5516,6 +5518,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     str(canonical),
                     "show",
                     {
+                        "issuer_bytes_source": "29a3c1475",
                         "quantity_source": "fef43a8c5",
                         "stopped_preparation": "f48dd058d",
                         "execution_exact": "2d3e27aeb",
@@ -6979,3 +6982,12 @@ def test_closed_native_preopen_requires_original_pid_proof_and_operator_stop(tmp
         assert proof["new_pid_consumption_claimed"] is False
         assert proof["pid_identity"] == identity
         assert proof["source_hashes"][str(closed)] == handoff._sha(closed)
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("dependency", sorted(handoff.REVIEWED_QUANTITY_COST_HASHES))
+@pytest.mark.parametrize("fault", ["missing", "dirty", "committed_change", "parent_mix"])
+def test_quantity_cost_handoff_rejects_incomplete_successor(tmp_path, family, dependency, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "current", dependency
+    )

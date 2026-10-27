@@ -743,7 +743,7 @@ def _native_missing_buy_position(
     """Consume accepted BUY receipts when recovery emitted no pipeline event.
 
     This is a research projection of existing executions, not a reconstructed
-    HOLDING event. Partial or conflicting pipeline executions stay excluded.
+    HOLDING event. A partial census needs an independently complete native one.
     """
     missing = {
         "source_gap_buy_fill_missing",
@@ -751,9 +751,17 @@ def _native_missing_buy_position(
         "source_gap_position_quantity_not_conserved",
     }
     reasons = set(position["execution_source_quality_reasons"])
+    partial = bool(position["buy_legs"])
+    if partial:
+        missing = {
+            "source_gap_db_buy_quantity_mismatch",
+            "source_gap_db_buy_cost_mismatch",
+            "source_gap_negative_position_balance",
+            "source_gap_position_quantity_not_conserved",
+        }
     if (
-        position["buy_legs"]
-        or not missing <= reasons
+        (not partial and not missing <= reasons)
+        or (partial and "source_gap_db_buy_quantity_mismatch" not in reasons)
         or reasons - missing - {"source_gap_sell_leg_configured_cost"}
         or not position["terminal_observed"]
         or position["status"] != "COMPLETED"
@@ -765,6 +773,26 @@ def _native_missing_buy_position(
     if recovered is None:
         return position, None
     legs, custody, proof = recovered
+    if partial:
+        if proof.get("basis") != "native_registry_complete_single_share_orders":
+            return position, None
+        indexed = {(leg["order_no"], leg["execution_no"]): leg for leg in legs}
+        seen = set()
+        for leg in position["buy_legs"]:
+            key = (leg["order_no"], leg["execution_no"])
+            native_leg = indexed.get(key)
+            if (
+                key in seen
+                or native_leg is None
+                or any(
+                    leg.get(field) != native_leg[field]
+                    for field in ("qty", "price", "route")
+                )
+            ):
+                return position, None
+            seen.add(key)
+        if not seen < set(indexed):
+            return position, None
     if sum(number(leg["qty"]) for leg in position["sell_legs"]) != number(
         trade["buy_qty"]
     ):
@@ -775,6 +803,139 @@ def _native_missing_buy_position(
         "custody_rows": custody,
         "execution_source_quality_reasons": sorted(reasons - missing),
     }, proof
+
+
+def _complete_partial_native_buy(trade, stock, registry, generation, registry_index):
+    """Reconcile an incomplete accepted receipt using exact one-share fills.
+
+    Cumulative registry amounts cannot price a missing partial execution. Only
+    a single complete one-share execution per order is admitted here. The
+    existing custody reader independently verifies every claim and fill.
+    """
+    from src.engine.ai import holding_exit_vote as vote
+    from src.engine.sniper_trade_review_report import _quantity_registry_fill_custody
+
+    record = _record(trade["id"])
+    if not 0 < stock["buy_qty"] < trade["buy_qty"]:
+        return None
+    owners, _ = registry_index
+    journal = owners.get("main_scalping:" + record, [])
+    fills = [row for row in journal if row.get("event") == "FILL_RECORDED"]
+    entries = [
+        row
+        for row in journal
+        if row.get("event") == "INTENT_RESERVED"
+        and str(row.get("client_intent_id", "")).startswith(
+            f"main_scalping:{record}:{record}:ENTRY_BUY:"
+        )
+    ]
+    # A rejected earlier intent is not the entry that actually filled.
+    filled_intents = {row.get("intent_id") for row in fills}
+    entries = [row for row in entries if row.get("intent_id") in filled_intents]
+    if len(entries) != 1:
+        return None
+    entry_at = _clock(entries[0]["observed_at_kst"])
+    if _clock(trade["buy_time"]) not in {entry_at, entry_at.replace(microsecond=0)}:
+        return None
+    legs, seen = [], set()
+    for row in fills:
+        order, execution = str(row.get("broker_order_no", "")), str(
+            row.get("execution_no", "")
+        )
+        at = _clock(row["observed_at_kst"])
+        price = number(row.get("fill_amount"))
+        if (
+            order in seen
+            or row.get("quantity") != 1
+            or row.get("filled_qty") != 1
+            or price <= 0
+            or price != price.to_integral_value()
+            or at < entry_at
+            or at.date().isoformat() != row.get("order_date")
+            or row.get("order_date") != entry_at.date().isoformat()
+        ):
+            return None
+        seen.add(order)
+        legs.append(
+            dict(
+                at=at.isoformat(),
+                order_no=order,
+                execution_no=execution,
+                qty=1,
+                price=int(price),
+                route=row.get("route"),
+            )
+        )
+    legs.sort(key=lambda leg: (_clock(leg["at"]), leg["order_no"], leg["execution_no"]))
+    _legs(legs)
+    if len(legs) != trade["buy_qty"] or abs(
+        number(sum(leg["price"] for leg in legs)) / number(len(legs))
+        - number(trade["buy_price"])
+    ) > Decimal("0.0001"):
+        return None
+    indexed = {(leg["order_no"], leg["execution_no"]): leg for leg in legs}
+    original = vote.buy_fill_legs_from_runtime(stock)
+    for leg in original:
+        current = indexed.get((leg["order_no"], leg["execution_no"]))
+        signature = stock["_entry_receipt_executions_by_order_no"][leg["order_no"]][
+            leg["execution_no"]
+        ]
+        if (
+            current is None
+            or leg["qty"] != 1
+            or any(
+                signature.get(key) != expected
+                for key, expected in {
+                    "unit_exec_qty": 1,
+                    "unit_exec_price": current["price"],
+                    "cumulative_qty": 1,
+                    "cumulative_exec_amount": current["price"],
+                    "order_qty": 1,
+                    "remaining_qty": 0,
+                }.items()
+            )
+        ):
+            return None
+    if len(original) != stock["buy_qty"] or abs(
+        sum(
+            number(indexed[(leg["order_no"], leg["execution_no"])]["price"])
+            for leg in original
+        )
+        / number(len(original))
+        - number(stock["buy_price"])
+    ) > Decimal("0.0001"):
+        return None
+    if _clock(stock["buy_time"]) not in {
+        at
+        for leg in original
+        for at in (
+            _clock(indexed[(leg["order_no"], leg["execution_no"])]["at"]),
+            _clock(indexed[(leg["order_no"], leg["execution_no"])]["at"]).replace(
+                microsecond=0
+            ),
+        )
+    }:
+        return None
+    custody = _quantity_registry_fill_custody(
+        trade,
+        {"buy_fill_legs": legs},
+        registry,
+        generation,
+        registry_index=registry_index,
+    )
+    custody_account(record, legs, custody)
+    return (
+        legs,
+        custody,
+        {
+            "basis": "native_registry_complete_single_share_orders",
+            "registry_sha256": generation["sha256"],
+            "fill_event_hashes": sorted(row["event_hash"] for row in fills),
+            "clock_source": "native_registry_fill_observed_at_kst",
+            "original_receipt_quantity": stock["buy_qty"],
+            "reconciled_quantity": len(legs),
+        },
+    )
 
 
 def native_research_buy_fills(root, trade, registry, generation, registry_index):
@@ -793,6 +954,33 @@ def native_research_buy_fills(root, trade, registry, generation, registry_index)
     with Claim(path.stat().st_size * 12):
         before = native.byte_generation(path)
         receipt = native._read(path, vote._BUY_FILL_RECEIPT_MAX_BYTES)
+        if (
+            receipt.get("source") == "accepted_broker_execution"
+            and type(receipt.get("buy_qty")) is int
+            and 0 < receipt["buy_qty"] < trade["buy_qty"]
+        ):
+            partial = dict(
+                id=int(record),
+                code=trade["code"],
+                buy_time=receipt.get("buy_time"),
+                buy_qty=receipt["buy_qty"],
+                buy_price=receipt.get("buy_price"),
+            )
+            if (
+                vote.restore_buy_fill_receipt(partial, root) != "restored"
+                or partial.get("_add_receipt_filled_by_order_no")
+                or partial.get("_add_receipt_executions_by_order_no")
+            ):
+                return None
+            result = _complete_partial_native_buy(
+                trade, partial, registry, generation, registry_index
+            )
+            if native.byte_generation(path) != before:
+                raise ValueError("research_native_buy_receipt_changed")
+            if result is not None:
+                legs, custody, proof = result
+                return legs, custody, {**proof, "receipt": before}
+            return None
         stock = dict(
             id=int(record),
             code=trade["code"],

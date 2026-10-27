@@ -273,7 +273,7 @@ def test_handoff_coordination_preparation_pair_is_exact(fault):
     old = C.REVIEWED_HANDOFF_COORDINATION_ORIGINS[name]
     current = C._sha(ROOT / name)
     assert current == C.REVIEWED_ISSUER_BYTES_SOURCES[name]
-    assert current == H.REVIEWED_ISSUER_BYTES_PROFILE[name]
+    assert current == H.REVIEWED_SELL_CANCEL_PROFILE[name]
     if fault == "old":
         old = "0" * 64
     elif fault == "current":
@@ -3466,8 +3466,8 @@ def test_native_cost_intake_independent_preparation_preserves_original_source(na
 def test_prior_execution_independent_preparation_exact_current_source(name, fault):
     old = C.REVIEWED_PRIOR_EXECUTION_ORIGINS[name]
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-    assert current == C.REVIEWED_PRIOR_EXECUTION_SOURCES[name]
-    assert current == H.REVIEWED_ISSUER_BYTES_PROFILE[name]
+    assert current == C.REVIEWED_QUANTITY_COST_SOURCES.get(name, C.REVIEWED_PRIOR_EXECUTION_SOURCES[name])
+    assert current == H.REVIEWED_SELL_CANCEL_PROFILE[name]
     if fault == "origin":
         old = "0" * 64
     elif fault == "successor":
@@ -3482,8 +3482,8 @@ def test_prior_execution_independent_preparation_exact_current_source(name, faul
 def test_quantity_source_independent_preparation_keeps_exact_pair(name, fault):
     old = C.REVIEWED_QUANTITY_SOURCE_ORIGINS[name]
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-    assert current == C.REVIEWED_QUANTITY_SOURCE_SOURCES[name]
-    assert current == H.REVIEWED_ISSUER_BYTES_PROFILE[name]
+    assert current == C.REVIEWED_QUANTITY_COST_SOURCES.get(name, C.REVIEWED_QUANTITY_SOURCE_SOURCES[name])
+    assert current == H.REVIEWED_SELL_CANCEL_PROFILE[name]
     if fault == "origin":
         old = "0" * 64
     elif fault == "successor":
@@ -3499,7 +3499,7 @@ def test_stopped_preparation_independent_source_pair_is_exact(name, fault):
     old = C.REVIEWED_STOPPED_PREPARATION_ORIGINS[name]
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
     assert current == C.REVIEWED_EXECUTION_EXACT_SOURCES.get(name, C.REVIEWED_STOPPED_PREPARATION_SOURCES[name])
-    assert current == H.REVIEWED_ISSUER_BYTES_PROFILE[name]
+    assert current == H.REVIEWED_SELL_CANCEL_PROFILE[name]
     if fault == "origin":
         old = "0" * 64
     elif fault == "successor":
@@ -3520,3 +3520,19 @@ def test_sell_cancel_preparation_exact_reviewed_sources(relative, fault):
     if fault == "successor": current = "0" * 64
     if fault == "path": relative = "src/engine/unknown_sell_owner.py"
     assert C.reviewed_preparation_pair(relative, old, current) is (fault is None)
+
+
+@pytest.mark.parametrize("name", sorted(C.REVIEWED_QUANTITY_COST_SOURCES))
+@pytest.mark.parametrize("fault", [None, "origin", "successor", "path"])
+def test_quantity_cost_preparation_pair_is_exact(name, fault):
+    old = C.REVIEWED_QUANTITY_COST_ORIGINS[name]
+    current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
+    assert current == C.REVIEWED_QUANTITY_COST_SOURCES[name]
+    assert current == H.REVIEWED_SELL_CANCEL_PROFILE[name]
+    if fault == "origin":
+        old = "0" * 64
+    elif fault == "successor":
+        current = "0" * 64
+    elif fault == "path":
+        name = "src/engine/unreviewed_cost_source.py"
+    assert C.reviewed_preparation_pair(name, old, current) is (fault is None)

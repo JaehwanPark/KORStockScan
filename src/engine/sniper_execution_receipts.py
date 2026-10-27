@@ -2482,7 +2482,10 @@ def retry_pending_sell_execution_receipt_custody(
 ) -> bool:
     """Retry one exact append gap without creating SELL submission authority."""
 
-    _restore_pending_sell_submit_custody_retry_snapshot(target_stock)
+    state = target_stock.get(_SELL_EXECUTION_RECEIPT_STATE_KEY)
+    if (isinstance(state, dict) and state.get(_SELL_SUBMIT_CUSTODY_RETRY_SNAPSHOT_KEY) is not None
+        and not _restore_pending_sell_submit_custody_retry_snapshot(target_stock)):
+        return False
     if target_stock.get("exit_receipt_submission_custody_retry_required") is not True:
         return True
     proof = target_stock.get("_sell_submit_receipt_proof")

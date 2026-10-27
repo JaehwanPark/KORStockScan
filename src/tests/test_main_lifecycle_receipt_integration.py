@@ -3736,6 +3736,8 @@ def test_partial_receipt_snapshot_cannot_erase_later_cancel_or_generation(monkey
     assert stock["sell_submit_generation"] == before["sell_submit_generation"]
     assert stock["sell_cancel_intent_order_no"] == "0000456"
     assert stock["sell_cancel_intent_generation"] == before["sell_cancel_intent_generation"]
+    if changed_generation:
+        assert execution_receipts.retry_pending_sell_execution_receipt_custody(stock) is False
 
 
 def test_rotated_partial_restart_preserves_newer_durable_cancel_intent(monkeypatch):

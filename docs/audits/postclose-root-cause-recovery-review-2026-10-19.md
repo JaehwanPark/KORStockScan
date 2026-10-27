@@ -4741,3 +4741,325 @@ print-only document parsing PASS. Baselinef98d1aaef; non-test source+157/-3 exte
 one existing owner plus its existing reviewed registries. Tests and docs are
 reported separately by Git numstat; additions retain distinct custody/epoch/
 issuer/role/exit failure coverage. No runtime scope or policy values change.
+
+### Scheduled PREOPEN and Main consumption -- 2026-10-28
+
+Decision: source27 reached recovered completion through scheduled target28
+PREOPEN and actual Main policy/PID consumption on selected29a3c1475. This is
+not unassisted acceptance or proof of complete route observations/economics.
+The session reloaded AGENTS and its required current owners. Procedural changes
+require the verified stopped/running phase, a change-scoped native consumer
+inventory before expensive validation, and complete original-issuer byte
+custody across process boundaries. They do not freeze incident values or make
+report-only diagnostics new startup requirements. The final
+[consumer census](../../../KORStockScan-storage-archives/postclose-monitor-20261027/handoff-root-review/consumer-inventory-selected-29a3c1475.json)
+records12 roles,7 individual native stages and16 source-owner hashes, including
+the original future issuer, selected active-parent reader, independent P5,
+finalization, PREOPEN, actual Main and observer/health consumers.
+
+Source29 clean commit was pushed after414 owner/digest/policy tests,926 full
+independent startup-context tests and45 complete current/prior profiles passed.
+The existing original prepared-validator owner now carries authenticated native
+byte observations into the parent's existing bounded digest admission. Native
+candidate P5e0603807287b48b2a95713c3b23bb8de passed, including the three large
+source27 bars and212 byte observations. The native transition offline sequence
+passed12 cases, and cold selection reached verified at06:05:57. No Main was
+started by the recovery caller. Original selector/failed attempts are retained.
+
+Recovery caller review kept two distinctions explicit. Controller review uses
+the existing same-process stopped-postclose scope; invoking it without that
+scope rejected active_policy_code_reader_root_changed. After selection, the
+original future issuer remains10f, while its already-issued active-parent
+receipt is read by the contract-permitted selected29 reader. Reusing10f for
+that live reader rejected postclose_review_active_parent_receipt_missing. Both
+failed attempts are preserved; no accepted-error expansion, policy change or
+permissive fallback was added. Native future code refresh completed06:09:16
+with unchanged behavioral family, memberships, thresholds and provider.
+
+The selected native finalizer finished06:22:14, exit0. Required summary, strict
+and whole-native controller passed; cleanup DONE06:19:49, with no maintenance
+failure or escalated writer deferral. Native compression reclaimed about998MB;
+purge remained disabled without deletion authority, and protected sources and
+original identity gaps were retained. EOD27 and unaffected calculation prefixes
+were reused, not rerun. Final chain2f04b7fe69d8113af2a7fa0e70cec64eda07b43fcecb50e0e7fa1d9459863474
+and snapshot2298969e7911a7b55758bfd0be1e1a881f35f8e995565e7589bd066a2568bcfc
+remain valid. Selected final-generation P5
+6fa1298b93b24eb8980ae9a275eead3c passed after final writers, with findings[],
+isolated child exit0 and protected sources unchanged. See
+[finalization receipt](../../../KORStockScan-storage-archives/postclose-monitor-20261027/handoff-root-review/candidate-29a3c1475/selected-finalization-result.json)
+and [selected P5](../../../KORStockScan-storage-archives/postclose-monitor-20261027/handoff-root-review/candidate-29a3c1475/selected-p5-reference.json).
+
+Scheduled PREOPEN ran07:35:01 to07:38:40, succeeded/exit0. Scheduled Main started
+as PID2852722, start_ticks78626491, cwd selected29/src. Its own native V6 receipt
+at07:55:59.368194+09:00 consumed bundle
+4abcce1001c0cc689d7b749376ba91be6455f479e4332dc97a1d2fc2d39ca46f,
+128 planned/128 newly consumed/0 legacy scopes, exact selected commit and actor.
+The independently sealed receipt SHA is
+712114558362b4d37790d18539447a967fdeb1e50a900e3ccea5770d96c11bc4.
+Native startup barrier is ready/current_pid_consumption_complete and bootstrap
+PID verification passed with findings[]. These configured scopes are not128
+natural route samples. See [actual consumption](../../../KORStockScan-storage-archives/postclose-monitor-20261027/handoff-root-review/candidate-29a3c1475/actual-main-consumption-observation.json)
+and [scheduled PREOPEN](../../../KORStockScan-storage-archives/postclose-monitor-20261027/handoff-root-review/candidate-29a3c1475/natural-preopen-observation.json).
+
+Main's native observer496412bbe20e4ea9baf3a3fe7b2ee29e completed07:56:12.764968
+with current generation and verified actor/selected root. Its coverage remains
+partial/unobservable: missing_stale_or_noncurrent_sentinel_evidence, and the
+snapshot does not itself prove policy consumption. The separate later V6
+receipt does. The first own full sweep started07:56:13.192480 and its observed
+07:56:29 report had0 FAIL. That producer atomically replaces its daily report;
+the first original bytes were not retained before replacement. The
+[ordering observation](../../../KORStockScan-storage-archives/postclose-monitor-20261027/handoff-root-review/candidate-29a3c1475/first-main-health-ordering-observation.json)
+explicitly records this limitation, not a reconstructed native report/hash.
+Later original07:58:55 own-health bytes and observer bytes are retained. At
+08:04:58 the same exact PID remains ready and current08:04:23 health has0 FAIL.
+No restart or bound-artifact rerun was performed for another PASS.
+
+The user's06:22:07 alert is the remaining quantity economic-source warning,
+not a failed deployment or startup. Native source27 census is37 inputs/33
+eligible, four excluded; source28 PID still uses the unchanged six parent
+quantity types/five-stage profile. Alert generation a34d980f... is the unchanged
+selected quantity pointer, not evidence that source27 evaluation failed to run.
+49013/49266 retain approved historical diagnoses. 49362/49415 remain current
+research_cost_execution_source_invalid / actual_cost_revision_pending:
+49362's original declared cost bytes verify, but actual/completion/fact cost
+generations changed beyond the current history-carry contract; 49415's original
+declaration rejects broker_cost_declared_window_changed. These findings do not
+establish new economic loss or permit copying old acknowledgements onto changed
+evidence. Close only after native cost/source-generation reconciliation and the
+existing monitor producer/direct consumer validate the result. Actual cost/PnL
+stays null/excluded. See [remaining native gap](../../../KORStockScan-storage-archives/postclose-monitor-20261027/handoff-root-review/candidate-29a3c1475/remaining-native-economic-gap.json).
+
+The other health warning is tmp capacity (about11.46GB against8GiB soft warning),
+with no growth warning and about46.8GB free at cleanup observation. Required
+originals remain protected; no arbitrary deletion or threshold increase closed
+that warning. Weakness research remains operator_paused. All six existing
+source/economic owners remain OPEN. The same DirectFamilyPreopenPolicyHandoff
+now owns source28 scheduled20:05 through29 PREOPEN07:35/Main07:55-08:05,
+including actual actor/policy, current observer and first full health without
+manual correction. Today27-to28 recovered completion cannot close that future
+unassisted acceptance.
+
+Before editing checklist28, the native owner preserved strict-bound original
+748fc505b0be3809073aeea8757c4e0eb02ef5f257f8a12c6608aaed52c5375e.
+After its operating notes changed, native read-only finalization validation
+returned issues[] using that original preserved checklist; no resealing or
+historical PASS rewrite was required. See
+[preserved-checklist verification](../../../KORStockScan-storage-archives/postclose-monitor-20261027/handoff-root-review/candidate-29a3c1475/finalization-after-checklist-edit.json).
+This closing change is documentation only. Original failed attempts, unrelated
+workspace changes and runtime selection29 are preserved; no executable owner,
+module or entrypoint is added, replaced or removed by these notes.
+
+### Quantity cost lineage 49362 and 49415 — 2026-10-28
+
+Scope: explicit authorization covers source reconciliation, causal repair, review,
+regression, clean commit/push and necessary integrated deployment/minimal native
+regeneration. Baseline is `6a8028439c22010fd231f3addcc2d11fddfb09c7` on isolated
+`codex/quantity-cost-lineage-20261028`; unrelated canonical edits remain intact.
+The original alert is source27 initial quantity under selected `29a3c1475`.
+The user confirmed another session owns the stopped Main/operational transition
+at08:33. This session must not concurrently replace its selection, preparation,
+startup hold or shared research indices. Code/test closure below is distinct from
+that owner completing operational consumption.
+
+Original evidence: [93-file manifest](/home/ubuntu/KORStockScan-storage-archives/quantity-cost-lineage-20261028/original-manifest.json),
+[causal observation](/home/ubuntu/KORStockScan-storage-archives/quantity-cost-lineage-20261028/original-cause-observation.json),
+[original fact generations](/home/ubuntu/KORStockScan-storage-archives/quantity-cost-lineage-20261028/fact-generations-original.json).
+Original content-addressed copies, original failures, source dates and original
+null costs/PnL are retained. Account/journal context was obtained through the
+native router without exposing credentials or account identity. No provider or
+order call was made by this repair.
+
+- **49362 / completion19:** native BUY3, Main SELL1 and absent final SELL terminal.
+  The [original operator reconciliation](preopen-alert-repair-2026-10-19.md)
+  records the user's manual sale of the remaining2 shares at09:01:54. That is
+  neither a missing currently owned position nor authority to fabricate a Main
+  final fill. Exact cost and Main-owned complete execution remain unavailable;
+  normalized fact profit_rate, realized_pnl and broker_actual_fees_taxes remain
+  null/excluded. The current warning recurred because the unchanged record's
+  official cost query window and aggregate research index advanced, changing
+  `actual_cost_source_generation`, compact `completion_generation` and
+  `fact_generation.cost_generation` together. The old history comparison only
+  understood the last field. The original declared19 cost window verifies
+  unchanged, as do the original execution and invalid record receipt.
+- **49415 / completion21:** DB/native census BUY3/SELL3, retained accepted BUY
+  receipt and pipeline BUY2. Missing order0023803/execution8752 is a real Main
+  native registry fill: one share,236500KRW, observed10:03:53.833931+09:00. It
+  arrived before REST residual staging, so the old callback did not append it
+  to the BUY ledger. The original collector cause was already repaired by
+  `9bff47f8b` (10/21 10:29:28) and initial-entry counterpart `57143fe21`; the
+  selected29 source contains both. Their exact owner/account/order/quantity and
+  pre-REST callback regression coverage was rerun. The remaining defect was the
+  research recovery owner's rejection of every partial BUY census, even when
+  the preserved native registry independently proves the missing execution.
+  Its21 official settlement window also gained previously unobserved21 rows,
+  so carrying the old acknowledgement is correctly rejected. A new research
+  receipt is necessary, not acceptance of a changed old window.
+
+Existing allocation recovery now accepts a partial receipt only with a complete
+native one-share-per-order census, exact original entry intent clock, unchanged
+receipt bytes, account/owner/route/custody, original observed leg agreement,
+complete SELL terminal, quantity conservation and matching weighted entry price.
+Cumulative multi-fill amounts cannot price a missing execution. It preserves
+both raw pipeline and accepted receipt and creates no HOLDING event or physical
+venue attribution. Initial-quantity intake binds the exact recovered cost fill
+identity and retains existing leg clocks/venue metadata; only the recovered leg
+uses an explicitly named native registry observation clock and UNKNOWN venue.
+
+The existing history publisher now retains the original full native completion
+proof behind the compact digest. It verifies both old/current record cost
+projections and original completion bytes before normalizing the cost-only
+change, then invokes the unchanged original-window cost reader. Changed original
+window, record receipt, cost value, completion source or unknown/missing proof
+stays current. A different completion-date/entry-cost binding is not silently
+accepted by this same-generation comparison.
+
+[Isolated49415 consumer](/home/ubuntu/KORStockScan-storage-archives/quantity-cost-lineage-20261028/49415-isolated-consumption.json)
+verified native recovery→allocation→quantity path with three BUY legs. Its
+single-record research allocation is1835KRW cost/2165KRW modeled net; these are
+not a production-published allocation or exact broker per-trade costs. The
+[canonical-null clarification](/home/ubuntu/KORStockScan-storage-archives/quantity-cost-lineage-20261028/isolated-economics-clarification.json)
+distinguishes the original snapshot's unverified numeric profit_rate from the
+normalized fact's null actual economics. The full production cohort must still
+be allocated by the native owner. Actual fill cost, actual net profit and actual
+venue do not become known through this research reconstruction.
+
+Replacement/removal: extend existing allocation, quantity intake and historical
+monitor owners; consolidate their unconditional partial rejection and compact
+hash-only comparison. Existing whole-missing BUY recovery, historical readers,
+original code profiles, native source/cost guards and current consumers are
+retained. No new module, CLI, worker, schedule, policy or duplicated publisher;
+no deferred code removal. Independent preparation pairs and complete successor
+profile are added without deleting any issued predecessor profile.
+
+[Consumer/phase inventory](/home/ubuntu/KORStockScan-storage-archives/quantity-cost-lineage-20261028/consumer-inventory.json)
+owns the minimal operational handoff. Re-pin the other session's final selector,
+PID/start/cwd, active parent and changed files before integration; do not overwrite
+its profile with this baseline. Verify original completion21, then run existing
+late research-cost revision for21. Rebuild source27 replay/timeout/evaluation
+and monitor through native code-specific preparation (`publish_current=false`),
+retaining original committed stage, summary/strict/controller/finalization,
+policy and null actual economics. Other historical dates require only native
+code-revision revalidation if their existing owner invalidates the index.
+Revalidate every bound consumer; if a committed source must change, let its
+native downstream owners reseal in dependency order. No EOD or unchanged whole
+postclose rerun. Candidate and selected P5, active-policy handoff, actual selected
+consumer/current observer and the original alert must be separately verified.
+49362 remains historical excluded/null with its original manual-exit authority;
+49415 can close only after its newly issued research receipt is consumed. The
+other original49013/49266 gaps and source28→29 unassisted acceptance stay OPEN.
+
+Validation: **1,813 distinct targeted tests passed**:1,734 source/allocation,
+quantity, independent preparation and existing early-fill custody tests; one
+additional full native completion→history publication→bounded consumer case;
+15 complete current handoff cases and63 predecessor/missing/dirty/mixed code
+cases. The90-case monitor suite was rerun after its final fixture changes.
+The three causal regression cases fail with the original owners injected and
+pass with repaired owners. Original negative attempts are preserved, including
+an invalid test fixture and a test run invalidated by a concurrent local source
+edit; neither was treated as production failure or PASS. Existing pandas
+Copy-on-Write deprecation warning remains. Compile, black checks on changed
+formatted owners, diff whitespace, new links and the print-only backlog parser
+passed; the existing checklist owner occurs once in the parsed backlog.
+[Validation logs](/home/ubuntu/KORStockScan-storage-archives/quantity-cost-lineage-20261028/)
+and [actual49362/49415 history comparison](/home/ubuntu/KORStockScan-storage-archives/quantity-cost-lineage-20261028/49362-native-history-comparison.json)
+retain49362 as the verified unchanged historical fact and reject49415's changed
+old cost window. Review has no unresolved in-scope code findings; operational
+publication/consumer acceptance remains assigned to the confirmed transition
+owner, not claimed by these tests.
+
+Code/test/audit clean commit `c72834d586e84d1e5c08aef3033a7d08d3471fef` is
+pushed to `origin/codex/quantity-cost-lineage-20261028`. The user subsequently
+confirmed **the current deployment session integrates this commit and performs
+the minimum regeneration**. This session performs no competing live transition
+or shared publication. That owner must reconcile its newer complete profile,
+consume the repaired21 research allocation and source27 prepared quantity
+successor, and report selected/PID/observer/original-alert evidence separately.
+The remaining operational acceptance stays under
+`InitialQuantityProducerConsumerRepair1010`; this handoff does not mark it DONE.
+Source baseline→repair delta is +383/-25 non-test lines, +485/-10 test lines and
++120/-0 documentation lines. Growth implements exact partial native-census and
+full original-completion proof handling inside existing owners, together with
+producer/consumer and negative contract coverage; it adds no runtime entrypoint.
+
+
+### RFHIC partial SELL cancellation and operator-stop recovery — 2026-10-28
+
+User authority: block Main immediately, repair the repeated40-second SELL timeout,
+review and restart; subsequently integrate `c72834d58` and its `792a834be` handoff.
+Baseline selected `29a3c1475`, Main2852722/start78626491. Native cooperative stop
+under an explicit operator hold completed08:19:50; no forced kill, invented cancel,
+manual DB edit or policy change. Collector epoch1793141750952208363 closed with
+original enqueue40186 and native eligible closure. [Original identity and closure](../../tmp/rfhic-sell-timeout-20261028/containment-complete.json)
+retain the selector, before-stop pin and exact closed receipt.
+
+RFHIC218410/record49558 requested5 on NXT order0002206. Native execution7146
+filled1 at51000; the later zero-quantity packet is not another fill. At08:38 the
+native read-only all-venue inventory showed4 remaining and the unfilled snapshot
+showed0 orders. The failed cancel was not proof of either full fill or a new sale.
+The inventory producer returned `owner_registry_plus_all_venue_inventory`, but
+three terminal custody consumers accepted only `kt00018_position_found`.
+The partial ledger rotated correctly, then the terminal proof was rejected;
+a missing existing30-second retry interval repeated the40-second error169 times.
+The repaired producer/consumer contract preserves the exact original source,
+intent/ACK, owner/quantity, receipt hash and terminal absence requirements.
+
+Review exposed two adjacent causal defects. First, an old partial-fill snapshot
+could erase a later durable cancel intent or rewind another submit generation.
+The receipt restore preserves later same-generation cancellation/terminal fields,
+rejects a different generation, and startup restores the exact pending journal
+last before releasing HOLDING. Second, Ahnlab053800/49559 completed its SELL then
+revived49560 as WATCHING, but late dispatch publication could overwrite it as
+SELL_ORDERED. The existing final write now rechecks ID, status, pending generation,
+context hash and quantity under ENTRY_LOCK. Timeouts report reconciliation;
+VI/quote failure is no longer asserted without evidence.
+
+[Original RFHIC journal replay](../../tmp/rfhic-sell-timeout-20261028/original-replay.log)
+uses unchanged fsynced pending/partial bytes and current4-share/zero-open-order
+facts in an isolated consumer. It reaches HOLDING4, preserves carried fill1 and
+51000 amount, clears exact terminal custody only after DB commit, and issues no
+order/cancel call. This is offline recovery evidence, not actual live recovery.
+Original pending SHA62a9df7609d2540c0ee5ff39d9aa9fc5df382d6d7cfc10e3520f6d45c79e41a1;
+partial SHA220735ec4842202a200c32de364ed35c1261a2aa250f542c32e8fa3cc832269c.
+Actual broker fees/PnL remain separate and are not inferred from configured costs.
+
+The existing ordered owner also lacked recovery for an operator-stopped initial
+PREOPEN process. It now authenticates original live bootstrap consumption and
+native closure, preserves original bytes, and transfers the exact operator hold
+by CAS only after all candidate proof. The existing start hooks, sentinel lock,
+phase CAS and failure unwind remain. Closed historical proof never claims a new
+PID. Both independent code readers bind the complete integrated cost/SELL source
+profile; every issued predecessor remains readable.
+
+Review/replacement: extend existing receipt, state, sync, native handoff and
+ordered transition owners. Replace three incompatible legacy source checks and
+the unguarded dispatch write; consolidate exact same-generation retry protection.
+Retain original data, pending journals, hard guards and historical profile readers.
+No new module, worker, subscription, provider endpoint, policy or order authority;
+no deferred displaced implementation. `c72834d58` research changes are reviewed
+under the preceding cost-lineage section and retain original actual-cost nulls.
+The [consumer inventory](../../tmp/rfhic-sell-timeout-20261028/integrated-consumer-inventory.json)
+pins minimum source21 cost revision, source27 prepared quantity and report-code
+fixtures before candidate/selected P5. Original committed source27 and policy
+pointers are preserved. Current natural closure stays OPEN under existing owners
+until actual successor PID consumption, native RFHIC reconciliation and health.
+
+Validation before integration:737 causal/ordered tests passed; exact original
+journal replay1 passed. The two original cancellation/race regressions and three
+startup replay regressions fail on the original owners and pass after repair.
+After integration:185 quantity/cost tests and277 independent reader/ordered
+checks passed; complete current-profile and changed-dependency negatives continue.
+The earlier full preparation run had906 passes plus20 stale expected-code test
+assertions, repaired against current exact profiles while preserving historical
+fixtures. A broad unchanged predecessor matrix was stopped after the new merge
+requirement; no unfinished run is counted as PASS. Compile, diff and document
+parser plus final deployment evidence are recorded separately below.
+
+Integrated review closure:96 profile/closed-origin cases and15 final complete
+current-profile cases passed; the final receipt consumers passed228 tests after
+the last generation-mismatch propagation fix. The source/test merge keeps both
+original cost and SELL profiles plus one complete integrated successor.
+Baseline29a3c1475 aggregate delta: source +682/-53, tests +708/-17, docs +544/-0
+(includes c72834d58,792a834be and the existing6a8028439 dated handoff). Growth
+adds exact custody/closure checks and failure coverage inside existing owners;
+no new executable entrypoint. Final diff/compile and print-only document parser
+passed. Deployment and natural acceptance are not claimed by this code closure.

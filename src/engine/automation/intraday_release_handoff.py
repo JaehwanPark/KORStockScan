@@ -12742,10 +12742,35 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Complete research cost successor; immutable consumed profiles remain readable.
+REVIEWED_QUANTITY_COST_HASHES = {'src/engine/lifecycle/broker_cost_allocation.py': '98d7b7d529eb5e850b61da3a316c794dfd45dad939bbe18d344f83bfe4d3ebf2', 'src/engine/scalping/initial_quantity_policy.py': 'bf06e3259526962b0314ce570fdb656eba2a4797d90cf7afc95eedb7d023295d', 'src/engine/scalping/initial_quantity_monitor_projection.py': '10431b20d021e3e6088f09d2e8c9fd2b5bae09708423cfffc40036f4da1ee650', 'src/engine/infrastructure/startup_validation_code_context.py': 'e06a189b942df4106ad0cf48e455bb6f3516c2dc409493e3482574c4e503859e'}
+REVIEWED_QUANTITY_COST_ORIGINS = {'src/engine/lifecycle/broker_cost_allocation.py': '6c6b5e7f29de4e9941b4eea1f83292e3b4c6ca0425c1740fa3dda903add829a1', 'src/engine/scalping/initial_quantity_policy.py': 'a60fc47c9467e0da033f8371ebdb66627e632d6b1bcd00b9a915b333fc11fd2f', 'src/engine/scalping/initial_quantity_monitor_projection.py': '8ddea89000551cec2b35972f0f0752861cfd4c4f512474cb469929b0dbe5ede8', 'src/engine/infrastructure/startup_validation_code_context.py': '5ef16fce0b5ba3cea8c82d2bd58a6434effae4c1205115b8a3e08dc1c21d6d4f'}
+REVIEWED_QUANTITY_COST_PROFILE = {**REVIEWED_ISSUER_BYTES_PROFILE, **REVIEWED_QUANTITY_COST_HASHES}
+REVIEWED_QUANTITY_COST_VARIANTS = {
+    (key[0], REVIEWED_QUANTITY_COST_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/lifecycle/broker_cost_allocation.py",
+        "selector_sha256": REVIEWED_QUANTITY_COST_HASHES["src/engine/lifecycle/broker_cost_allocation.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_QUANTITY_COST_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_QUANTITY_COST_HASHES.get(os.path.normpath(name), sha) for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_ISSUER_BYTES_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current) for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_QUANTITY_COST_ORIGINS[name]})
+    for name, current in REVIEWED_QUANTITY_COST_HASHES.items()
+}}
+
+
+
 # Exact SELL reconciliation and operator-stop recovery over the complete current profile.
-REVIEWED_SELL_CANCEL_HASHES = {'src/engine/sniper_state_handlers.py': '739fa0bfc847af66436d59ce1ff15be2959dd5f9f4c69152bbd55b33600ae0ab', 'src/engine/sniper_execution_receipts.py': 'afff19e46688153fb18aa5ef477687459b15d85d197b5a5bfde2e528e99f721d', 'src/engine/sniper_sync.py': 'a8788beb561139657e18c4342abfbf4273d7ca6317eea8985b57c34962bc3c69', 'src/engine/automation/ordered_intraday_deploy.py': '9cc092cb1f592b6399ee73a049e07e05cfe613525350fcfdfbb37546a6eabaac', 'src/engine/infrastructure/startup_validation_code_context.py': '78b1f10698e79ed94abb10a6dd9f4f87886766ba2a8bee23e65feedc7e9138ef'}
+REVIEWED_SELL_CANCEL_HASHES = {'src/engine/sniper_state_handlers.py': '739fa0bfc847af66436d59ce1ff15be2959dd5f9f4c69152bbd55b33600ae0ab', 'src/engine/sniper_execution_receipts.py': '7fc306ee8c5be3812ba8ccf02b45cd948c62600a654b7ddf331e19f685d54cee', 'src/engine/sniper_sync.py': 'a8788beb561139657e18c4342abfbf4273d7ca6317eea8985b57c34962bc3c69', 'src/engine/automation/ordered_intraday_deploy.py': '9cc092cb1f592b6399ee73a049e07e05cfe613525350fcfdfbb37546a6eabaac', 'src/engine/infrastructure/startup_validation_code_context.py': '17294725212fc8a597c22755cbf7c39d7cdcad62435ebad63c98035e2ab97e48'}
 REVIEWED_SELL_CANCEL_ORIGINS = {'src/engine/sniper_state_handlers.py': '8e070b77c3cd1a53454862bc18c7a7ddee09da158d862f4e93fdd56226287672', 'src/engine/sniper_execution_receipts.py': 'c16009021a52faa9486d76f4b820c42b8574ebf2775c77192e60f87e1e7dcf90', 'src/engine/sniper_sync.py': 'da6289ec42399a5b7eea141defe6e061d6f78bcf06db3fd5e9d04e137695f1a2', 'src/engine/automation/ordered_intraday_deploy.py': 'ddf0b36a3ed279c7ab89ad60e39f29d5d171c8137215e67c5b6eecc9d04baf2a', 'src/engine/infrastructure/startup_validation_code_context.py': '5ef16fce0b5ba3cea8c82d2bd58a6434effae4c1205115b8a3e08dc1c21d6d4f'}
-REVIEWED_SELL_CANCEL_PROFILE = {**REVIEWED_ISSUER_BYTES_PROFILE, **REVIEWED_SELL_CANCEL_HASHES}
+REVIEWED_SELL_CANCEL_PROFILE = {**REVIEWED_QUANTITY_COST_PROFILE, **REVIEWED_SELL_CANCEL_HASHES}
 REVIEWED_SELL_CANCEL_VARIANTS = {
     (key[0], REVIEWED_SELL_CANCEL_HASHES.get(key[0], key[1])): {
         **value,
@@ -12756,7 +12781,7 @@ REVIEWED_SELL_CANCEL_VARIANTS = {
             origin: {name: REVIEWED_SELL_CANCEL_HASHES.get(os.path.normpath(name), sha) for name, sha in paths.items()}
             for origin, paths in value["contract_extensions"].items()
         },
-    } for key, value in REVIEWED_ISSUER_BYTES_VARIANTS.items()
+    } for key, value in REVIEWED_QUANTITY_COST_VARIANTS.items()
 }
 REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
@@ -13622,6 +13647,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_ISSUER_BYTES_PROFILE
         prepared_variants = REVIEWED_ISSUER_BYTES_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/lifecycle/broker_cost_allocation.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_QUANTITY_COST_HASHES["src/engine/lifecycle/broker_cost_allocation.py"]
+    ):
+        prepared_hashes = REVIEWED_QUANTITY_COST_PROFILE
+        prepared_variants = REVIEWED_QUANTITY_COST_VARIANTS
     if (
         (source := candidate_bytes("src/engine/sniper_state_handlers.py", optional=True)) is not None
         and hashlib.sha256(source).hexdigest() == REVIEWED_SELL_CANCEL_HASHES["src/engine/sniper_state_handlers.py"]

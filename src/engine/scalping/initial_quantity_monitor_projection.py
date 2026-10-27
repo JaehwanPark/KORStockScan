@@ -663,10 +663,10 @@ def _historical_predecessor(stage_path, stage, data_root, report=None):
         return None
     disposition = proof["history"]
     rows = disposition["excluded_rows"]
+    old_report = None
     if disposition["schema"] == "initial_quantity_historical_exclusions_v1":
         # Bounded one-time adoption of an issued legacy acknowledgement. New
         # receipts carry only their excluded witnesses, never the whole replay.
-        old_report = None
         if Path(previous["report_path"]).stat().st_size <= MAX_BYTES:
             old_report = read(
                 Path(previous["report_path"]),
@@ -705,6 +705,37 @@ def _historical_predecessor(stage_path, stage, data_root, report=None):
                 }
             )
         rows = migrated
+    # Compact completion references also advance when only their cost overlay
+    # changes. Retain the original native completion proof, not just its digest.
+    if any(
+        row["fact_witness"].get("completion_generation", {}).get("schema")
+        == "initial_quantity_completion_generation_reference_v1"
+        and not row.get("completion_source_reference")
+        for row in rows
+    ):
+        if (
+            old_report is None
+            and Path(previous["report_path"]).stat().st_size <= MAX_BYTES
+        ):
+            old_report = read(
+                Path(previous["report_path"]),
+                limit=MAX_BYTES,
+                expected_sha=previous["report_file_sha256"],
+            )
+        if old_report is not None:
+            rows = [
+                (
+                    {
+                        **row,
+                        "completion_source_reference": _history_completion_reference(
+                            row["fact_witness"], old_report
+                        ),
+                    }
+                    if not row.get("completion_source_reference")
+                    else row
+                )
+                for row in rows
+            ]
     return {
         "rows": rows,
         "source": proof["history_source"],
@@ -729,11 +760,69 @@ def _history_cost_reference(fact, report):
     return None
 
 
-def _same_historical_fact(previous, fact, data_root):
+def _history_completion_reference(fact, report):
+    from src.engine.scalping.initial_quantity_source_cache import (
+        completion_generation_reference,
+    )
+
+    reference = fact.get("completion_generation") or {}
+    full = (
+        report.get("census", {})
+        .get("completion_overlay_generations", {})
+        .get(reference.get("source_date"))
+    )
+    if full is None or completion_generation_reference(full) != reference:
+        return None
+    return full
+
+
+def _same_historical_fact(previous, fact, data_root, *, completion=None):
     """Allow only a verified wider official-cost window for an unchanged record."""
     old = previous["fact_witness"]
     if old == fact:
         return True
+    if any(
+        old.get(key) != fact.get(key)
+        for key in ("actual_cost_source_generation", "completion_generation")
+    ):
+        from src.engine.lifecycle.broker_cost_reconciliation import (
+            record_source_generation,
+        )
+        from src.engine.scalping.initial_quantity_source_cache import (
+            completion_generation_reference,
+        )
+
+        original = previous.get("completion_source_reference")
+        if original is None or completion is None:
+            return False
+        for row, source in ((old, original), (fact, completion)):
+            costs = source.get("current_cost_generation")
+            if (
+                costs is None
+                or completion_generation_reference(source)
+                != row.get("completion_generation")
+                or record_source_generation(
+                    costs, row["recommendation_id"], row.get("quantity_research_cost")
+                )
+                != row.get("actual_cost_source_generation")
+                or row.get("actual_cost_source_generation")
+                != (row.get("fact_generation") or {}).get("cost_generation")
+            ):
+                return False
+        if {k: v for k, v in original.items() if k != "current_cost_generation"} != {
+            k: v for k, v in completion.items() if k != "current_cost_generation"
+        }:
+            return False
+        # The enclosing publisher independently validates the current native
+        # generation. Only its authenticated cost-only envelope is normalized.
+        old, fact = (
+            {
+                k: v
+                for k, v in row.items()
+                if k not in {"actual_cost_source_generation", "completion_generation"}
+            }
+            for row in (old, fact)
+        )
     if {k: v for k, v in old.items() if k != "fact_generation"} != {
         k: v for k, v in fact.items() if k != "fact_generation"
     }:
@@ -784,7 +873,8 @@ def _carry_historical_exclusions(stage, report, observation, data_root, previous
         if old is None:
             continue
         try:
-            same = _same_historical_fact(old, fact, data_root)
+            completion = _history_completion_reference(fact, report)
+            same = _same_historical_fact(old, fact, data_root, completion=completion)
         except (OSError, ValueError) as exc:
             # Only this prior acknowledgement is unusable. Current native
             # inputs were fully validated; keep the row in current diagnostics.
@@ -801,7 +891,14 @@ def _carry_historical_exclusions(stage, report, observation, data_root, previous
         )
         if census["excluded"] != {old["reason"]: 1}:
             continue
-        rows.append({**old, "fact_sha256": native._digest(fact), "fact_witness": fact})
+        rows.append(
+            {
+                **old,
+                "fact_sha256": native._digest(fact),
+                "fact_witness": fact,
+                "completion_source_reference": completion,
+            }
+        )
     if not rows:
         return None
     result = dict(

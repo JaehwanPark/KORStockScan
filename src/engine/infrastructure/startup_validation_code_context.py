@@ -3086,8 +3086,20 @@ for _name, _sha in REVIEWED_ISSUER_BYTES_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# Exact partial BUY research recovery and authenticated cost-only history rollover.
+REVIEWED_QUANTITY_COST_SOURCES = {'src/engine/lifecycle/broker_cost_allocation.py': '98d7b7d529eb5e850b61da3a316c794dfd45dad939bbe18d344f83bfe4d3ebf2', 'src/engine/scalping/initial_quantity_policy.py': 'bf06e3259526962b0314ce570fdb656eba2a4797d90cf7afc95eedb7d023295d', 'src/engine/scalping/initial_quantity_monitor_projection.py': '10431b20d021e3e6088f09d2e8c9fd2b5bae09708423cfffc40036f4da1ee650'}
+REVIEWED_QUANTITY_COST_ORIGINS = {'src/engine/lifecycle/broker_cost_allocation.py': '6c6b5e7f29de4e9941b4eea1f83292e3b4c6ca0425c1740fa3dda903add829a1', 'src/engine/scalping/initial_quantity_policy.py': 'a60fc47c9467e0da033f8371ebdb66627e632d6b1bcd00b9a915b333fc11fd2f', 'src/engine/scalping/initial_quantity_monitor_projection.py': '8ddea89000551cec2b35972f0f0752861cfd4c4f512474cb469929b0dbe5ede8'}
+for _name, _sha in REVIEWED_QUANTITY_COST_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_QUANTITY_COST_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 # Exact cancel inventory and late-response ownership repair; no policy change.
-REVIEWED_SELL_CANCEL_SOURCES = {'src/engine/sniper_state_handlers.py': '739fa0bfc847af66436d59ce1ff15be2959dd5f9f4c69152bbd55b33600ae0ab', 'src/engine/sniper_execution_receipts.py': 'afff19e46688153fb18aa5ef477687459b15d85d197b5a5bfde2e528e99f721d', 'src/engine/sniper_sync.py': 'a8788beb561139657e18c4342abfbf4273d7ca6317eea8985b57c34962bc3c69', 'src/engine/automation/ordered_intraday_deploy.py': '9cc092cb1f592b6399ee73a049e07e05cfe613525350fcfdfbb37546a6eabaac'}
+REVIEWED_SELL_CANCEL_SOURCES = {'src/engine/sniper_state_handlers.py': '739fa0bfc847af66436d59ce1ff15be2959dd5f9f4c69152bbd55b33600ae0ab', 'src/engine/sniper_execution_receipts.py': '7fc306ee8c5be3812ba8ccf02b45cd948c62600a654b7ddf331e19f685d54cee', 'src/engine/sniper_sync.py': 'a8788beb561139657e18c4342abfbf4273d7ca6317eea8985b57c34962bc3c69', 'src/engine/automation/ordered_intraday_deploy.py': '9cc092cb1f592b6399ee73a049e07e05cfe613525350fcfdfbb37546a6eabaac'}
 REVIEWED_SELL_CANCEL_ORIGINS = {'src/engine/sniper_state_handlers.py': '8e070b77c3cd1a53454862bc18c7a7ddee09da158d862f4e93fdd56226287672', 'src/engine/sniper_execution_receipts.py': 'c16009021a52faa9486d76f4b820c42b8574ebf2775c77192e60f87e1e7dcf90', 'src/engine/sniper_sync.py': 'da6289ec42399a5b7eea141defe6e061d6f78bcf06db3fd5e9d04e137695f1a2', 'src/engine/automation/ordered_intraday_deploy.py': 'ddf0b36a3ed279c7ab89ad60e39f29d5d171c8137215e67c5b6eecc9d04baf2a'}
 for _name, _sha in REVIEWED_SELL_CANCEL_SOURCES.items():
     _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())

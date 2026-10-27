@@ -1133,8 +1133,9 @@ def test_existing_operator_hold_is_never_overwritten(driver):
 @pytest.mark.parametrize(
     "damage", [None, "status", "identity", "manifest", "generation"]
 )
-def test_native_predecessor_seal_requires_live_verified_consumption(
-    driver, monkeypatch, damage
+@pytest.mark.parametrize("closed", [False, True])
+def test_native_predecessor_seal_requires_verified_consumption(
+    driver, monkeypatch, damage, closed
 ):
     d = driver
     data = d.workspace / "data"
@@ -1164,6 +1165,12 @@ def test_native_predecessor_seal_requires_live_verified_consumption(
         pid_identity=d.identity,
         manifest_sha256="verified",
     )
+    if closed:
+        source = data / "original-live-verification.json"
+        source.write_text('{"pid_verified":true}')
+        check.update(actual_pid_consumed=False, historical_consumption_verified=True,
+                     closed_observation=dict(basis="native_preopen_closed", source_hashes={str(source):D.H._sha(source)}))
+        d.closed_predecessor = dict(check)
     if damage == "status":
         check["status"] = "fail"
     if damage == "identity":
@@ -1186,12 +1193,19 @@ def test_native_predecessor_seal_requires_live_verified_consumption(
         d.seal_native_predecessor(check)
         assert d.native_sha == D.H._sha(d.native_path)
         assert d.frozen[str(d.native_path)] == d.native_sha
-        assert json.loads(d.native_path.read_text())["verification"] == check
+        sealed = json.loads(d.native_path.read_text())
+        assert sealed["verification"] == check
+        if closed:
+            snapshots = sealed["closed_source_snapshots"]
+            assert snapshots[str(source)]["sha256"] == D.H._sha(source)
+            archived = Path(snapshots[str(source)]["path"])
+            source.write_text("mutable verification advanced")
+            assert D.H._sha(archived) == d.frozen[str(archived)]
     assert not d.hold.exists() and not d.flag.exists()
 
 
 @pytest.mark.parametrize("damage", ["phase", "selection", "running", "hold"])
-def test_start_refuses_unprepared_or_changed_generation(driver, monkeypatch, damage):
+def test_start_refuses_unprepared_or_changed_generation(driver, monkeypatch, damage, closed):
     d = driver
     d.acquire_hold()
     d.phase = "drained"
