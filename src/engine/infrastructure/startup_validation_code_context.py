@@ -2984,6 +2984,18 @@ for _name, _sha in REVIEWED_REPORT_CENSUS_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# Native machine comparison path repair; no calculation or policy change.
+REVIEWED_MACHINE_PATH_SOURCES = {'src/engine/automation/postclose_summary_handoff.py': '42d67773f5e574e15d7e82988682428b8111e6b48ec6a466cef4b9826a98234f'}
+REVIEWED_MACHINE_PATH_ORIGINS = {'src/engine/automation/postclose_summary_handoff.py': '14d18b30d6f435f55949f1e4afca9d2b00952bc7e44c82054eb49ed67f2e98b2'}
+for _name, _sha in REVIEWED_MACHINE_PATH_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_MACHINE_PATH_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

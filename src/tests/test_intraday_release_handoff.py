@@ -5415,7 +5415,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_REPORT_CENSUS_PROFILE,
+        "current": handoff.REVIEWED_MACHINE_PATH_PROFILE,
+        "machine_path": handoff.REVIEWED_MACHINE_PATH_PROFILE,
         "report_census": handoff.REVIEWED_REPORT_CENSUS_PROFILE,
         "consumed_submit_fresh": handoff.REVIEWED_SUBMIT_FRESH_PROFILE,
         "consumed_scoped_initial": handoff.REVIEWED_SCOPED_SCORING_INITIAL_PROFILE,
@@ -5491,7 +5492,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     for name in hashes:
         content = (
             (canonical / name).read_bytes()
-            if generation in {"current", "report_census"}
+            if generation in {"current", "machine_path"}
             else subprocess.check_output(
                 [
                     "git",
@@ -5499,6 +5500,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     str(canonical),
                     "show",
                     {
+                        "report_census": "10f03701c",
                         "consumed_nonfixed_final": "3178d65e0",
                         "nonfixed_final": "3178d65e0",
                         "consumed_invalidation_cadence": "d5ddc0ae0",
@@ -6671,3 +6673,9 @@ def test_source_first_scoring_rejects_each_changed_owner(tmp_path, dependency, f
 def test_report_census_policy_handoff_keeps_complete_generation(tmp_path, family, fault):
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, fault, "report_census", "src/engine/monitoring/policy_generation_code_handoff.py")
+
+
+@pytest.mark.parametrize("family", ["main_stop","holding_vote","pre_submit_delay"])
+@pytest.mark.parametrize("fault", [None,"dirty","committed_change","parent_mix"])
+def test_machine_comparison_reader_keeps_complete_policy_code_generation(tmp_path,family,fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault,"machine_path","src/engine/automation/postclose_summary_handoff.py")

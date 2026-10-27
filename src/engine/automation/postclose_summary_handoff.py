@@ -2238,13 +2238,16 @@ def _stage_output_issues(report_dir, day, stage):
         )
         from src.engine.scalping.continuous_reversal_operating_postclose import (
             SCHEMA as operating_schema,
+            directory as operating_directory,
         )
 
         schema = value.get("schema")
         if stage == "main_machine_policy" and schema == operating_schema:
             # Auxiliary tuning later replaces machine.json with its publication
             # view. This stage owns the immutable comparison and its projection.
-            comparison = _load_json(path.parent / "machine-comparison.json")
+            comparison = _load_json(
+                operating_directory(Path(report_dir).parent, day) / "machine-comparison.json"
+            )
             projection = _load_json(stage_artifacts(report_dir, day, stage)["machine_policy"])
             if not comparison or comparison != projection:
                 return ["main_machine_policy:operating_comparison_projection_changed"]

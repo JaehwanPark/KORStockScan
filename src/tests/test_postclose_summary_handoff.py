@@ -2088,7 +2088,9 @@ def _operating_machine_stage_fixture(tmp_path, monkeypatch, day="2026-10-13"):
     )
     owned = report / "continuous_reversal" / day
     (owned / "machine.json").write_text(json.dumps(machine))
-    (owned / "machine-comparison.json").write_text(json.dumps(machine))
+    native = report / "continuous_reversal_operating" / day
+    native.mkdir(parents=True, exist_ok=True)
+    (native / "machine-comparison.json").write_text(json.dumps(machine))
     (owned / "source.json").write_text(
         json.dumps(p.seal(dict(schema=p.SCHEMA, source_date=day, **p.AUTH)))
     )
@@ -2208,7 +2210,7 @@ def test_scoped_stage_binds_real_selector_metadata_and_live_input_generation(tmp
     P.write(paths['machine_policy'],machine)
     # The stage consumes both the native report and its compatibility projection.
     P.write(report/'continuous_reversal'/day/'machine.json',machine)
-    P.write(report/'continuous_reversal'/day/'machine-comparison.json',machine)
+    P.write(report/'continuous_reversal_operating'/day/'machine-comparison.json',machine)
     P.write(paths['machine_policy_terminal'],terminal)
     P.write(R.scoring_path(tmp_path),contract)
     stage=h.run_stage('main_machine_policy',day,report_dir=report,project=tmp_path,runner=lambda *a,**k:0)
@@ -2221,7 +2223,7 @@ def test_scoped_stage_binds_real_selector_metadata_and_live_input_generation(tmp
     # The machine stage must retain its original comparison/terminal binding.
     P.write(report/'continuous_reversal'/day/'machine.json',P.seal(dict(machine,source_receipts=[dict(path='auxiliary-evaluation')],adoption_basis='carried')))
     assert h.stage_receipt_issues(report,day,'main_machine_policy',code_hash='fixture-code')==[]
-    comparison=report/'continuous_reversal'/day/'machine-comparison.json'
+    comparison=report/'continuous_reversal_operating'/day/'machine-comparison.json'
     P.write(comparison,P.seal(dict(machine,source_manifest_sha256='f'*64)))
     assert h.stage_receipt_issues(report,day,'main_machine_policy',code_hash='fixture-code')==['main_machine_policy:operating_comparison_projection_changed']
     P.write(comparison,machine)
@@ -2423,7 +2425,7 @@ def test_operating_selected_report_authority_cannot_be_added_by_resealing_both_a
         json.dumps(machine)
     )
     paths["machine_policy"].write_text(json.dumps(machine))
-    (report / "continuous_reversal" / day / "machine-comparison.json").write_text(json.dumps(machine))
+    (report / "continuous_reversal_operating" / day / "machine-comparison.json").write_text(json.dumps(machine))
     changed = p.seal(dict(native, report_sha256=machine["artifact_content_sha256"]))
     paths["machine_policy_terminal"].write_text(json.dumps(changed))
     assert not h._operating_machine_terminal_selected(changed, day, machine)
@@ -2858,3 +2860,30 @@ def test_quantity_summary_consumes_native_stage_proof_before_cold_replay(
     else:
         mod.source_receipt({"initial_quantity_refresh_stage": path}, day)
     assert calls == (["cold"] if mode == "missing" else [])
+
+
+@pytest.mark.parametrize("damage", [None, "missing", "changed"])
+def test_machine_handoff_reads_actual_cumulative_publisher_comparison(tmp_path, monkeypatch, damage):
+    from src.engine.scalping import reversal_cumulative_postclose as CP
+    from src.engine.scalping import reversal_cumulative_registration as R
+    from src.engine.scalping import continuous_reversal_postclose as P
+    from src.engine.scalping import continuous_reversal_operating_postclose as O
+    from src.tests.test_reversal_cumulative_policy import postclose_fixture
+    from src.engine.automation import postclose_summary_handoff as H
+    day = "2026-10-27"
+    parent, _ = postclose_fixture(monkeypatch)
+    source = P.seal(dict(schema=P.SCHEMA, source_date=day, normalized_sources=dict(partitions=[]), **P.AUTH))
+    source_path = P.directory(tmp_path,day)/"source.json"
+    P.write(source_path, source)
+    monkeypatch.setattr(R, "scoring_for_build", lambda *a: None)
+    monkeypatch.setattr(P, "population_receipt", lambda *a: dict(path=str(source_path),sha256=P.file_hash(source_path)))
+    report = CP.build(tmp_path, day, day, parent, source=source)
+    native = O.directory(tmp_path,day)/"machine-comparison.json"
+    wrong = P.directory(tmp_path,day)/"machine-comparison.json"
+    assert native.is_file() and not wrong.exists()
+    assert H._stage_output_issues(tmp_path/"report",day,"main_machine_policy") == []
+    if damage:
+        P.write(wrong,report)  # An unrelated compatibility copy cannot hide native loss.
+        if damage == "missing": native.unlink()
+        else: P.write(native,P.seal(dict(report,source_manifest_sha256="f"*64)))
+        assert H._stage_output_issues(tmp_path/"report",day,"main_machine_policy") == ["main_machine_policy:operating_comparison_projection_changed"]

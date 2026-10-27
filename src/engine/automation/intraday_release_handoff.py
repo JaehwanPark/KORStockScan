@@ -12318,6 +12318,30 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Consumer-only native machine comparison repair; retain the consumed census profile.
+REVIEWED_MACHINE_PATH_HASHES = {'src/engine/automation/postclose_summary_handoff.py': '42d67773f5e574e15d7e82988682428b8111e6b48ec6a466cef4b9826a98234f', 'src/engine/infrastructure/startup_validation_code_context.py': 'd71ba182bcaa5b2668863027f82461932014af0156c016282c05a1f0141bed26'}
+REVIEWED_MACHINE_PATH_ORIGINS = {'src/engine/automation/postclose_summary_handoff.py': '14d18b30d6f435f55949f1e4afca9d2b00952bc7e44c82054eb49ed67f2e98b2', 'src/engine/infrastructure/startup_validation_code_context.py': 'e67d72f6084c49ece8b88effa33762777c979d1f43d81072ad3220065f199fce'}
+REVIEWED_MACHINE_PATH_PROFILE = {**REVIEWED_REPORT_CENSUS_PROFILE, **REVIEWED_MACHINE_PATH_HASHES}
+REVIEWED_MACHINE_PATH_VARIANTS = {
+    (key[0], REVIEWED_MACHINE_PATH_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_MACHINE_PATH_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_MACHINE_PATH_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_MACHINE_PATH_HASHES.get(os.path.normpath(name), sha) for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_REPORT_CENSUS_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current) for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_MACHINE_PATH_ORIGINS[name]})
+    for name, current in REVIEWED_MACHINE_PATH_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -13115,6 +13139,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_REPORT_CENSUS_PROFILE
         prepared_variants = REVIEWED_REPORT_CENSUS_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/infrastructure/startup_validation_code_context.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_MACHINE_PATH_HASHES["src/engine/infrastructure/startup_validation_code_context.py"]
+    ):
+        prepared_hashes = REVIEWED_MACHINE_PATH_PROFILE
+        prepared_variants = REVIEWED_MACHINE_PATH_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

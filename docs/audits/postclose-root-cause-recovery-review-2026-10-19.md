@@ -4159,3 +4159,37 @@ signature membership. Shared source generation now includes the reader itself;
 there is no manual producer-version bump to obtain a different fixture path.
 The unchanged candidate-code quantity proof is reusable by its exact native code
 signature, while fresh successor P5 and selected preparation remain required.
+
+## Native machine comparison reader repair — 2026-10-27
+
+The first repaired-code run failed at 22:46:01 after successful machine
+computation: the native cumulative producer wrote the comparison under
+`continuous_reversal_operating/<source>/machine-comparison.json`, while the
+stage consumer searched the shared `continuous_reversal/<source>` directory.
+The calculation and calibration projection matched byte-for-byte. The former
+synthetic tests constructed the consumer's assumed path and concealed the real
+publisher/reader disagreement.
+
+The existing stage consumer now uses the operating producer's native directory
+owner. A regression invokes the real cumulative producer, then the actual stage
+consumer; missing/changed native comparison remains rejected even when a
+misleading shared copy exists. Authority-negative tests keep their native path.
+No calculation, policy metric, threshold, provider, clock, guard or dispatcher
+scope was changed. The consumed census compatibility profile is retained; the
+new exact native-reader/preparation profile binds this consumer-only delta.
+
+For the still-selected legacy reader only, a value-preserving compatibility
+projection was generated through the native publisher from its fully validated
+canonical original. This is bounded containment, not code closure or a fabricated
+PASS. Its named caller is selected `10f03701c`; retain it only while original
+native readers still require it, with removal subject to the native reference
+inventory. No original report/status/hash field was edited. The native stage
+resumed its verified checkpoints and succeeded at 23:19:53 after 82.736 seconds,
+versus the original 24-minute calculation. Original failed receipts and bytes
+remain preserved. Native recovery continues the incomplete suffix.
+
+After normal postclose isolation, code publication uses the existing stopped
+cold-selection transaction for the next trading consumer, not an intraday restart
+to manufacture PID evidence. Current-parent custody, next-session preparation,
+actual next PID and unassisted acceptance remain distinct. The AGENTS preflight
+ordering now states that phase choice before candidate validation.
