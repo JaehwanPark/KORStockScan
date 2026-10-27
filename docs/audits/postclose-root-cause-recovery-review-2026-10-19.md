@@ -4966,3 +4966,17 @@ retain49362 as the verified unchanged historical fact and reject49415's changed
 old cost window. Review has no unresolved in-scope code findings; operational
 publication/consumer acceptance remains assigned to the confirmed transition
 owner, not claimed by these tests.
+
+Code/test/audit clean commit `c72834d586e84d1e5c08aef3033a7d08d3471fef` is
+pushed to `origin/codex/quantity-cost-lineage-20261028`. The user subsequently
+confirmed **the current deployment session integrates this commit and performs
+the minimum regeneration**. This session performs no competing live transition
+or shared publication. That owner must reconcile its newer complete profile,
+consume the repaired21 research allocation and source27 prepared quantity
+successor, and report selected/PID/observer/original-alert evidence separately.
+The remaining operational acceptance stays under
+`InitialQuantityProducerConsumerRepair1010`; this handoff does not mark it DONE.
+Source baseline→repair delta is +383/-25 non-test lines, +485/-10 test lines and
++120/-0 documentation lines. Growth implements exact partial native-census and
+full original-completion proof handling inside existing owners, together with
+producer/consumer and negative contract coverage; it adds no runtime entrypoint.
