@@ -11578,6 +11578,36 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Reviewed exact auxiliary capability link; runtime policy and sources unchanged.
+REVIEWED_ENTRY_CAPABILITY_HASHES = {'src/engine/monitoring/policy_generation_code_handoff.py': 'd6cc6f4180ff14d6ea965a174f3db15f62527d1349d375170ca14b1e1b42ae9d', 'src/engine/infrastructure/startup_validation_code_context.py': 'c49d0b5aa649e703f09d5c7a399ff8ed5e78856eabfe7d914298e0a3301d65d8'}
+REVIEWED_ENTRY_CAPABILITY_ORIGINS = {'src/engine/monitoring/policy_generation_code_handoff.py': '7f557af576c9bf36a8311b713cd6bbde2de40ad7c626b983c75952526d672529', 'src/engine/infrastructure/startup_validation_code_context.py': 'e3d52ea4f3aad7f38a2a007ced341071ce949782a3906887655017133b858d31'}
+REVIEWED_ENTRY_CAPABILITY_PROFILE = {
+    **REVIEWED_ENTRY_LATENCY_PROFILE, **REVIEWED_ENTRY_CAPABILITY_HASHES
+}
+REVIEWED_ENTRY_CAPABILITY_VARIANTS = {
+    (key[0], REVIEWED_ENTRY_CAPABILITY_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_ENTRY_CAPABILITY_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_ENTRY_CAPABILITY_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_ENTRY_CAPABILITY_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_ENTRY_LATENCY_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+                   | {REVIEWED_ENTRY_CAPABILITY_ORIGINS[name]}
+    )
+    for name, current in REVIEWED_ENTRY_CAPABILITY_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -12286,6 +12316,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_ENTRY_LATENCY_PROFILE
         prepared_variants = REVIEWED_ENTRY_LATENCY_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/infrastructure/startup_validation_code_context.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_ENTRY_CAPABILITY_HASHES["src/engine/infrastructure/startup_validation_code_context.py"]
+    ):
+        prepared_hashes = REVIEWED_ENTRY_CAPABILITY_PROFILE
+        prepared_variants = REVIEWED_ENTRY_CAPABILITY_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

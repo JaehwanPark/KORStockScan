@@ -5411,7 +5411,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_ENTRY_LATENCY_PROFILE,
+        "current": handoff.REVIEWED_ENTRY_CAPABILITY_PROFILE,
+        "entry_latency": handoff.REVIEWED_ENTRY_LATENCY_PROFILE,
         "holding_capability": handoff.REVIEWED_HOLDING_CAPABILITY_PROFILE,
         "finalization_admission": handoff.REVIEWED_FINALIZATION_ADMISSION_PROFILE,
         "holding_quote": handoff.REVIEWED_HOLDING_QUOTE_PROFILE,
@@ -5489,6 +5490,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                         "drain_pointer": "97bc1f62e",
                         "holding_quote": "279886a71",
                         "holding_capability": "bcfedb8ad",
+                        "entry_latency": "cd2eb9ea1",
                         "finalization_admission": "194307750",
                         "consumed_suffix_report": "ab663e13b",
                         "consumed_isolated_index": "59a922b19",
@@ -6530,3 +6532,18 @@ def test_entry_latency_rejects_partial_successor(tmp_path, family, fault, depend
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, fault, "current", dependency
     )
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("fault", [None, "missing", "dirty", "committed_change", "parent_mix"])
+@pytest.mark.parametrize("dependency", list(handoff.REVIEWED_ENTRY_CAPABILITY_HASHES))
+def test_entry_capability_requires_complete_exact_successor(tmp_path, family, fault, dependency):
+    test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, family, fault, "current", dependency)
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("fault", ["", "successor_mix"])
+def test_entry_capability_keeps_deployed_latency_generation(tmp_path, family, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "entry_latency",
+        "src/engine/monitoring/policy_generation_code_handoff.py")

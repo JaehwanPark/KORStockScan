@@ -1004,6 +1004,17 @@ REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["holding_vote"] += (
 )
 
 
+# Static native assessment proof reuse changes this declared auxiliary dependency.
+# Only reviewed 10/23 and 10/26 originals may use a fresh current fixture;
+# the historical report, source generation, null economics and guards stay sealed.
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["auxiliary"] += (
+    ("357573bd61c06c26c208be7ab5447eff3805a8efa21cf1bbf9df201be7c14ddd",
+     "9fb5d5b0bbe17b72ca832a883b059522d725f3234fca853324308beedf73bacc"),
+    ("82a2c8b410c97dc89db45269ee865b21e2a1ba824d55448183bdb1c25769c06f",
+     "9fb5d5b0bbe17b72ca832a883b059522d725f3234fca853324308beedf73bacc"),
+)
+
+
 def current_fixture_observation(observed, data):
     family = observed.get("family")
     pair = REVIEWED_SUCCESSORS.get(family)

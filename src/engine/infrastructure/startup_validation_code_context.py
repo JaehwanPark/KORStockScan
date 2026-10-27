@@ -2586,6 +2586,17 @@ for _name, _sha in REVIEWED_ENTRY_LATENCY_SOURCES.items():
     _history.update((old, _sha) for old in _prior)
 
 
+# Exact auxiliary capability reader successor; preserve prior preparation custody.
+REVIEWED_ENTRY_CAPABILITY_SOURCES = {'src/engine/monitoring/policy_generation_code_handoff.py': 'd6cc6f4180ff14d6ea965a174f3db15f62527d1349d375170ca14b1e1b42ae9d'}
+REVIEWED_ENTRY_CAPABILITY_ORIGINS = {'src/engine/monitoring/policy_generation_code_handoff.py': '7f557af576c9bf36a8311b713cd6bbde2de40ad7c626b983c75952526d672529'}
+for _name, _sha in REVIEWED_ENTRY_CAPABILITY_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _prior = {v for pair in _history for v in pair} | {REVIEWED_ENTRY_CAPABILITY_ORIGINS[_name]}
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _prior.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((old, _sha) for old in _prior)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

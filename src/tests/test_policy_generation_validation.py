@@ -1729,3 +1729,14 @@ def test_prepared_state_metadata_accepts_exact_deployed_source_pair(tmp_path, mo
         (*handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS[family], pair))
     test_formatted_family_requires_both_exact_generations_without_promoting_history(
         tmp_path, monkeypatch, family, damage)
+
+
+@pytest.mark.parametrize("origin", [
+    "357573bd61c06c26c208be7ab5447eff3805a8efa21cf1bbf9df201be7c14ddd",
+    "82a2c8b410c97dc89db45269ee865b21e2a1ba824d55448183bdb1c25769c06f",
+])
+def test_entry_latency_auxiliary_generation_is_exact_and_originals_are_retained(origin):
+    from src.engine.monitoring import policy_generation_code_handoff as handoff
+    current = generation.code_generation("auxiliary")
+    assert (origin, current) in handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["auxiliary"]
+    assert ("0" * 64, current) not in handoff.REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["auxiliary"]
