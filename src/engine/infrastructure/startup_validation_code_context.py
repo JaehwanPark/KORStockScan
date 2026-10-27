@@ -3008,6 +3008,18 @@ for _name, _sha in REVIEWED_NATIVE_COST_INTAKE_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# First report intake of independently verified original BUY observations.
+REVIEWED_PRIOR_EXECUTION_SOURCES = {'src/engine/sniper_trade_review_report.py': '07bef13f9464ed388974228ffad5936a65096a2ff88b34a2c854d0cf0191cfb8', 'src/engine/lifecycle/broker_cost_allocation.py': '6c6b5e7f29de4e9941b4eea1f83292e3b4c6ca0425c1740fa3dda903add829a1', 'src/engine/log_archive_service.py': '56dc9e53626d3d64d2a57beeb0bfb6c8db346767aeb6c9bbc70b94b27d0b15c1'}
+REVIEWED_PRIOR_EXECUTION_ORIGINS = {'src/engine/sniper_trade_review_report.py': 'dbf7a672f967bb449c22725221d21dbf5c5fa53e256fa64f7c1ad4822cec29cd', 'src/engine/lifecycle/broker_cost_allocation.py': '41c070efb7491eb2b7057b8ba64f03c6870a2fa513a062a0c81060a8d42258d3', 'src/engine/log_archive_service.py': 'fbede30bebadb696a80bdcb765e584d18fa830c18e3655b849bf51c8b4099543'}
+for _name, _sha in REVIEWED_PRIOR_EXECUTION_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_PRIOR_EXECUTION_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

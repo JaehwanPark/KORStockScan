@@ -24,6 +24,7 @@ LOG_ARCHIVE_DIR = DATA_DIR / "log_archive"
 MONITOR_SNAPSHOT_DIR = DATA_DIR / "report" / "monitor_snapshots"
 MONITOR_SNAPSHOT_MANIFEST_DIR = MONITOR_SNAPSHOT_DIR / "manifests"
 
+
 class SnapshotRows(list):
     """Private lossless JSON rows with list-shaped streaming serialization.
 
@@ -85,9 +86,13 @@ class SnapshotRows(list):
             raw = decoder.decompress(compressed, logical_size + 1)
         except zlib.error as exc:
             raise ValueError("snapshot_private_row_changed") from exc
-        if (len(compressed) != size or len(raw) != logical_size
-                or not decoder.eof or decoder.unused_data
-                or hashlib.sha256(raw).digest() != digest):
+        if (
+            len(compressed) != size
+            or len(raw) != logical_size
+            or not decoder.eof
+            or decoder.unused_data
+            or hashlib.sha256(raw).digest() != digest
+        ):
             raise ValueError("snapshot_private_row_changed")
         value = json.loads(raw)
         self._cached = (reference, value)
@@ -192,7 +197,10 @@ def load_monitor_snapshot(
         path = Path(f"{path}.gz")
     if path.exists():
         try:
-            from src.engine.lifecycle.research_json_stream import Reader, selected_object
+            from src.engine.lifecycle.research_json_stream import (
+                Reader,
+                selected_object,
+            )
 
             opener = gzip.open if path.suffix == ".gz" else open
             before = path.stat()
@@ -1028,17 +1036,20 @@ def _postclose_pipeline_guard(data_root, day):
 
 
 def _postclose_prefix_producer_code_generation():
-    """Bind reuse to the code that computes and publishes the three reports."""
+    """Bind the first reports and their shared native cost/recovery owners."""
+    from src.engine.lifecycle.broker_cost_allocation import (
+        RESEARCH_COST_IMPLEMENTATION_PATHS,
+    )
+
     engine = Path(__file__).resolve().parent
-    return {
-        name: _sha256_file(engine / name)
-        for name in (
-            "log_archive_service.py",
-            "sniper_trade_review_report.py",
-            "sniper_post_sell_feedback.py",
-            "sniper_missed_entry_counterfactual.py",
-        )
+    names = {
+        "log_archive_service.py",
+        "sniper_trade_review_report.py",
+        "sniper_post_sell_feedback.py",
+        "sniper_missed_entry_counterfactual.py",
+        *RESEARCH_COST_IMPLEMENTATION_PATHS,
     }
+    return {name: _sha256_file(engine / name) for name in sorted(names)}
 
 
 def _postclose_prefix_guard(data_root, day, manifest_path=None):

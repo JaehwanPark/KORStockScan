@@ -3448,7 +3448,15 @@ def _quantity_research_position(
             if completed_at.tzinfo is None
             else completed_at.astimezone(ZoneInfo("Asia/Seoul"))
         )
-    reasons = list(ledger["strict_completion_reasons"])
+    from src.engine.lifecycle.broker_cost_allocation import RESEARCH_COST_ONLY_REASONS
+
+    # Cost allocation is evaluated separately by its native producer below.
+    # Preserve the original ledger, while this field carries execution reasons.
+    reasons = [
+        reason
+        for reason in ledger["strict_completion_reasons"]
+        if reason not in RESEARCH_COST_ONLY_REASONS
+    ]
     if terminal and (
         terminal.fields.get("decision_authority") != "broker_sell_fill_observation_only"
         or str(terminal.fields.get("actual_order_submitted")).lower() != "true"
@@ -4576,7 +4584,134 @@ def _prior_entry_fill_events(
                         raw_line="",
                     )
                 )
+    # Original execution rows remain usable when a later snapshot's cost or
+    # derived report is ineligible. Consume the existing native source index;
+    # never relabel the rejected snapshot or scan historical raw files here.
+    from src.engine.automation import main_trailing_source_store as indexed
+
+    trades_by_id = {str(trade.get("id")): trade for trade in trades}
+    for prior_date in sorted(prior_dates):
+        logical = (
+            Path(DATA_DIR) / "pipeline_events" / f"pipeline_events_{prior_date}.jsonl"
+        )
+        if not logical.exists() and not Path(str(logical) + ".gz").exists():
+            continue
+        wanted = sorted(
+            record
+            for record, trade in trades_by_id.items()
+            if str(trade.get("rec_date") or "")[:10] <= prior_date
+        )
+        recovered, references = [], []
+        try:
+            bound = indexed.generation(DATA_DIR, logical)
+            for value, reference in indexed.read_rows(
+                DATA_DIR,
+                logical,
+                kinds=["pipeline_fill_receipt"],
+                identities=wanted,
+            ):
+                payload = value["row"]
+                record = str(payload.get("record_id"))
+                trade = trades_by_id[record]
+                if str(payload.get("stock_code"))[:6] != str(trade.get("code"))[:6]:
+                    raise ValueError("prior_execution_identity_changed")
+                emitted = _parse_dt(payload.get("emitted_at"))
+                if emitted is None:
+                    raise ValueError("prior_execution_clock_invalid")
+                emitted = (
+                    emitted.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+                    if emitted.tzinfo is None
+                    else emitted.astimezone(ZoneInfo("Asia/Seoul"))
+                )
+                if emitted.date().isoformat() != prior_date:
+                    raise ValueError("prior_execution_clock_scope_changed")
+                fields = _decode_threshold_json_fields(
+                    dict(payload.get("fields") or {})
+                )
+                if fields.get("id") not in (None, "", record, _safe_int(record)):
+                    raise ValueError("prior_execution_identity_changed")
+                if fields.get("id") in (None, ""):
+                    fields["id"] = record
+                recovered.append(
+                    (
+                        record,
+                        HoldingEvent(
+                            emitted.replace(tzinfo=None).isoformat(sep=" "),
+                            str(trade.get("name") or "-"),
+                            str(trade["code"])[:6],
+                            payload["stage"],
+                            fields,
+                            "",
+                        ),
+                    )
+                )
+                references.append(reference)
+            if indexed.generation(DATA_DIR, logical) != bound:
+                raise ValueError("prior_execution_generation_changed")
+        except (OSError, ValueError, KeyError, indexed.InputPending) as exc:
+            if "changed" in str(exc) or str(exc).startswith("shared_research_budget_"):
+                raise
+            receipts.setdefault(prior_date, {})["indexed_execution_error"] = str(exc)
+            continue
+        if not recovered:
+            continue
+
+        def identity(event):
+            fields = dict(event.fields)
+            if fields.get("id") not in (None, ""):
+                fields["id"] = str(fields["id"])
+            at = _parse_dt(event.timestamp)
+            if at is not None:
+                at = (
+                    at.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+                    if at.tzinfo is None
+                    else at.astimezone(ZoneInfo("Asia/Seoul"))
+                )
+            return hashlib.sha256(
+                json.dumps(
+                    dict(
+                        timestamp=at.isoformat() if at else event.timestamp,
+                        code=event.code,
+                        stage=event.stage,
+                        fields=fields,
+                    ),
+                    sort_keys=True,
+                    default=str,
+                ).encode()
+            ).hexdigest()
+
+        existing = {
+            record: Counter(identity(event) for event in events)
+            for record, events in events_by_id.items()
+        }
+        for record, event in recovered:
+            counts = existing.setdefault(record, Counter())
+            key = identity(event)
+            if counts[key]:
+                counts[key] -= 1
+            else:
+                events_by_id[record].append(event)
+        receipts.setdefault(prior_date, {})["indexed_execution_source"] = dict(
+            source_kind="native_indexed_execution",
+            path=str(logical),
+            generation=bound,
+            record_ids=sorted({record for record, _ in recovered}),
+            references=references,
+        )
     return events_by_id, receipts
+
+
+def _verify_prior_entry_fill_sources(receipts):
+    from src.engine.automation import main_trailing_source_store as indexed
+
+    for receipt in receipts.values():
+        source = receipt.get("indexed_execution_source")
+        if (
+            source
+            and indexed.generation(DATA_DIR, Path(source["path"]))
+            != source["generation"]
+        ):
+            raise ValueError("prior_execution_generation_changed")
 
 
 def _is_entered_trade(row: dict) -> bool:
@@ -5234,6 +5369,7 @@ def build_trade_review_report(
             knowledge_cutoff=knowledge_cutoff,
         )
     _verify_quantity_research_registry(research_registry_generation)
+    _verify_prior_entry_fill_sources(prior_entry_receipts)
     if write_research_costs:
         persist_research_costs(DATA_DIR, target_date, research_costs, required_dates)
     from src.engine.lifecycle.broker_cost_reconciliation import source_generation
@@ -5397,6 +5533,7 @@ def build_trade_review_report(
         if current_source != sources_by_date[source_date]:
             raise ValueError("research_cost_source_changed_during_report")
     _verify_quantity_research_registry(research_registry_generation)
+    _verify_prior_entry_fill_sources(prior_entry_receipts)
     if write_research_costs:
         from src.engine.lifecycle.broker_cost_source import (
             enqueue_pending,

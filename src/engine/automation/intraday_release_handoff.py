@@ -12366,6 +12366,30 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Exact first-producer indexed execution intake; preserve consumed code profiles.
+REVIEWED_PRIOR_EXECUTION_HASHES = {'src/engine/sniper_trade_review_report.py': '07bef13f9464ed388974228ffad5936a65096a2ff88b34a2c854d0cf0191cfb8', 'src/engine/lifecycle/broker_cost_allocation.py': '6c6b5e7f29de4e9941b4eea1f83292e3b4c6ca0425c1740fa3dda903add829a1', 'src/engine/log_archive_service.py': '56dc9e53626d3d64d2a57beeb0bfb6c8db346767aeb6c9bbc70b94b27d0b15c1', 'src/engine/infrastructure/startup_validation_code_context.py': '0c9335b5993c69833df1bb6930cf1ac346a148b120e8b04e796f23fa19a5a36d'}
+REVIEWED_PRIOR_EXECUTION_ORIGINS = {'src/engine/sniper_trade_review_report.py': 'dbf7a672f967bb449c22725221d21dbf5c5fa53e256fa64f7c1ad4822cec29cd', 'src/engine/lifecycle/broker_cost_allocation.py': '41c070efb7491eb2b7057b8ba64f03c6870a2fa513a062a0c81060a8d42258d3', 'src/engine/log_archive_service.py': 'fbede30bebadb696a80bdcb765e584d18fa830c18e3655b849bf51c8b4099543', 'src/engine/infrastructure/startup_validation_code_context.py': '4683e6bb77262654d0e9b897b9bd178e295b40c46a21c6057d225f06f13aabac'}
+REVIEWED_PRIOR_EXECUTION_PROFILE = {**REVIEWED_NATIVE_COST_INTAKE_PROFILE, **REVIEWED_PRIOR_EXECUTION_HASHES}
+REVIEWED_PRIOR_EXECUTION_VARIANTS = {
+    (key[0], REVIEWED_PRIOR_EXECUTION_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/sniper_trade_review_report.py",
+        "selector_sha256": REVIEWED_PRIOR_EXECUTION_HASHES["src/engine/sniper_trade_review_report.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_PRIOR_EXECUTION_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_PRIOR_EXECUTION_HASHES.get(os.path.normpath(name), sha) for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_NATIVE_COST_INTAKE_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current) for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_PRIOR_EXECUTION_ORIGINS[name]})
+    for name, current in REVIEWED_PRIOR_EXECUTION_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -13175,6 +13199,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_NATIVE_COST_INTAKE_PROFILE
         prepared_variants = REVIEWED_NATIVE_COST_INTAKE_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/sniper_trade_review_report.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_PRIOR_EXECUTION_HASHES["src/engine/sniper_trade_review_report.py"]
+    ):
+        prepared_hashes = REVIEWED_PRIOR_EXECUTION_PROFILE
+        prepared_variants = REVIEWED_PRIOR_EXECUTION_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

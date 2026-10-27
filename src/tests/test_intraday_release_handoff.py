@@ -5370,6 +5370,7 @@ def test_pre_submit_handoff_rejects_unreviewed_dependency(tmp_path, family, depe
     "generation",
     [
         "current",
+        "native_cost_intake",
         "consumed_invalidation_cadence",
         "consumed_nonfixed_identity",
         "consumed_preclaim",
@@ -5415,7 +5416,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_NATIVE_COST_INTAKE_PROFILE,
+        "current": handoff.REVIEWED_PRIOR_EXECUTION_PROFILE,
+        "native_cost_intake": handoff.REVIEWED_NATIVE_COST_INTAKE_PROFILE,
         "machine_path": handoff.REVIEWED_MACHINE_PATH_PROFILE,
         "report_census": handoff.REVIEWED_REPORT_CENSUS_PROFILE,
         "consumed_submit_fresh": handoff.REVIEWED_SUBMIT_FRESH_PROFILE,
@@ -5500,6 +5502,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     str(canonical),
                     "show",
                     {
+                        "native_cost_intake": "0ee65ee7f",
                         "machine_path": "5dceaf032",
                         "report_census": "10f03701c",
                         "consumed_nonfixed_final": "3178d65e0",
@@ -6686,6 +6689,8 @@ def test_machine_comparison_reader_keeps_complete_policy_code_generation(tmp_pat
 @pytest.mark.parametrize("dependency", [
     "src/engine/scalping/ai_action_outcome_calibration.py",
     "src/engine/sniper_trade_review_report.py",
+    "src/engine/lifecycle/broker_cost_allocation.py",
+    "src/engine/log_archive_service.py",
     "src/engine/compress_db_backfilled_files.py",
     "deploy/run_threshold_cycle_postclose.sh",
 ])

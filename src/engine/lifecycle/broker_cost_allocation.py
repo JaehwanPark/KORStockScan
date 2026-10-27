@@ -35,6 +35,31 @@ from .broker_cost_source import (
     validate,
 )
 
+# These are allocation/economics gaps, not execution/custody admission reasons.
+RESEARCH_COST_ONLY_REASONS = frozenset(
+    {
+        "source_gap_sell_leg_configured_cost",
+        "source_gap_profit_rate_unreconciled",
+        "source_gap_exact_cost_missing",
+        "source_gap_broker_actual_cost_missing",
+    }
+)
+
+# One declared implementation census for first and later cost production.
+RESEARCH_COST_IMPLEMENTATION_PATHS = (
+    "lifecycle/broker_cost_allocation.py",
+    "lifecycle/main_stop_research_cost.py",
+    "automation/main_trailing_source_store.py",
+    "sniper_trade_review_report.py",
+    "lifecycle/broker_cost_source.py",
+    "lifecycle/broker_cost_reconciliation.py",
+    "lifecycle/holding_window_generation.py",
+    "lifecycle/research_json_stream.py",
+    "lifecycle/snapshot_archive.py",
+    "ai/holding_exit_vote.py",
+    "scalping/main_stop_quantity_source.py",
+)
+
 SCHEMA = "initial_quantity_broker_total_allocated_cost_v1"
 INDEX_SCHEMA = RESEARCH_COST_INDEX_SCHEMA
 ALGORITHM = "broker_day_symbol_turnover_largest_remainder_v1"
@@ -971,19 +996,8 @@ def _refresh_native_research_costs(
         from .holding_window_generation import cached_code_generation
 
         engine = Path(__file__).resolve().parents[1]
-        owners = [
-            "lifecycle/broker_cost_allocation.py",
-            "lifecycle/main_stop_research_cost.py",
-            "automation/main_trailing_source_store.py",
-            "sniper_trade_review_report.py",
-            "lifecycle/broker_cost_source.py",
-            "lifecycle/broker_cost_reconciliation.py",
-            "lifecycle/holding_window_generation.py",
-            "lifecycle/research_json_stream.py",
-            "lifecycle/snapshot_archive.py",
-            "ai/holding_exit_vote.py",
-            "scalping/main_stop_quantity_source.py",
-        ]
+        owners = RESEARCH_COST_IMPLEMENTATION_PATHS
+
         implementation = cached_code_generation([engine / name for name in owners])
         revision = dict(
             schema="initial_quantity_late_cost_revision_v2",
@@ -1182,12 +1196,7 @@ def _refresh_native_research_costs(
                     consume=add_observation,
                 )
         positions, native_buy_recoveries = [], {}
-        cost_only = {
-            "source_gap_sell_leg_configured_cost",
-            "source_gap_profit_rate_unreconciled",
-            "source_gap_exact_cost_missing",
-            "source_gap_broker_actual_cost_missing",
-        }
+        cost_only = RESEARCH_COST_ONLY_REASONS
         for record, row in rows.items():
             if record in observations:
                 observations[record].sort(key=review._event_sort_key)

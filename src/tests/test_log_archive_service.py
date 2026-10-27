@@ -1781,7 +1781,8 @@ def test_cost_only_revision_invalidates_sidecar_and_manifest_without_pipeline_ch
 
 
 @pytest.mark.parametrize(
-    "mutation", ["missing", "changed_current_code", "changed_recorded_code"]
+    "mutation",
+    ["missing", "changed_current_code", "changed_recorded_code", "changed_cost_code"],
 )
 def test_prefix_reuse_requires_original_current_producer_generation(
     tmp_path, monkeypatch, mutation
@@ -1797,7 +1798,16 @@ def test_prefix_reuse_requires_original_current_producer_generation(
         service.verified_postclose_exit_prefix_manifest(day, data_root=tmp_path) == path
     )
     before = path.read_bytes()
-    if mutation == "changed_current_code":
+    if mutation == "changed_cost_code":
+        original = service._sha256_file
+        monkeypatch.setattr(
+            service,
+            "_sha256_file",
+            lambda p: (
+                "f" * 64 if Path(p).name == "broker_cost_allocation.py" else original(p)
+            ),
+        )
+    elif mutation == "changed_current_code":
         code = dict(service._postclose_prefix_producer_code_generation())
         code["sniper_trade_review_report.py"] = "f" * 64
         monkeypatch.setattr(
@@ -1963,8 +1973,11 @@ def test_snapshot_rows_preserve_json_hash_order_slices_and_insert(tmp_path):
     with path.open("w") as output:
         json.dump({"timeline": rows}, output, ensure_ascii=False, indent=2)
     assert json.loads(path.read_text()) == {"timeline": values}
-    expected = hashlib.sha256(json.dumps(values, ensure_ascii=False, sort_keys=True,
-                                         separators=(",", ":")).encode()).hexdigest()
+    expected = hashlib.sha256(
+        json.dumps(
+            values, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
     assert snapshot_json_sha256(rows) == expected
     assert snapshot_json_sha256(SnapshotRows()) == snapshot_json_sha256([])
     rows._file.seek(rows._rows[0][0])
@@ -1980,9 +1993,15 @@ def test_snapshot_timeline_build_has_bounded_resident_payload():
 
     def events():
         for index in range(1024):
-            yield HoldingEvent("2026-10-26 09:00:00", "TEST", "123456",
-                               "scalp_trailing_input_transition",
-                               {"id": "1", "proof": str(index) + "x" * 32768}, "")
+            yield HoldingEvent(
+                "2026-10-26 09:00:00",
+                "TEST",
+                "123456",
+                "scalp_trailing_input_transition",
+                {"id": "1", "proof": str(index) + "x" * 32768},
+                "",
+            )
+
     tracemalloc.start()
     try:
         timeline = _build_timeline(events())
@@ -1996,7 +2015,9 @@ def test_snapshot_timeline_build_has_bounded_resident_payload():
 
 @pytest.mark.parametrize("compressed", [False, True])
 @pytest.mark.parametrize("corrupt", [False, True])
-def test_snapshot_row_projection_validates_excluded_timeline(tmp_path, monkeypatch, compressed, corrupt):
+def test_snapshot_row_projection_validates_excluded_timeline(
+    tmp_path, monkeypatch, compressed, corrupt
+):
     import gzip
     from src.engine import log_archive_service as owner
     from src.engine import sniper_performance_tuning_report as consumer
@@ -2005,30 +2026,45 @@ def test_snapshot_row_projection_validates_excluded_timeline(tmp_path, monkeypat
     path = tmp_path / "trade_review_2026-10-26.json"
     raw = '{"sections":{"recent_trades":[{"id":1,"profit_rate":null,"timeline":['
     raw += '{"stage":"quote","fields":{"reason":"kept"}},' * 3000
-    raw += 'INVALID' if corrupt else '{"stage":"terminal"}'
+    raw += "INVALID" if corrupt else '{"stage":"terminal"}'
     raw += '],"compact_timeline":[{"stage":"terminal"}]}]},"meta":{"warnings":["source_gap"]}}'
     if compressed:
         path = path.with_suffix(".json.gz")
         path.write_bytes(gzip.compress(raw.encode()))
     else:
         path.write_text(raw)
-    projected = owner.load_monitor_snapshot("trade_review", "2026-10-26",
-        section_names=("recent_trades",), excluded_row_fields=("timeline",))
+    projected = owner.load_monitor_snapshot(
+        "trade_review",
+        "2026-10-26",
+        section_names=("recent_trades",),
+        excluded_row_fields=("timeline",),
+    )
     if corrupt:
         assert projected is None
     else:
-        expected = [{"id": 1, "profit_rate": None, "compact_timeline": [{"stage": "terminal"}]}]
+        expected = [
+            {"id": 1, "profit_rate": None, "compact_timeline": [{"stage": "terminal"}]}
+        ]
         assert projected["sections"]["recent_trades"] == expected
-        assert consumer._build_current_trade_rows("2026-10-26") == (expected, ["source_gap"])
-        assert (gzip.decompress(path.read_bytes()).decode() if compressed else path.read_text()) == raw
+        assert consumer._build_current_trade_rows("2026-10-26") == (
+            expected,
+            ["source_gap"],
+        )
+        assert (
+            gzip.decompress(path.read_bytes()).decode()
+            if compressed
+            else path.read_text()
+        ) == raw
 
 
 def test_snapshot_scratch_failure_is_not_published_as_a_source_gap(monkeypatch):
     from src.engine.log_archive_service import SnapshotRows
 
     rows = SnapshotRows()
+
     def failed_write(raw):
         raise OSError("scratch full")
+
     monkeypatch.setattr(rows._file, "write", failed_write)
     with pytest.raises(RuntimeError, match="snapshot_private_storage_write_failed"):
         rows.append({"source": "valid"})
@@ -2059,31 +2095,56 @@ def test_compact_snapshot_preserves_carry_reader_and_whole_source_binding(
     monkeypatch.setattr(service, "MONITOR_SNAPSHOT_DIR", directory)
     monkeypatch.setattr(archive, "MONITOR_SNAPSHOT_DIR", directory)
     # Force the large-source reader without a resident multi-GB fixture.
-    event = dict(stage="holding_started", timestamp=day + " 09:00:00",
-                 fields={"id": "1", "proof": "x" * 1000})
-    carried = dict(stage="position_rebased_after_fill", timestamp=day + " 09:01:00",
-                   fields={"id": "1", "fill_qty": 1, "cost": None})
-    body = dict(date=day, meta={"warnings": []}, metrics={
-        "open_scalp_position_projection_status": "current_db_census"}, sections={
-        "recent_trades": [{"timeline": [event] * 9000}],
-        "open_scalp_position_projection": [dict(id=1, code="123456", timeline=[carried])],
-    })
+    event = dict(
+        stage="holding_started",
+        timestamp=day + " 09:00:00",
+        fields={"id": "1", "proof": "x" * 1000},
+    )
+    carried = dict(
+        stage="position_rebased_after_fill",
+        timestamp=day + " 09:01:00",
+        fields={"id": "1", "fill_qty": 1, "cost": None},
+    )
+    body = dict(
+        date=day,
+        meta={"warnings": []},
+        metrics={"open_scalp_position_projection_status": "current_db_census"},
+        sections={
+            "recent_trades": [{"timeline": [event] * 9000}],
+            "open_scalp_position_projection": [
+                dict(id=1, code="123456", timeline=[carried])
+            ],
+        },
+    )
     path = service.save_monitor_snapshot("trade_review", day, body)
     raw = path.read_bytes()
     assert len(raw) < len(json.dumps(body, ensure_ascii=False, indent=2).encode())
     assert json.loads(raw) == body
     assert b'\n    "open_scalp_position_projection": [' in raw
-    manifest = directory / "manifests" / f"monitor_snapshot_manifest_{day}_postclose_exit.json"
+    manifest = (
+        directory / "manifests" / f"monitor_snapshot_manifest_{day}_postclose_exit.json"
+    )
     manifest.parent.mkdir()
-    manifest.write_text(json.dumps(dict(target_date=day, profile="postclose_exit",
-        snapshot_paths={"trade_review": str(path)},
-        snapshot_sha256={"trade_review": hashlib.sha256(raw).hexdigest()})))
+    manifest.write_text(
+        json.dumps(
+            dict(
+                target_date=day,
+                profile="postclose_exit",
+                snapshot_paths={"trade_review": str(path)},
+                snapshot_sha256={"trade_review": hashlib.sha256(raw).hexdigest()},
+            )
+        )
+    )
     before = generation(path)
     if compressed:
         archive._gzip_file(path, dry_run=False)
     projected, receipt = service.load_prior_entry_projection(day, data_root=tmp_path)
-    assert projected["sections"]["open_scalp_position_projection"][0]["timeline"] == [carried]
+    assert projected["sections"]["open_scalp_position_projection"][0]["timeline"] == [
+        carried
+    ]
     assert generation(path) == before
-    manifest.write_text(manifest.read_text().replace(hashlib.sha256(raw).hexdigest(), "0" * 64))
+    manifest.write_text(
+        manifest.read_text().replace(hashlib.sha256(raw).hexdigest(), "0" * 64)
+    )
     with pytest.raises(ValueError, match="source_hash_invalid"):
         service.load_prior_entry_projection(day, data_root=tmp_path)

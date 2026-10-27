@@ -306,6 +306,8 @@ wrapper terminal, `main_auxiliary_policy`의 실제 stage terminal과 calibratio
 
 ### 8.3 Tuning monitoring과 archive
 
+과거 파생 스냅샷의 부적격과 독립 검증된 원천 인덱스의 체결 기록을 구분한다. 원 스냅샷 상태를 보존하고, 원천 세대·종목/record·시계·custody와 물리 중복을 대사한 뒤 최초 보고서가 그 원천을 소비하는지 실제 실패 입력으로 재현한다. 최초 비용 봉인과 후속 비용 생산자는 같은 구현 census를 사용하고, 후속 생산 뒤에도 원 봉인의 세대가 유지되는지 확인한다.
+
 장후 비용 원천을 처음 봉인하는 보고서와 후속 수량 연구는 동일한 native 체결·custody 영수증 생산자를 사용해야 한다. 뒤 소비자의 원천 복구로 앞 봉인이 무효화되지 않는지 대사하고, 손실·부분·충돌 영수증은 원 결손으로 유지한다. 독립 계산의 wait는 종료 확인이므로 실제 stage 검증까지 통과한 뒤 후속 입력을 준비한다. 압축 전후 논리 원천이 같으면 native index/압축 영수증으로 동일성을 확인하고, 실제 행 추가·내용 변경·손상은 계속 검출한다.
 
 late-pass의 expected/consumed/excluded, raw/compact→Parquet/DuckDB partition/date/hash와 archive 보존·검증을 확인한다. 조회속도·중복 read 절약은 EV 개선 증거가 아니다. 정상 artifact reuse에는 source hash·cutoff·직접 consumer 검증이 필요하다.

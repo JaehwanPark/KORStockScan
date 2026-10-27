@@ -4278,3 +4278,71 @@ scheduler or runtime execution branch is introduced. Runtime selection remains
 must be verified separately. The 10/28 operating checklist has not yet been
 produced because source27 summary is incomplete; existing source27 ownership is
 preserved and is not treated as a replacement daily authority.
+
+
+### Native prior BUY selection repair -- 2026-10-28
+
+The 0ee65ee7f source workflow was stopped through its native TERM/checkpoint
+path at 00:35:44 after the first produced prefix still excluded record 49532.
+No Main was started and the selector stayed 10f03701c. Its new prefix/status
+originals (1,882,323,893 bytes) are preserved with unchanged source identities;
+the earlier 22:25 generation is preserved separately. The earlier code/test
+closure is retained as an insufficient repair, not reported as production
+acceptance. Its Main calculation succeeded and remains a reusable native prefix.
+
+Exact isolated intake exposed the earlier source-selection violation: the
+10/26 native source index already contained the real record-bound BUY. The
+first report relied on an eligible prior derived snapshot and skipped that
+independent original when the snapshot had a separate cost warning. The later
+quantity owner consumed the original indexed execution and changed the cost
+seal. Accepted BUY-cache recovery alone did not recover this particular case;
+no cached receipt was edited or declared valid to bypass its predicate.
+
+The existing prior-fill producer now joins matching original BUY observations
+from the native index, without a historical raw scan. It verifies source epoch,
+record/symbol, KST/offset clock and original field identity, preserves original
+snapshot status, and records the independent native source proof inside the
+existing normalized receipt surface. One-to-one joining preserves physical
+repeats and conflicts. Both pre-allocation and final publication revalidate the
+new source generations. Existing sealed snapshots and their separate context
+remain consumers; their producer and authority are not restored or relabeled.
+
+The existing research position schema separates its already-defined cost-only
+reasons from execution/custody admission, while retaining the original canonical
+ledger. Missing official costs remain invalid/null. The declared implementation
+census formerly local to late cost revision is now shared with the first-prefix
+code seal, covering the existing allocation, index and recovery owners. This
+replaces separate incomplete enumeration, not a new publisher or validator.
+
+The final preserved-input replay uses the real native configuration, unchanged
+selector/current cost index, original 49532 SELL and one verified indexed prior
+BUY. It validates official 10/26 and 10/27 costs and returns research allocation
+valid with provider/order calls zero. It is isolated causal evidence, not a new
+production generation, exact broker PnL, actual PID or natural acceptance.
+The earlier worktree-default replay is preserved but is not this context proof.
+
+Review/validation: core source, costs, quantity, snapshot and report regressions
+612 passed; independent preparation 902 passed; exact current/historical policy
+handoff and negative siblings 48 passed. Invalid clocks/identity/generations,
+unknown guards, missing official costs, native-receipt negatives and compression
+semantics remain protected. Original failed test logs/attempts are retained.
+The generic actual-case and upstream-original procedure update is separate
+AGENTS-only commit 8e4a4054d, already pushed and reloaded.
+
+Disposition before the next native source run: EOD reuse; Main machine and
+unaffected family artifacts read-only revalidate through native receipts;
+regenerate the invalid first prefix/facts/quantity and incomplete legacy/holding
+suffix, with native unchanged checkpoints retained. Rebuild summary/strict,
+controller/independent completion and preparation after their last writers.
+Archive completion is read-only revalidated, not rerun for another PASS.
+Weakness research remains operator-paused. All six historical OPEN/source/null
+items and unassisted source28-to29 acceptance remain under their existing owner.
+Stop the next source attempt if the actual first prefix still lacks the prior
+BUY/cost binding, or if quantity invalidates it again; do not spend a repeated
+unchanged suffix. Selected code publication/P5, finalization, PREOPEN and actual
+next Main consumption remain pending. No trading transition is claimed here.
+
+Baseline: 8e4a4054d. Non-test source adds 232/deletes 33; tests add 368/delete 44,
+including local formatting. Net growth adds native-source intake/provenance and
+failure coverage while reusing the existing index, allocator and publication
+owners. No new module, scheduler, provider, policy metric or safety limit exists.

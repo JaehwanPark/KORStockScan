@@ -1,3 +1,5 @@
+from pathlib import Path
+
 """Research allocation remains separate from canonical broker execution costs."""
 
 from copy import deepcopy
@@ -1247,7 +1249,18 @@ def test_reobserved_broker_receipt_without_buy_lineage_collapses_without_restori
     assert rows == before
 
 
-@pytest.mark.parametrize("fault", [None, "missing", "clock", "foreign", "partial"])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "missing",
+        "clock",
+        "foreign",
+        "partial",
+        "unknown_guard",
+        "official_missing",
+    ],
+)
 def test_first_cost_producer_uses_same_native_buy_as_quantity_refresh(
     monkeypatch, tmp_path, fault
 ):
@@ -1310,8 +1323,33 @@ def test_first_cost_producer_uses_same_native_buy_as_quantity_refresh(
         "source_gap_negative_position_balance",
         "source_gap_position_quantity_not_conserved",
     ]
-    ledger = dict(buy_fill_legs=[], strict_completion_reasons=missing)
-    projected = {**item, "buy_legs": [], "execution_source_quality_reasons": missing}
+    ledger = dict(
+        buy_fill_legs=[],
+        sell_fill_legs=item["sell_legs"],
+        strict_completion_reasons=missing
+        + [
+            "source_gap_broker_actual_cost_missing",
+            "source_gap_exact_cost_missing",
+        ],
+    )
+    if fault == "unknown_guard":
+        ledger["strict_completion_reasons"].append("source_gap_unknown_execution")
+    terminal = review.HoldingEvent(
+        item["completed_at"],
+        "",
+        "005930",
+        "sell_completed",
+        dict(
+            decision_authority="broker_sell_fill_observation_only",
+            actual_order_submitted=True,
+            broker_order_forbidden=False,
+            pipeline_lifecycle_population_scope="real_record_bound",
+            remaining_sell_qty=0,
+        ),
+        "",
+    )
+    trade["sell_price"] = 10100
+    projected = review._quantity_research_position(trade, [terminal], ledger, [])
     canonical = deepcopy(ledger)
     monkeypatch.setattr(review, "DATA_DIR", tmp_path)
     selected, generation = review._quantity_research_custody(
@@ -1321,9 +1359,15 @@ def test_first_cost_producer_uses_same_native_buy_as_quantity_refresh(
     )
     assert ledger == canonical  # Canonical event/quantity evidence is unchanged.
     observed = source(tmp_path)
-    first = allocation.build_research_cost_allocations({day: observed}, [projected])
-    if fault is None:
-        assert first["1"]["status"] == "research_cost_allocated"
+    first = allocation.build_research_cost_allocations(
+        {} if fault == "official_missing" else {day: observed}, [projected]
+    )
+    if fault in {None, "official_missing"}:
+        assert first["1"]["status"] == (
+            "research_cost_allocated" if fault is None else "research_cost_invalid"
+        )
+        if fault == "official_missing":
+            assert first["1"].get("allocated_net_pnl_krw") is None
         assert projected["buy_legs"] and selected["1"]
         assert (
             generation["native_buy_recoveries"]["1"]["clock_source"]
@@ -1337,3 +1381,199 @@ def test_first_cost_producer_uses_same_native_buy_as_quantity_refresh(
     else:
         assert first["1"]["status"] == "research_cost_invalid"
         assert not projected["buy_legs"]
+
+
+@pytest.mark.parametrize(
+    "cost_reason",
+    [
+        "source_gap_broker_actual_cost_missing",
+        "source_gap_exact_cost_missing",
+        "source_gap_sell_leg_configured_cost",
+        "source_gap_profit_rate_unreconciled",
+    ],
+)
+def test_research_position_keeps_cost_gaps_separate_from_execution(cost_reason):
+    trade, events, ledger, _, _ = fixture()
+    ledger["strict_completion_reasons"] = [
+        "source_gap_buy_fill_missing",
+        cost_reason,
+        "source_gap_unknown_execution",
+    ]
+    original = deepcopy(ledger)
+    result = review._quantity_research_position(trade, events, ledger, [])
+    assert cost_reason not in result["execution_source_quality_reasons"]
+    assert "source_gap_buy_fill_missing" in result["execution_source_quality_reasons"]
+    assert "source_gap_unknown_execution" in result["execution_source_quality_reasons"]
+    assert ledger == original
+
+
+def test_actual_five_reason_cost_input_reaches_native_buy_recovery(
+    monkeypatch, tmp_path
+):
+    from src.engine.lifecycle import broker_cost_allocation as allocation
+
+    trade, events, ledger, _, _ = fixture()
+    missing = [
+        "source_gap_buy_fill_missing",
+        "source_gap_negative_position_balance",
+        "source_gap_position_quantity_not_conserved",
+    ]
+    ledger["strict_completion_reasons"] = missing + [
+        "source_gap_broker_actual_cost_missing",
+        "source_gap_exact_cost_missing",
+    ]
+    projected = review._quantity_research_position(trade, events, ledger, [])
+    assert set(projected["execution_source_quality_reasons"]) == set(missing)
+    # Both first production and later quantity allocation consume this schema.
+    assert (
+        allocation.build_research_cost_allocations({}, [projected])[str(trade["id"])][
+            "status"
+        ]
+        == "research_cost_invalid"
+    )
+
+
+@pytest.mark.parametrize("duplicate", [False, True])
+@pytest.mark.parametrize("snapshot_state", ["rejected", "sealed"])
+@pytest.mark.parametrize("clock", ["2026-10-07 10:00:00", "2026-10-07T01:00:00+00:00"])
+def test_prior_fill_uses_native_index_without_promoting_rejected_snapshot(
+    tmp_path, monkeypatch, duplicate, snapshot_state, clock
+):
+    from src.engine import log_archive_service as snapshots
+    from src.engine.automation import main_trailing_source_store as store
+    from src.tests.test_main_trailing_source_store import append
+
+    trade, events, _, _, _ = fixture()
+    trade.update(rec_date="2026-10-07", buy_time="2026-10-07 10:00:00")
+    event = replace(
+        events[0],
+        timestamp="2026-10-07 10:00:00",
+        fields={**events[0].fields, "id": "1"},
+    )
+    path = tmp_path / "pipeline_events/pipeline_events_2026-10-07.jsonl"
+    path.parent.mkdir()
+    path.touch()
+    monkeypatch.setattr(store, "maintain", lambda *a: None)
+    payload = dict(
+        pipeline="HOLDING_PIPELINE",
+        record_id=1,
+        stock_code=trade["code"],
+        emitted_at=clock,
+        stage=event.stage,
+        fields=event.fields,
+    )
+    append(tmp_path, path, payload)
+    if duplicate:
+        append(tmp_path, path, payload)
+    monkeypatch.setattr(review, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        snapshots,
+        "prior_entry_snapshot_rejection",
+        lambda *a, **kw: (
+            "source_gap_original_snapshot" if snapshot_state == "rejected" else None
+        ),
+    )
+    if snapshot_state == "sealed":
+        snapshot = dict(
+            date="2026-10-07",
+            meta={},
+            metrics=dict(
+                open_scalp_position_projection_status="current_db_census",
+                open_scalp_position_projection_count=1,
+            ),
+            sections=dict(
+                open_scalp_position_projection=[
+                    dict(
+                        id=1,
+                        name="Test",
+                        code=trade["code"],
+                        timeline=[
+                            dict(
+                                timestamp="2026-10-07T10:00:00+09:00",
+                                stage=event.stage,
+                                fields={**event.fields, "id": 1},
+                            )
+                        ],
+                    )
+                ]
+            ),
+        )
+        monkeypatch.setattr(
+            snapshots,
+            "load_prior_entry_projection",
+            lambda *a, **kw: (snapshot, {"logical_sha256": "a" * 64}),
+        )
+    opened = Path.open
+
+    def no_raw(self, *args, **kwargs):
+        if self == path:
+            pytest.fail("prior fill repair scanned immutable raw source")
+        return opened(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", no_raw)
+    found, receipts = review._prior_entry_fill_events([trade], "2026-10-08")
+    fills = [item for item in found["1"] if item.stage == event.stage]
+    assert len(fills) == (2 if duplicate else 1)
+    from zoneinfo import ZoneInfo
+
+    for item in fills:
+        at = review._parse_dt(item.timestamp)
+        at = (
+            at.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+            if at.tzinfo is None
+            else at.astimezone(ZoneInfo("Asia/Seoul"))
+        )
+        assert at.isoformat() == "2026-10-07T10:00:00+09:00"
+    assert receipts["2026-10-07"]["status"] == (
+        "source_gap_original_snapshot"
+        if snapshot_state == "rejected"
+        else "sealed_entry_snapshot"
+    )
+    proof = receipts["2026-10-07"]["indexed_execution_source"]
+    assert proof["source_kind"] == "native_indexed_execution"
+    assert proof["record_ids"] == ["1"]
+    review._verify_prior_entry_fill_sources(receipts)
+    original = store.generation
+    monkeypatch.setattr(
+        store, "generation", lambda *a, **kw: {**original(*a, **kw), "size": -1}
+    )
+    with pytest.raises(ValueError, match="prior_execution_generation_changed"):
+        review._verify_prior_entry_fill_sources(receipts)
+
+
+def test_prior_fill_rejects_conflicting_explicit_record_identity(tmp_path, monkeypatch):
+    from src.engine import log_archive_service as snapshots
+    from src.engine.automation import main_trailing_source_store as store
+
+    trade, events, _, _, _ = fixture()
+    trade["rec_date"] = "2026-10-07"
+    path = tmp_path / "pipeline_events/pipeline_events_2026-10-07.jsonl"
+    path.parent.mkdir()
+    path.touch()
+    monkeypatch.setattr(review, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        snapshots, "prior_entry_snapshot_rejection", lambda *a, **kw: "unverified"
+    )
+    monkeypatch.setattr(store, "generation", lambda *a: {"source": "original"})
+    monkeypatch.setattr(
+        store,
+        "read_rows",
+        lambda *a, **kw: iter(
+            [
+                (
+                    {
+                        "row": dict(
+                            record_id=1,
+                            stock_code=trade["code"],
+                            emitted_at="2026-10-07 10:00:00",
+                            stage=events[0].stage,
+                            fields={"id": "2"},
+                        )
+                    },
+                    {"path": str(path)},
+                )
+            ]
+        ),
+    )
+    with pytest.raises(ValueError, match="prior_execution_identity_changed"):
+        review._prior_entry_fill_events([trade], "2026-10-08")
