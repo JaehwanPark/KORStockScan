@@ -1460,8 +1460,9 @@ def test_scoring_prepare_fails_before_any_write_on_open_terminal(tmp_path, monke
     assert not (tmp_path / "out").exists()
 
 
+@pytest.mark.parametrize("only_a09", [False, True])
 def test_scoring_preparation_and_intake_are_separate_and_hash_bound(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, only_a09
 ):
     from src.engine.automation import postclose_summary_handoff as H
     from src.engine.scalping import continuous_reversal_postclose as P
@@ -1480,6 +1481,10 @@ def test_scoring_preparation_and_intake_are_separate_and_hash_bound(
             )
         ),
     )
+    if only_a09:
+        scopes = parent["continuous_reversal"]["operating_manifest"]["scopes"]
+        for key, route in V.scopes():
+            scopes.setdefault(V.scope_id(key, route), ["legacy_dd5_ge_0_4_v1"])
     source = P.seal(
         dict(
             normalized_sources=dict(
@@ -1512,8 +1517,13 @@ def test_scoring_preparation_and_intake_are_separate_and_hash_bound(
     monkeypatch.setattr(P, "ensure_population", lambda *a, **kw: source)
     monkeypatch.setattr(P, "population_receipt", lambda *a: receipt)
     prepared = R.prepare_scoring(
-        tmp_path, tmp_path / "prepared", parent=parent, day=day
+        tmp_path, tmp_path / "prepared", parent=parent, day=day,
+        scope_candidates={"other_non_fixed|REGULAR|LT_20000|SOR": ["A09"]} if only_a09 else None,
     )
+    if only_a09:
+        assert list(prepared["scopes"]) == ["other_non_fixed|REGULAR|LT_20000|SOR"]
+        assert prepared["unscored_scope_policy"] == "carry_parent"
+        assert len(prepared["frozen_parent_scopes"]) == 128
     pointer = N.root(tmp_path) / "cumulative-scoring.json"
     assert not pointer.exists() and prepared["operator_receipt"] is None
     with pytest.raises(ValueError, match="scoring_contract_invalid"):
@@ -1614,3 +1624,110 @@ def test_scoring_bad_point_is_excluded_without_blocking_valid_rows(tmp_path):
             scoring=research,
             scope=sid,
         )
+
+
+def scoped_a09_contract(parent):
+    from src.engine.scalping import continuous_reversal_postclose as P
+
+    c = scoring_contract()
+    sid = "other_non_fixed|REGULAR|LT_20000|SOR"
+    c["scopes"] = {sid: copy.deepcopy(c["scopes"][sid])}
+    c["scopes"][sid]["alternatives"] = {
+        "ADD_A09": c["scopes"][sid]["alternatives"]["ADD_A09"]
+    }
+    c["unscored_scope_policy"] = "carry_parent"
+    c["frozen_parent_scopes"] = copy.deepcopy(
+        parent["continuous_reversal"]["operating_manifest"]["scopes"]
+    )
+    return P.seal(c)
+
+
+@pytest.mark.parametrize("defect", ["missing_carry", "empty_scopes", "unknown_alias", "missing_parent", "changed_target_parent"])
+def test_scoped_adoption_rejects_incomplete_or_expanded_contract(monkeypatch, defect):
+    from src.engine.scalping import continuous_reversal_postclose as P
+
+    parent, _ = postclose_fixture(monkeypatch)
+    c = scoped_a09_contract(parent)
+    assert R.validate_scoring(c)
+    sid = next(iter(c["scopes"]))
+    if defect == "missing_carry":
+        c.pop("unscored_scope_policy")
+    elif defect == "empty_scopes":
+        c["scopes"] = {}
+    elif defect == "unknown_alias":
+        c["scopes"][sid]["alternatives"]["ADD_UNKNOWN"] = c["scopes"][sid]["parent_branch_ids"]
+    elif defect == "missing_parent":
+        c["frozen_parent_scopes"].pop(next(iter(c["frozen_parent_scopes"])))
+    else:
+        c["frozen_parent_scopes"][sid] = []
+    with pytest.raises(ValueError, match="cumulative_scoring_"):
+        R.validate_scoring(P.seal(c))
+
+
+def test_a09_only_selection_carries_every_other_scope_despite_better_metrics(monkeypatch):
+    from src.engine.scalping import continuous_reversal_postclose as P
+
+    parent, m = postclose_fixture(monkeypatch)
+    c = scoped_a09_contract(parent)
+    sid = next(iter(c["scopes"]))
+    m["cumulative_scoring_contract"] = c
+    metrics = {
+        sid + "::CURRENT_NATIVE": scored_metric(c, 2),
+        sid + "::ADD_A09": scored_metric(c, 113, s=9, t=82, u=118),
+    }
+    # Tempt an unrelated registered scope with an apparently perfect variant.
+    other = next(s for s in R.groups() if s != sid)
+    metrics[other + "::ADD_A12"] = metric(100)
+    machine = P.seal(dict(status="completed", source_manifest_receipt={"fixture": True},
+                         source_manifest_sha256="b" * 64, label_contract=C.LABEL,
+                         operating_manifest=m, proposal_metrics=metrics))
+    result = R.apply_selection(machine, parent)
+    assert R.validate_manifest(result["operating_manifest"])
+    scopes = result["operating_manifest"]["scopes"]
+    expected = copy.deepcopy(c["frozen_parent_scopes"])
+    expected[sid] = c["scopes"][sid]["alternatives"]["ADD_A09"]
+    assert scopes == expected
+    assert result["cumulative_selection"][sid]["variant"] == "ADD_A09"
+    assert result["cumulative_selection"][other]["status"] == "carried_unscored_scope"
+    altered = copy.deepcopy(result["operating_manifest"])
+    altered["scopes"][other] = []
+    with pytest.raises(ValueError, match="unscored_membership_changed"):
+        R.validate_manifest(altered)
+
+
+def test_scoped_postclose_does_not_enumerate_unapproved_alternatives(tmp_path, monkeypatch):
+    import gzip, json
+    from src.engine.scalping import continuous_reversal_postclose as P
+    from src.engine.scalping import reversal_cumulative_postclose as CP
+
+    parent, m = postclose_fixture(monkeypatch)
+    c = scoped_a09_contract(parent)
+    m["cumulative_scoring_contract"] = c
+    monkeypatch.setattr(R, "pending", lambda *a: None)
+    monkeypatch.setattr(R, "scoring_for_build", lambda *a: c)
+    source = P.seal(dict(normalized_sources=dict(partitions=[])))
+    report = CP.build(tmp_path, "2026-10-27", "2026-10-27", parent, source=source, publish_outputs=False)
+    with gzip.open(report["fixed_comparison_table"]["path"], "rt") as handle:
+        complete = json.load(handle)
+    for sid, options in complete["fixed_proposals"].items():
+        assert set(options) - {"SELECTED"} == ({"ADD_A09", "CURRENT_NATIVE"} if sid in c["scopes"] else {"CURRENT_NATIVE"})
+    for options in report["fixed_proposals"].values():
+        assert set(options) == {"SELECTED", "CURRENT_NATIVE"}
+        assert options["SELECTED"] == options["CURRENT_NATIVE"]
+    assert report["operating_manifest"]["scopes"] == c["frozen_parent_scopes"]
+
+
+def test_scoped_pending_rejects_different_full_parent_map(tmp_path, monkeypatch):
+    from src.engine.scalping import continuous_reversal_postclose as P
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+
+    parent, m = postclose_fixture(monkeypatch)
+    c = scoped_a09_contract(parent)
+    parent["bundle_sha256"] = c["parent_bundle_sha256"]
+    parent["continuous_reversal"]["operating_manifest"]["registration_receipts"] = [request()]
+    P.write(N.root(tmp_path)/"cumulative-scoring.json", c)
+    monkeypatch.setattr(R, "validate_scoring", lambda *a, **kw: c)
+    other = next(s for s in m["scopes"] if s not in c["scopes"])
+    parent["continuous_reversal"]["operating_manifest"]["scopes"][other] = []
+    with pytest.raises(ValueError, match="parent_scope_map_changed"):
+        R.scoring_for_build(tmp_path,parent,"2026-10-27","b"*64)

@@ -299,7 +299,11 @@ def build(data_root, day, publication, parent, *, source=None, publish_outputs=T
     for sid, ids in manifest["scopes"].items():
         configs[sid] = (
             dict(Q.variants(sid, batch), CURRENT_NATIVE=current[sid])
-            if sid in registered
+            if sid in registered and not (
+                scoring is not None
+                and scoring.get("unscored_scope_policy") == "carry_parent"
+                and sid not in scoring["scopes"]
+            )
             else dict(CURRENT_NATIVE=current[sid])
         )
     if scoring is not None:

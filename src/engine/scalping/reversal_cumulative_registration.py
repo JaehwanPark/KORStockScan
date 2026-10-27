@@ -65,7 +65,9 @@ def validate_scoring(contract, *, approved=True, check_sources=False):
         != P.seal(contract)["artifact_content_sha256"]
         or contract.get("spec") != scoring_spec()
         or contract.get("operator_receipt") != (SCORING_AUTHORITY if approved else None)
-        or set(contract.get("scopes", {})) != set(SCORING_ALIASES)
+        or not isinstance(contract.get("scopes"), dict)
+        or not contract.get("scopes")
+        or not set(contract.get("scopes", {})) <= set(SCORING_ALIASES)
         or any(contract.get(k) != v for k, v in P.AUTH.items())
     ):
         raise ValueError("cumulative_scoring_contract_invalid")
@@ -77,16 +79,39 @@ def validate_scoring(contract, *, approved=True, check_sources=False):
     catalog = Q.catalog(batch)
     if contract["registry_sha256"] != Q.registry(batch):
         raise ValueError("cumulative_scoring_registry_changed")
-    for sid, aliases in SCORING_ALIASES.items():
-        cfg = contract["scopes"][sid]
+    scoped_carry = contract.get("unscored_scope_policy") == "carry_parent"
+    if contract.get("unscored_scope_policy") not in (None, "carry_parent"):
+        raise ValueError("cumulative_scoring_unscored_policy_invalid")
+    if set(contract["scopes"]) != set(SCORING_ALIASES) and not scoped_carry:
+        raise ValueError("cumulative_scoring_partial_scope_requires_carry")
+    if scoped_carry:
+        from src.engine.scalping import continuous_reversal_policy_v6 as V
+
+        frozen = contract.get("frozen_parent_scopes")
+        expected_scopes = {V.scope_id(key, route) for key, route in V.scopes()}
+        if (
+            not isinstance(frozen, dict)
+            or set(frozen) != expected_scopes
+            or any(not isinstance(ids, list) or ids != sorted(set(ids)) for ids in frozen.values())
+        ):
+            raise ValueError("cumulative_scoring_frozen_parent_invalid")
+    for sid, cfg in contract["scopes"].items():
+        aliases = SCORING_ALIASES[sid]
         base = cfg.get("parent_branch_ids", [])
         expected = {
             "ADD_" + a: sorted(set(base) | {catalog["groups"][sid]["additions"][a]})
             for a in aliases
         }
-        if cfg.get("alternatives") != expected or any(
+        alternatives = cfg.get("alternatives")
+        if (
+            not isinstance(alternatives, dict)
+            or not alternatives
+            or any(expected.get(name) != ids for name, ids in alternatives.items())
+            or not scoped_carry and alternatives != expected
+            or scoped_carry and contract["frozen_parent_scopes"][sid] != base
+        ) or any(
             ids != sorted(set(ids)) or not Q.valid_membership(sid, ids, batch)
-            for ids in [base, *expected.values()]
+            for ids in [base, *(alternatives or {}).values()]
         ):
             raise ValueError("cumulative_scoring_membership_invalid")
     receipts = contract.get("source_receipts")
@@ -131,6 +156,8 @@ def scoring_for_build(data_root, parent, day, source_sha):
     ):
         raise ValueError("cumulative_scoring_parent_source_or_date_changed")
     scopes = parent["continuous_reversal"]["operating_manifest"]["scopes"]
+    if request.get("unscored_scope_policy") == "carry_parent" and request["frozen_parent_scopes"] != scopes:
+        raise ValueError("cumulative_scoring_parent_scope_map_changed")
     if any(scopes[s] != c["parent_branch_ids"] for s, c in request["scopes"].items()):
         raise ValueError("cumulative_scoring_parent_membership_changed")
     return request
@@ -711,6 +738,14 @@ def apply_selection(machine, parent):
     )
     batch = approval(manifest)["research_batch_sha256"]
     for sid, g in registered.items():
+        if scoring and scoring.get("unscored_scope_policy") == "carry_parent" and sid not in scoring["scopes"]:
+            chosen[sid] = dict(
+                branch_ids=sorted(current[sid]),
+                variant="CURRENT_NATIVE",
+                status="carried_unscored_scope",
+            )
+            manifest["scopes"][sid] = chosen[sid]["branch_ids"]
+            continue
         cohort = P.digest(
             [machine["source_manifest_sha256"], sid, machine["label_contract"]]
         )
@@ -825,6 +860,12 @@ def validate_manifest(manifest):
                 or selected.get("statistic_contract_sha256") != P.digest(scoring_spec())
             ):
                 raise ValueError("cumulative_scoring_selected_metric_invalid")
+        if scoring.get("unscored_scope_policy") == "carry_parent" and any(
+            ids != manifest["scopes"][sid]
+            for sid, ids in scoring["frozen_parent_scopes"].items()
+            if sid not in scoring["scopes"]
+        ):
+            raise ValueError("cumulative_scoring_unscored_membership_changed")
     elif receipt and receipt.get("schema") != "cumulative_variant_selection_v2":
         raise ValueError("cumulative_selection_schema_invalid")
     if receipt and (
@@ -895,7 +936,7 @@ def run_postclose(data_root, day, publication, mode, *, source=None):
     return O.initial_reports(data_root, day, publication, parent, machine)
 
 
-def prepare_scoring(data_root, output, *, parent, day):
+def prepare_scoring(data_root, output, *, parent, day, scope_candidates=None):
     """Freeze a completed native comparison; no selection pointer is written."""
     from src.engine.automation import postclose_summary_handoff as H
     from src.engine.scalping import continuous_reversal_operating_postclose as O
@@ -935,8 +976,18 @@ def prepare_scoring(data_root, output, *, parent, day):
     manifest = parent["continuous_reversal"]["operating_manifest"]
     batch = approval(manifest)["research_batch_sha256"]
     catalog = Q.catalog(batch)
+    selected = SCORING_ALIASES if scope_candidates is None else scope_candidates
+    if not isinstance(selected, dict) or not selected or any(
+        sid not in SCORING_ALIASES
+        or not isinstance(aliases, (list, tuple))
+        or not aliases
+        or len(aliases) != len(set(aliases))
+        or not set(aliases) <= set(SCORING_ALIASES[sid])
+        for sid, aliases in selected.items()
+    ):
+        raise ValueError("cumulative_scoring_requested_candidates_invalid")
     scopes = {}
-    for sid, aliases in SCORING_ALIASES.items():
+    for sid, aliases in selected.items():
         ids = sorted(manifest["scopes"][sid])
         scopes[sid] = dict(
             parent_branch_ids=ids,
@@ -964,6 +1015,10 @@ def prepare_scoring(data_root, output, *, parent, day):
             publication_date=day,
             target_date=N.next_target(day),
             scopes=scopes,
+            **(
+                dict(unscored_scope_policy="carry_parent", frozen_parent_scopes=copy.deepcopy(manifest["scopes"]))
+                if scope_candidates is not None else {}
+            ),
             research_batch_sha256=batch,
             registry_sha256=Q.registry(batch),
             source_receipts=sources,
@@ -1003,6 +1058,10 @@ def intake_scoring(data_root, prepared_path, *, confirm, origin_root, origin_com
     )
     if parent["bundle_sha256"] != prepared["parent_bundle_sha256"]:
         raise ValueError("cumulative_scoring_parent_changed")
+    if prepared.get("unscored_scope_policy") == "carry_parent" and (
+        parent["continuous_reversal"]["operating_manifest"]["scopes"] != prepared["frozen_parent_scopes"]
+    ):
+        raise ValueError("cumulative_scoring_parent_scope_map_changed")
     request = P.seal(dict(prepared, operator_receipt=confirm))
     validate_scoring(request, check_sources=True)
     root = N.root(Path(data_root))
@@ -1063,6 +1122,8 @@ def main(argv=None):
     for name in ("data-root", "output", "parent"):
         scoring.add_argument("--" + name, type=Path, required=True)
     scoring.add_argument("--source-date", required=True)
+    scoring.add_argument("--scope")
+    scoring.add_argument("--candidate", action="append")
     activate = sub.add_parser("intake-scoring")
     for name in ("data-root", "prepared", "origin-root"):
         activate.add_argument("--" + name, type=Path, required=True)
@@ -1080,11 +1141,14 @@ def main(argv=None):
             research_batch=args.research_batch_sha256,
         )
     elif args.operation == "prepare-scoring":
+        if bool(args.scope) != bool(args.candidate):
+            raise ValueError("cumulative_scoring_scope_and_candidate_required_together")
         result = prepare_scoring(
             args.data_root,
             args.output,
             parent=N._read(args.parent),
             day=args.source_date,
+            scope_candidates={args.scope: args.candidate} if args.scope else None,
         )
     elif args.operation == "intake-scoring":
         result = intake_scoring(
