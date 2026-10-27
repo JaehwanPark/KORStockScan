@@ -1573,7 +1573,13 @@ def test_midnight_prepared_review_uses_own_receipt_without_origin_day_receipt(
     "damage", [None, "selection_changed", "observed_selection_changed"]
 )
 def test_second_code_handoff_preserves_selector_provenance_without_freezing_transition(
-    tmp_path, monkeypatch, damage, postclose, cold_activation=False, coordination=False
+    tmp_path,
+    monkeypatch,
+    damage,
+    postclose,
+    cold_activation=False,
+    coordination=False,
+    closed_parent=False,
 ):
     import json
     from pathlib import Path
@@ -1656,6 +1662,74 @@ def test_second_code_handoff_preserves_selector_provenance_without_freezing_tran
     monkeypatch.setattr(router, "selected_release", lambda *a: tuple(selected))
     monkeypatch.setattr(router, "validate_release", lambda *a: None)
     monkeypatch.setattr(router, "git", lambda *a: commit)
+    if closed_parent:
+        from datetime import timedelta
+        from src.engine.automation import intraday_release_handoff as I
+        from src.engine.automation import ordered_intraday_deploy as D
+        from src.engine.automation import next_preopen_readiness as R
+
+        source_day = (
+            datetime.fromisoformat(day).date() - timedelta(days=1)
+        ).isoformat()
+        bundle["target_date"] = source_day
+        bundle["source_date"] = (
+            datetime.fromisoformat(source_day).date() - timedelta(days=1)
+        ).isoformat()
+        N._atomic_write_json(N.root(data) / "generations/bundle.json", bundle)
+        pointer.write_text(
+            json.dumps(dict(bundle_sha256="bundle", effective_date=source_day))
+        )
+        selection = json.loads(selector.read_bytes())
+        selection.update(
+            approved_by="user",
+            approval_scope="ordered_intraday_deploy_and_restart",
+            actual_pid_consumed=True,
+            main_start_authorized=False,
+        )
+        selector.write_text(json.dumps(selection))
+        initial_sha = P.file_hash(selector)
+        closed = dict(
+            schema="intraday_closed_consumption_observation_v1",
+            target_date="wrong" if damage == "closed_source" else source_day,
+            release_commit="a" * 40,
+            selection_sha256=initial_sha,
+            runtime_effect=damage == "closed_flags",
+            current_observation_verified=False,
+            new_pid_consumption_claimed=False,
+        )
+        if damage == "closed_basis":
+            closed["basis"] = "interrupted"
+        visits = []
+
+        def closure():
+            visits.append(True)
+            return {
+                **closed,
+                **(
+                    {"terminal_at": "changed"}
+                    if damage == "closed_changed" and len(visits) > 1
+                    else {}
+                ),
+            }
+
+        monkeypatch.setattr(I, "closed_consumption_observation", closure)
+        monkeypatch.setattr(R, "target_after_postclose", lambda _: day)
+        monkeypatch.setattr(
+            D, "_main_pids", lambda: [123] if damage == "closed_live" else []
+        )
+        monkeypatch.setattr(D, "_session_absent", lambda: True)
+
+        def original_receipt(_, receipt_day, *args):
+            if receipt_day == day or damage == "closed_missing":
+                return None
+            assert receipt_day == source_day
+            return dict(
+                bundle_sha256="bundle", source_hashes={str(source): P.file_hash(source)}
+            )
+
+        monkeypatch.setattr(H, "_validated_origin_receipt", original_receipt)
+        if damage == "closed_hold":
+            (data / "runtime/operator_startup_hold.json").write_text("{}")
     control = data / "runtime/research_release_transition/current.json"
     if coordination:
         from src.engine.infrastructure.research_release_transition import Transition
@@ -1676,6 +1750,9 @@ def test_second_code_handoff_preserves_selector_provenance_without_freezing_tran
             monkeypatch.setattr(P, "file_hash", raced_hash)
 
     def inspect(*args, **kwargs):
+        assert (
+            not closed_parent
+        ), "closed native parent must not inspect future preparation"
         if damage == "selection_changed":
             selector.write_text("{}")
         observed = dict(
@@ -1728,7 +1805,8 @@ def test_second_code_handoff_preserves_selector_provenance_without_freezing_tran
         options["postclose_source_date"] = source_day
     if damage:
         with pytest.raises(
-            ValueError, match="parent_changed|selection_changed|coordination|transition"
+            ValueError,
+            match="parent_changed|selection_changed|coordination|transition|closed_parent",
         ):
             H.issue(
                 data,
@@ -1755,6 +1833,13 @@ def test_second_code_handoff_preserves_selector_provenance_without_freezing_tran
         and str(selector) not in receipt["source_hashes"]
     )
     assert receipt["source_hashes"][str(source)] == P.file_hash(source)
+    if closed_parent:
+        assert (
+            receipt["origin_verification_basis"]
+            == "verified_ordered_closed_native_parent"
+        )
+        assert receipt["source_trading_date"] == bundle["source_date"]
+        assert receipt["origin_closed_observation"]["target_date"] == source_day
     assert receipt["activation_date"] == ("2026-10-26" if cold_activation else day)
     assert receipt["issued_at_kst"].startswith(day)
     if cold_activation:
@@ -1810,6 +1895,127 @@ def test_native_transition_coordination_is_observed_without_freezing_policy(
     test_second_code_handoff_preserves_selector_provenance_without_freezing_transition(
         tmp_path, monkeypatch, damage, False, coordination=True
     )
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "closed_missing",
+        "closed_changed",
+        "closed_live",
+        "closed_basis",
+        "closed_flags",
+        "closed_source",
+        "closed_hold",
+    ],
+)
+def test_closed_issuer_uses_native_parent_without_future_preparation_dependency(
+    tmp_path, monkeypatch, damage
+):
+    test_second_code_handoff_preserves_selector_provenance_without_freezing_transition(
+        tmp_path, monkeypatch, damage, False, closed_parent=True
+    )
+
+
+@pytest.mark.parametrize(
+    "damage", [None, "source", "code", "scope", "target", "membership", "selection"]
+)
+def test_stopped_future_main_reader_keeps_issuer_and_workflow_separate(
+    tmp_path, monkeypatch, damage
+):
+    import json
+    from pathlib import Path
+    from src.engine.scalping import (
+        reversal_code_handoff as A,
+        mechanistic_entry_runtime_policy as N,
+        continuous_reversal_policy_v6 as V,
+    )
+    from src.engine.automation import intraday_release_handoff as I
+    from src.engine.infrastructure import runtime_release_router as R
+
+    root, previous = tmp_path / "workflow", tmp_path / "selected"
+    own = root / "src/engine/scalping/reversal_code_handoff.py"
+    own.parent.mkdir(parents=True)
+    own.write_text("fixture issuer")
+    previous.mkdir()
+    code = root / "consumer.py"
+    code.write_text("reviewed future reader")
+    data = tmp_path / "data"
+    selector = data / "runtime/runtime_release_selection.json"
+    selector.parent.mkdir(parents=True)
+    selection = dict(git_commit="a" * 40, release_root=str(previous))
+    selector.write_text(json.dumps(selection))
+    monkeypatch.setattr(A, "__file__", str(own))
+    monkeypatch.setattr(
+        R,
+        "selected_release",
+        lambda _: (previous, "c" * 40 if damage == "selection" else "a" * 40),
+    )
+    monkeypatch.setattr(
+        V, "contract_modules", lambda: [SimpleNamespace(__file__=str(code))]
+    )
+    observation = dict(
+        source_date="2026-10-27",
+        prepared_target_date="2026-10-28",
+        runtime_effect=False,
+        actual_pid_consumed=False,
+        allowed_runtime_apply=False,
+    )
+    review = dict(
+        code_root=root, code_commit="b" * 40, postclose_observation=observation
+    )
+    monkeypatch.setattr(I, "predecessor_review_matches", lambda *a: damage != "scope")
+    bundle = dict(
+        bundle_sha256="f" * 64,
+        source_date="2026-10-27",
+        publication_date="2026-10-27",
+        target_date="wrong" if damage == "target" else "2026-10-28",
+        continuous_reversal=dict(
+            schema="continuous_reversal_policy_v6",
+            release_commit="a" * 40,
+            contract_file_sha256={
+                "wrong" if damage == "membership" else "consumer.py": "d" * 64
+            },
+        ),
+    )
+    calls = []
+
+    def native(value, directory, *, historical_code_root):
+        assert (
+            value is bundle and directory == data and historical_code_root == previous
+        )
+        calls.append("issuer")
+        if damage == "source":
+            raise ValueError("original_source_changed")
+
+    def delta(candidate, commit, origin, paths, expected):
+        assert (candidate, commit, origin) == (root, "b" * 40, "a" * 40)
+        assert paths == {"consumer.py": "consumer.py"} and expected == N.digest(
+            {"consumer.py": "d" * 64}
+        )
+        calls.append("code")
+        if damage == "code":
+            raise ValueError("unreviewed_code")
+
+    monkeypatch.setattr(N, "_validate_bundle_sources", native)
+    monkeypatch.setattr(I, "_verify_entry_code_delta", delta)
+    token = I._PREDECESSOR_REVIEW.set(review)
+    try:
+        if damage:
+            with pytest.raises((ValueError, FileNotFoundError)):
+                A.validate(bundle, data, original_error=ValueError("code_changed"))
+        else:
+            assert (
+                A.validate(bundle, data, original_error=ValueError("code_changed"))
+                is bundle
+            )
+            assert calls == ["issuer", "code"]
+            assert not (
+                data / "runtime/mechanistic_entry_policy/code_handoffs"
+            ).exists()
+    finally:
+        I._PREDECESSOR_REVIEW.reset(token)
 
 
 def test_cold_code_handoff_publishes_next_activation_date(tmp_path, monkeypatch):

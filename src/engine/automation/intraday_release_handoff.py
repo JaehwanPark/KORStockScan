@@ -12556,6 +12556,30 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Keep exact-execution and earlier preparation profiles issued before this reader.
+REVIEWED_CLOSED_PARENT_HASHES = {'src/engine/scalping/reversal_code_handoff.py': '2be83fd30237b4e83506462a4a5cc78dc8f4ad4ae85e23e8909864a41d9a7825', 'src/engine/infrastructure/startup_validation_code_context.py': '1e53562e6118640be92736d74f3703177f50d29f3ff0e1808f4465fd4701294a'}
+REVIEWED_CLOSED_PARENT_ORIGINS = {'src/engine/scalping/reversal_code_handoff.py': 'd79a22aecbd2e425fe00b40bdf19d8391ae63425d1cceff97657f3ae3581475f', 'src/engine/infrastructure/startup_validation_code_context.py': '3ae4734089d92335bb754a27cbf277e3ce181e60492f163cf42cb5233ffffc3b'}
+REVIEWED_CLOSED_PARENT_PROFILE = {**REVIEWED_HANDOFF_COORDINATION_PROFILE, **REVIEWED_CLOSED_PARENT_HASHES}
+REVIEWED_CLOSED_PARENT_VARIANTS = {
+    (key[0], REVIEWED_CLOSED_PARENT_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/scalping/reversal_code_handoff.py",
+        "selector_sha256": REVIEWED_CLOSED_PARENT_HASHES["src/engine/scalping/reversal_code_handoff.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_CLOSED_PARENT_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_CLOSED_PARENT_HASHES.get(os.path.normpath(name), sha) for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_HANDOFF_COORDINATION_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current) for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_CLOSED_PARENT_ORIGINS[name]})
+    for name, current in REVIEWED_CLOSED_PARENT_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -13395,6 +13419,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_HANDOFF_COORDINATION_PROFILE
         prepared_variants = REVIEWED_HANDOFF_COORDINATION_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/scalping/reversal_code_handoff.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_CLOSED_PARENT_HASHES["src/engine/scalping/reversal_code_handoff.py"]
+    ):
+        prepared_hashes = REVIEWED_CLOSED_PARENT_PROFILE
+        prepared_variants = REVIEWED_CLOSED_PARENT_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

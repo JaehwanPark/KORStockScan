@@ -870,3 +870,20 @@ receipt and code sources remain frozen; the current release router continues to
 enforce native transaction readability at consumption. Prior issued receipts
 remain untouched. Exercise proof consumption under real native transition state
 changes in the isolated replay, including publishing and verified phases.
+
+For a normally closed, consumed ordered release crossing midnight, issue the
+active-parent proof from that parent's exact original effective-session receipt
+only after native closure, calendar, absent-actor/hold/restart and original-source
+checks. Preserve the deployment, consumed-session and policy-calculation roles.
+Closure is admission provenance; unrelated next-session preparation is not an
+immutable active-parent input. Recheck native closure and protected generations
+through issue. Missing original proof remains blocked.
+
+Inside the existing authenticated stopped predecessor review, the next Main
+policy can retain its selected original issuer while a clean reviewed workflow
+verifies preparation. Run the original issuer's complete native source validator
+and the complete current code-delta review. Recheck selected identity and scope.
+This grants no ordinary runtime fallback or new receipt; candidate P5's isolated
+child repeats its independent Main code proof. After the native code selection,
+the identical-policy publisher must bind the future bundle to the final selected
+code before selected preparation/P5 and actual activation.

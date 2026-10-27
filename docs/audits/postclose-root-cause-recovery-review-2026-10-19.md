@@ -4593,3 +4593,49 @@ historical readers remain retained for their issued consumers. Native remaining
 sequence requires new parity, identical-policy code refresh, source summary/strict
 reseal if invalidated, active-parent issue, candidate/selected P5 and exact next
 PID observation. This source gate does not select or start Main.
+
+
+### Closed parent and future Main issuer separation -- 2026-10-28
+
+Actual2d active-parent receipt also froze the mutable future candidate28 alias,
+hashb9ba3bd7162d0bd944dfa19410e980200468a52346470e2709edb4db204708e7.
+The active bundle was27, computed26; that alias was incidental role discovery,
+not its policy input. The existing A issuer now resolves a normally closed
+ordered parent from its exact native27 receipt, with full current original
+source/code/pointer validation, normal native closure, calendar and absent
+Main/supervisor/hold/restart guards. The original reader and closure are
+rechecked before publication. Closure is recorded as admission provenance, not
+an immutable dependency on future report refreshes. Missing/invalid original
+receipt does not fall back to an unverified future cache.
+
+The future Main policy still belongs to selected original10f before code
+selection. The existing A source validator now permits that read only inside
+the authenticated stopped predecessor review: validate the whole future bundle
+in its original selected issuer, validate the complete38-member reviewed
+workflow code delta, and recheck selection and review scope. Ordinary runtime
+gets no fallback. No policy or extra receipt is published by this reader.
+Independent C Main-code proof remains required in the real isolated P5 child.
+
+Original895 source failed9 and passed6 focused guards. Repaired closed-parent,
+future-reader and real-coordinator regressions pass22 after correcting the
+native digest helper name during self-review. Full producer/parent, independent
+context and five preserved/current generation suites are running before commit.
+All failed outputs and code drafts remain preserved. The active issuer change
+is in Main's38-member code inventory, so the next candidate needs fresh
+network-denied fixed-workload native parity. Delay/stop/holding code inventories
+remain unchanged. Future code refresh must follow native code selection: its
+preselection receipt still names original10f, and native preparation correctly
+rejects a prematurely relabelled release. Reuse calculations; only code-bound
+future generation and invalidated summary/strict/controller/preparation seals
+are regenerated. The original future generation and original parent receipts
+remain preserved; Main remains OFF until normal startup.
+
+Final closed-parent review gate:504 issuer/parent/preparation PASS,925 independent
+context PASS,75 current and preserved whole-generation cases PASS, plus focused
+22 PASS. Compilation, diff whitespace, link/authority and print-only document
+checks pass. Against8957ad088, non-test source+160/-7, tests+223/-14, documents
+recorded separately. Existing A issue/validation roles are extended with native
+original readers and complete code review; normal runtime retains its strict
+path. Profile additions preserve all earlier issuers and complete dependencies.
+No module, publisher or executable entrypoint is added. Native candidate parity,
+preparation/P5, selection and final selected-generation acceptance remain OPEN.

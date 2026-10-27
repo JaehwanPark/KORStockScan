@@ -3064,6 +3064,16 @@ for _name, _sha in REVIEWED_HANDOFF_COORDINATION_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# Native closed-parent custody and original future-issuer preparation reading.
+REVIEWED_CLOSED_PARENT_SOURCES = {'src/engine/scalping/reversal_code_handoff.py': '2be83fd30237b4e83506462a4a5cc78dc8f4ad4ae85e23e8909864a41d9a7825'}
+REVIEWED_CLOSED_PARENT_ORIGINS = {'src/engine/scalping/reversal_code_handoff.py': 'd79a22aecbd2e425fe00b40bdf19d8391ae63425d1cceff97657f3ae3581475f'}
+for _name, _sha in REVIEWED_CLOSED_PARENT_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_CLOSED_PARENT_ORIGINS[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

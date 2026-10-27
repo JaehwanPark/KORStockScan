@@ -124,6 +124,51 @@ def validate(bundle, data_root, *, original_error):
         ):
             raise ValueError("active_policy_code_reader_root_changed")
         root, commit = review["code_root"], review["code_commit"]
+        observation = review.get("postclose_observation") or {}
+        family = bundle.get("continuous_reversal") or {}
+        if (
+            family.get("schema") == "continuous_reversal_policy_v6"
+            and family.get("release_commit") == selected_commit
+            and bundle.get("target_date") == observation.get("prepared_target_date")
+            and bundle.get("source_date")
+            == bundle.get("publication_date")
+            == observation.get("source_date")
+            and observation.get("runtime_effect") is False
+            and observation.get("actual_pid_consumed") is False
+            and observation.get("allowed_runtime_apply") is False
+        ):
+            # The stopped review authenticates the selected issuer separately
+            # from this preparation reader. Validate the original future
+            # policy in that issuer, then its complete reviewed code delta.
+            from src.engine.scalping import continuous_reversal_policy_v6 as V
+
+            modules = V.contract_modules()
+            paths = {
+                Path(m.__file__).name: str(Path(m.__file__).resolve().relative_to(root))
+                for m in modules
+            }
+            if len(paths) != len(modules) or set(paths) != set(
+                family["contract_file_sha256"]
+            ):
+                raise ValueError("prepared_main_code_membership_changed")
+            N._validate_bundle_sources(
+                bundle, data_root, historical_code_root=selected_root
+            )
+            handoff._verify_entry_code_delta(
+                root,
+                commit,
+                selected_commit,
+                paths,
+                N.digest(family["contract_file_sha256"]),
+            )
+            if selected_release(Path(data_root).resolve().parent) != (
+                selected_root,
+                selected_commit,
+            ) or not handoff.predecessor_review_matches(
+                review, day, selected_root, selected_commit, root
+            ):
+                raise ValueError("prepared_main_reader_generation_changed")
+            return bundle
     # The authenticated review uses its own dated receipt. Requiring a second
     # receipt for the unchanged selected code would prevent a midnight review.
     receipt_day = day
@@ -137,18 +182,27 @@ def validate(bundle, data_root, *, original_error):
             raise original_error from None
         current_parent = N._read(N.root(Path(data_root)) / "current.json")
         parent_effective = current_parent.get("effective_date")
-        cold = selection.get("approval_scope") == "after_postclose_deploy_for_next_regular_start"
+        cold = (
+            selection.get("approval_scope")
+            == "after_postclose_deploy_for_next_regular_start"
+        )
         source = selection.get("source_date") if cold else bundle.get("source_date")
         if (
             issued.tzinfo is not None
             and selection.get("approved_by") == "user"
             and selection.get("approval_scope")
-            in {"after_postclose_deploy_for_next_regular_start", "ordered_intraday_deploy_and_restart"}
-            and (not cold or (
-                selection.get("actual_pid_consumed") is False
-                and selection.get("main_start_authorized") is False
-                and selection.get("next_operating_date") == day
-            ))
+            in {
+                "after_postclose_deploy_for_next_regular_start",
+                "ordered_intraday_deploy_and_restart",
+            }
+            and (
+                not cold
+                or (
+                    selection.get("actual_pid_consumed") is False
+                    and selection.get("main_start_authorized") is False
+                    and selection.get("next_operating_date") == day
+                )
+            )
             and current_parent.get("bundle_sha256") == bundle["bundle_sha256"]
             and isinstance(source, str)
             and source < day
@@ -882,6 +936,63 @@ def issue(
         bundle["bundle_sha256"],
         P.file_hash(pointer),
     )
+    closed_parent = None
+    if (
+        checked is None
+        and recover_stopped_origin is False
+        and postclose_source_date is None
+        and selection.get("approval_scope") == "ordered_intraday_deploy_and_restart"
+        and selection.get("actual_pid_consumed") is True
+        and ptr.get("effective_date", day) < day
+    ):
+        from src.engine.automation import intraday_release_handoff as H
+        from src.engine.automation import ordered_intraday_deploy as D
+        from src.engine.automation.next_preopen_readiness import target_after_postclose
+
+        closed_parent = H.closed_consumption_observation()
+        if (
+            selection.get("approved_by") != "user"
+            or selection.get("main_start_authorized") is not False
+            or closed_parent.get("schema")
+            != "intraday_closed_consumption_observation_v1"
+            or closed_parent.get("basis") is not None
+            or any(
+                closed_parent.get(key) is not False
+                for key in (
+                    "runtime_effect",
+                    "current_observation_verified",
+                    "new_pid_consumption_claimed",
+                )
+            )
+            or closed_parent.get("target_date") != ptr["effective_date"]
+            or closed_parent.get("release_commit") != previous
+            or closed_parent.get("selection_sha256") != selection_sha
+            or target_after_postclose(ptr["effective_date"]) != day
+            or D._main_pids()
+            or not D._session_absent()
+            or any(
+                p.exists() or p.is_symlink()
+                for p in (
+                    workspace / "restart.flag",
+                    workspace / "data/runtime/operator_startup_hold.json",
+                )
+            )
+        ):
+            raise ValueError("active_policy_closed_parent_scope_invalid")
+        checked = _validated_origin_receipt(
+            data_root,
+            ptr["effective_date"],
+            origin_root,
+            previous,
+            bundle["bundle_sha256"],
+            P.file_hash(pointer),
+        )
+        if checked is None:
+            raise ValueError("active_policy_closed_parent_receipt_missing")
+        checked = {
+            **checked,
+            "verification_basis": "verified_ordered_closed_native_parent",
+        }
     if recover_stopped_origin is True:
         checked = _stopped_origin_receipt(
             data_root,
@@ -924,6 +1035,7 @@ def issue(
         checked["bundle_sha256"] != bundle["bundle_sha256"]
         or pointer.read_bytes() != before
         or selection_path.read_bytes() != selection_before
+        or closed_parent is not None and H.closed_consumption_observation() != closed_parent
     ):
         raise ValueError("active_policy_code_handoff_parent_changed")
     sources = dict(checked["source_hashes"])
@@ -987,6 +1099,7 @@ def issue(
             bundle_sha256=bundle["bundle_sha256"],
             origin_selection_sha256=selection_sha,
             origin_transition_observation=transition_observation,
+            origin_closed_observation=closed_parent,
             current_pointer_sha256=P.file_hash(pointer),
             source_hashes=sources,
             code_hashes=codes,
