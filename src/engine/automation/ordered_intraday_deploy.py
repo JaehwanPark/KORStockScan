@@ -1159,6 +1159,7 @@ class Deployment:
         confirm,
         *,
         adopt_failed_hold=False,
+        operator_hold_sha256=None,
         candidate_p5_path=None,
         candidate_p5_sha256=None,
     ):
@@ -1179,6 +1180,14 @@ class Deployment:
             raise ValueError("deployment_failed_hold_adoption_flag_invalid")
         self.adopt_failed_hold = adopt_failed_hold
         self.failed_hold_adoption = None
+        self.operator_hold_sha256 = operator_hold_sha256
+        self.operator_hold_adoption = None
+        if operator_hold_sha256 is not None and (
+            not isinstance(operator_hold_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", operator_hold_sha256) is None
+            or adopt_failed_hold
+        ):
+            raise ValueError("deployment_operator_hold_adoption_invalid")
         self._preflight_native_verified = False
         self.preserve_editable_checklist = True
         self.candidate_p5_path = candidate_p5_path
@@ -1274,7 +1283,7 @@ class Deployment:
         for name in ("operator_startup_hold.json",):
             p = self.workspace / "data/runtime" / name
             if p.exists() or p.is_symlink():
-                if not getattr(self, "adopt_failed_hold", False):
+                if not getattr(self, "adopt_failed_hold", False) and not getattr(self, "operator_hold_sha256", None):
                     raise ValueError("deployment_existing_operator_hold")
             elif getattr(self, "adopt_failed_hold", False):
                 raise ValueError("deployment_failed_hold_required")
@@ -1294,9 +1303,14 @@ class Deployment:
             != ([] if self.closed_predecessor else [self.identity["pid"]])
         ):
             raise ValueError("deployment_predecessor_not_current_singleton")
-        self.collector_shutdown_pin = pin_collector_shutdown(
-            self.workspace, self.identity
-        )
+        operator_closed = bool(self.closed_predecessor and self.closed_predecessor["closed_observation"].get("basis") == "native_preopen_closed")
+        if operator_closed:
+            hold, _, _ = _owned_metadata(self.hold)
+            baseline, _, _ = _owned_metadata(Path(hold["evidence"]) / "baseline.json")
+            self.collector_shutdown_pin = baseline["collector_shutdown_pin"]
+            verify_collector_shutdown(self.collector_shutdown_pin)
+        else:
+            self.collector_shutdown_pin = pin_collector_shutdown(self.workspace, self.identity)
         self.launcher = self.launcher_stat = None
         if self.closed_predecessor:
             if not _session_absent():
@@ -1491,6 +1505,16 @@ class Deployment:
             # mandatory. No shared hold bytes change during this inspection.
             self.capture_failed_hold_adoption()
             self.assert_unchanged()
+        if getattr(self, "operator_hold_sha256", None):
+            if not operator_closed:
+                raise ValueError("deployment_operator_stop_native_proof_required")
+            hold, raw, signature = _owned_metadata(self.hold)
+            if _digest(raw) != self.operator_hold_sha256:
+                raise ValueError("deployment_operator_hold_changed")
+            self.operator_hold_adoption = dict(raw=raw, signature=signature)
+            _atomic(self.directory / "operator-startup-hold-before.json", raw)
+            self.state["operator_hold_adoption"] = dict(original_sha256=_digest(raw), transfer_status="verified_not_transferred")
+            self.checkpoint("preflight")
 
     def capture_failed_hold_adoption(self):
         if (
@@ -1639,7 +1663,10 @@ class Deployment:
             check.get("schema") != "intraday_pid_consumption_verification_v1"
             or check.get("status") != "pass"
             or check.get("basis") != "native_preopen"
-            or check.get("actual_pid_consumed") is not True
+            or (check.get("actual_pid_consumed") is not True and not (
+                check.get("historical_consumption_verified") is True
+                and (check.get("closed_observation") or {}).get("basis") == "native_preopen_closed"
+                and check == self.closed_predecessor))
             or check.get("target_date") != self.day
             or check.get("selected_release_commit") != self.previous_commit
             or check.get("release_root") != str(self.previous)
@@ -1666,8 +1693,19 @@ class Deployment:
         ]
         self.frozen = {str(p): H._sha(p) for p in paths}
         self.assert_unchanged()
-        if H._identity(self.identity["pid"]) != self.identity:
+        if not getattr(self, "closed_predecessor", None) and H._identity(self.identity["pid"]) != self.identity:
             raise ValueError("deployment_native_predecessor_changed")
+        snapshots = {}
+        if getattr(self, "closed_predecessor", None):
+            for original, sha in check["closed_observation"]["source_hashes"].items():
+                raw = Path(original).read_bytes()
+                if _digest(raw) != sha:
+                    raise ValueError("deployment_closed_native_source_changed")
+                path = self.directory / "native-source-originals" / (sha + ".bytes")
+                path.parent.mkdir(exist_ok=True)
+                if not path.exists():
+                    _atomic(path, raw)
+                snapshots[original] = dict(path=str(path), sha256=sha)
         # PREOPEN can generate today's checklist after this release's Git
         # commit. Preserve its strict-bound bytes before document publication.
         checklist_snapshot = H.preserve_checklist(self.day)
@@ -1681,6 +1719,7 @@ class Deployment:
                     candidate_commit=self.commit,
                     verification=check,
                     frozen_files=self.frozen,
+                    closed_source_snapshots=snapshots,
                     original_checklist_snapshot=checklist_snapshot,
                     prepared_receipt_path=str(receipt),
                     prepared_receipt_sha256=ref["receipt_sha256"],
@@ -1690,6 +1729,7 @@ class Deployment:
         )
         self.native_sha = H._sha(self.native_path)
         self.frozen[str(self.native_path)] = self.native_sha
+        self.frozen.update((item["path"], item["sha256"]) for item in snapshots.values())
 
     def assert_unchanged(self):
         self._assert_failed_transition_unchanged()
@@ -1725,7 +1765,14 @@ class Deployment:
                 old_pid_identity=self.identity,
             )
         )
-        adoption = getattr(self, "failed_hold_adoption", None)
+        operator_adoption = getattr(self, "operator_hold_adoption", None)
+        adoption = operator_adoption or getattr(self, "failed_hold_adoption", None)
+        adoption_key = "operator_hold_adoption" if operator_adoption else "failed_hold_adoption"
+        if getattr(self, "operator_hold_sha256", None) and (
+            operator_adoption is None or not self._preflight_native_verified
+            or _digest(operator_adoption["raw"]) != self.operator_hold_sha256
+        ):
+            raise ValueError("deployment_operator_hold_adoption_unverified")
         if getattr(self, "adopt_failed_hold", False) and (
             adoption is None
             or getattr(self, "_preflight_native_verified", False) is not True
@@ -1763,9 +1810,9 @@ class Deployment:
                         )
                     except (OSError, ValueError, TypeError, KeyError):
                         pass
-                    self.state["failed_hold_adoption"]["transfer_status"] = transfer
+                    self.state[adoption_key]["transfer_status"] = transfer
                     raise
-            self.state["failed_hold_adoption"][
+            self.state[adoption_key][
                 "transfer_status"
             ] = "transferred_exact_owned_hold"
         self.checkpoint("startup_held")

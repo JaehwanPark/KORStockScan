@@ -3923,3 +3923,36 @@ def test_deployment_uses_same_report_census_without_promoting_source_gaps(tmp_pa
         assert d.state["report_consumer_observations"][phase] == current
         assert current[0]["role"] == "report_only"
     assert calls == [(d.candidate, "2026-10-26", tmp_path / "data")]
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_operator_incident_hold_transfers_only_exact_preflight_bytes(driver, monkeypatch, changed):
+    d = driver
+    d.operator_hold_sha256 = "a" * 64
+    d._preflight_native_verified = True
+    raw = D._json_bytes(dict(schema="operator_incident_startup_hold_v1", active=True))
+    d.hold.write_bytes(raw)
+    _, original, signature = D._owned_metadata(d.hold)
+    d.operator_hold_sha256 = D._digest(original)
+    (d.workspace / "data/runtime/runtime_release_selection.lock").touch()
+    d.operator_hold_adoption = dict(raw=original, signature=signature)
+    d.state["operator_hold_adoption"] = dict(transfer_status="verified_not_transferred")
+    monkeypatch.setattr(d, "assert_unchanged", lambda: None)
+    if changed:
+        d.hold.write_bytes(raw + b" ")
+        with pytest.raises(ValueError):
+            d.acquire_hold()
+        assert d.hold.read_bytes() == raw + b" "
+    else:
+        d.acquire_hold()
+        assert json.loads(d.hold.read_bytes())["schema"] == "ordered_deployment_startup_hold_v1"
+        assert d.state["operator_hold_adoption"]["transfer_status"] == "transferred_exact_owned_hold"
+
+
+def test_operator_incident_hold_cannot_transfer_before_native_preflight(driver):
+    d = driver
+    d.operator_hold_sha256 = "a" * 64
+    d.operator_hold_adoption = None
+    d.assert_unchanged = lambda: None
+    with pytest.raises(ValueError, match="operator_hold_adoption_unverified"):
+        d.acquire_hold()

@@ -197,6 +197,13 @@ _SELL_CANCEL_ACK_RUNTIME_KEYS = (
     "sell_cancel_ack_context_sha256",
 )
 _SELL_TERMINAL_OUTCOME_SCHEMA = "sell_submit_terminal_outcome_v1"
+# Exact successful outputs of the cancel owner's all-venue inventory reader.
+# The registry variant additionally reconciles the Main position allocation;
+# neither unknown inventory nor zero account balance is terminal fill proof.
+_SELL_CANCEL_RECONCILED_INVENTORY_SOURCES = frozenset({
+    "kt00018_position_found",
+    "owner_registry_plus_all_venue_inventory",
+})
 _SELL_TERMINAL_OUTCOME_RUNTIME_KEYS = (
     "sell_submit_terminal_outcome_schema",
     "sell_submit_terminal_outcome_kind",
@@ -2450,7 +2457,23 @@ def _restore_pending_sell_submit_custody_retry_snapshot(
         != str(target_stock.get("code") or "").strip()[:6]
     ):
         return False
+    # A receipt retry may precede a later cancel or a replacement generation.
+    # Keep later same-generation terminal custody; never rewind another order.
+    generation = str(target_stock.get("sell_submit_generation") or "")
+    if generation and (
+        generation != str(normalized.get("sell_submit_generation") or "")
+        or target_stock.get("sell_submit_context_sha256")
+        != normalized.get("sell_submit_context_sha256")
+    ):
+        return False
+    later = {
+        name: target_stock[name]
+        for name in (*_SELL_CANCEL_INTENT_RUNTIME_KEYS, *_SELL_CANCEL_ACK_RUNTIME_KEYS,
+                     *_SELL_TERMINAL_OUTCOME_RUNTIME_KEYS)
+        if generation and target_stock.get(name) is not None
+    }
     target_stock.update(normalized)
+    target_stock.update(later)
     return True
 
 
@@ -4687,7 +4710,7 @@ def _validated_sell_terminal_outcome(
             or re.fullmatch(r"[0-9]{7}", evidence_order_no) is None
             or broker_remaining_qty < 0
             or broker_remaining_qty > _safe_int(context.get("owner_position_qty"), 0)
-            or reconciliation_source != "kt00018_position_found"
+            or reconciliation_source not in _SELL_CANCEL_RECONCILED_INVENTORY_SOURCES
             or re.fullmatch(r"[0-9a-f]{64}", receipt_state_sha256) is None
         ):
             return None, "sell_terminal_outcome_cancel_contract_invalid"
@@ -5533,7 +5556,8 @@ def persist_pending_sell_cancel_terminal_outcome(
     if (
         _safe_int(target_stock.get("sell_reconciled_remaining_qty"), -1)
         != _safe_int(broker_remaining_qty, -2)
-        or str(reconciliation_source or "").strip() != "kt00018_position_found"
+        or str(reconciliation_source or "").strip()
+        not in _SELL_CANCEL_RECONCILED_INVENTORY_SOURCES
         or not (ack_exact or intent_exact)
     ):
         return False
@@ -5899,7 +5923,7 @@ def pending_sell_cancel_terminal_outcome_exact(
         )
         != _safe_int(target_stock.get("sell_reconciled_remaining_qty"), -2)
         or target_stock.get("sell_submit_terminal_outcome_reconciliation_source")
-        != "kt00018_position_found"
+        not in _SELL_CANCEL_RECONCILED_INVENTORY_SOURCES
         or str(
             target_stock.get("sell_submit_terminal_outcome_receipt_state_sha256") or ""
         ).strip()

@@ -3044,3 +3044,78 @@ def test_sell_cancel_error_with_partial_inventory_evidence_stays_sell_ordered(
     assert stock["sell_cancel_reconciliation_retry_at"] == 1_030.0
     assert stock["sell_odno"] == "0000001"
     assert db.updates == []
+
+
+@pytest.mark.parametrize("inventory_source", ["kt00018_position_found", "owner_registry_plus_all_venue_inventory"])
+def test_sell_cancel_consumes_exact_inventory_producer_source(monkeypatch, inventory_source):
+    from src.engine import sniper_execution_receipts as receipts
+    from types import SimpleNamespace
+
+    stock = dict(id=49558, code="218410", name="RFHIC", status="SELL_ORDERED", buy_qty=5, buy_price=50600)
+    _persist_exact_sell_cancel_generation(stock, code="218410", order_no="0002206")
+    monkeypatch.setattr(handlers.kiwoom_orders, "send_cancel_order", lambda **kw: {"return_code": "2000", "return_msg": "cancel quantity unavailable"})
+    monkeypatch.setattr(handlers, "_sell_order_terminal_absence_confirmed", lambda *a: (True, "ka10075_terminal_absence_confirmed"))
+    monkeypatch.setattr(handlers.kiwoom_orders, "get_my_inventory", lambda *a: ([dict(code="218410", qty=4)], {"KRX", "NXT"}))
+    class Registry:
+        def symbol_registered(self, code):
+            return inventory_source == "owner_registry_plus_all_venue_inventory"
+        def reconcile_symbol_quantity(self, **kw):
+            assert kw == dict(symbol="218410", broker_quantity=4)
+            return {"position_quantities": {"position:49558": 4}}
+    monkeypatch.setattr(handlers, "default_order_owner_registry", Registry)
+    monkeypatch.setattr(handlers, "main_owner_context", lambda *a, **kw: SimpleNamespace(position_id="position:49558"))
+    monkeypatch.setattr(handlers, "_terminalize_registered_main_orders", lambda **kw: (True, "owner_registry_orders_terminal"))
+    monkeypatch.setattr(handlers, "_log_holding_pipeline", lambda *a, **kw: None)
+    stock["_sell_execution_receipt_state"] = dict(position_qty=5, order_no="0002206", expected_qty=5, cumulative_qty=1, cumulative_amount=51000, aggregate_cumulative_qty=1, aggregate_cumulative_amount=51000, remaining_qty=4, economics_complete=True, quantity_contract_complete=True, unit_fill_consistent=True, cumulative_net_pnl_krw=283, executions_by_no={"7146": dict(cumulative_qty=1, cumulative_amount=51000)})
+    db = _CancelDB()
+    assert handlers._broker_position_qty_for_sell_reconciliation("218410", stock) == (4, inventory_source)
+    assert handlers.process_sell_cancellation(stock, "218410", "0002206", db)
+    assert stock["status"] == "HOLDING"
+    assert stock["_sell_execution_receipt_state"]["remaining_qty"] == 4
+    assert stock["_sell_execution_receipt_state"]["carried_qty"] == 1
+    assert not receipts._sell_pending_submit_path(49558).exists()
+
+
+@pytest.mark.parametrize("boundary", ["cancel_intent", "terminal_outcome"])
+def test_sell_cancel_failed_durable_boundary_keeps_native_retry_interval(monkeypatch, boundary):
+    stock = dict(id=1, code="123456", name="retry", status="SELL_ORDERED", buy_qty=7, sell_order_time=handlers.time.time()-100)
+    _persist_exact_sell_cancel_generation(stock)
+    from src.engine import sniper_execution_receipts as receipts
+    monkeypatch.setattr(handlers.kiwoom_orders, "send_cancel_order", lambda **kw: _exact_cancel_ack_response())
+    monkeypatch.setattr(handlers.kiwoom_orders, "get_my_inventory", lambda *a: ([dict(code="123456", qty=7)], {"KRX", "NXT"}))
+    monkeypatch.setattr(handlers, "_sell_order_terminal_absence_confirmed", lambda *a: (True, "exact_absent"))
+    if boundary == "cancel_intent":
+        monkeypatch.setattr(handlers, "_persist_pending_sell_cancel_intent", lambda *a, **kw: False)
+    else:
+        monkeypatch.setattr(receipts, "persist_pending_sell_cancel_terminal_outcome", lambda *a, **kw: False)
+    assert handlers.process_sell_cancellation(stock, "123456", "0000001", _CancelDB()) is False
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["sell_cancel_reconciliation_retry_at"] > handlers.time.time()
+    monkeypatch.setattr(handlers, "process_sell_cancellation", lambda *a: pytest.fail("retry interval bypassed"))
+    handlers.handle_sell_ordered_state(stock, "123456")
+
+
+@pytest.mark.parametrize("receipt_state", ["revived", "new_generation", "partial"])
+def test_fast_exit_receipt_after_response_check_cannot_be_overwritten(monkeypatch, receipt_state):
+    stock = dict(id=49559, code="053800", name="Ahnlab", status="HOLDING", strategy="SCALPING", buy_qty=1, buy_price=96200)
+    monkeypatch.setattr(handlers, "DB", _CancelDB())
+    monkeypatch.setattr(handlers, "_confirm_cancel_or_reload_remaining", lambda *a, **kw: 1)
+    monkeypatch.setattr(handlers, "_sell_side_open_time_block_fields", lambda **kw: {})
+    monkeypatch.setattr(handlers, "_send_exit_best_ioc", lambda *a, **kw: {"return_code": "0", "ord_no": "0002626"})
+    after_receipt = {}
+    def late_receipt(target, code, stage, **kw):
+        if stage != "sell_order_sent":
+            return
+        if receipt_state == "revived":
+            target.clear()
+            target.update(id=49560, code="053800", name="Ahnlab", status="WATCHING", buy_qty=0)
+        elif receipt_state == "new_generation":
+            target["sell_submit_generation"] = "f" * 32
+        else:
+            target["sell_submit_pending"] = False
+            target["_sell_submit_receipt_proof"] = dict(schema="sell_submit_receipt_proof_v1", generation=target["sell_submit_generation"], submit_context_sha256=target["sell_submit_context_sha256"], target_id=target["id"], code=code, requested_qty=1, order_no="0002626", custody_emitted=True)
+        after_receipt.update(target)
+    monkeypatch.setattr(handlers, "_log_holding_pipeline", late_receipt)
+    handlers._dispatch_scalp_preset_exit(stock=stock, code="053800", now_ts=handlers.time.time(), curr_p=96200, buy_p=96200, profit_rate=-0.23, peak_profit=0.1, strategy="SCALPING", sell_reason_type="LOSS", reason="receipt race", exit_rule="scalp_preset_hard_stop_pct")
+    assert after_receipt, "must exercise real response-to-publication boundary"
+    assert stock == after_receipt

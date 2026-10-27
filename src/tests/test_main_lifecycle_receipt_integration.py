@@ -3722,3 +3722,33 @@ def test_partial_exit_and_runner_preserve_capital_time_and_leg_slippage(
     assert row["broker_execution_exit_covered_qty"] == 0.0
     assert row["promotion_evidence_eligible"] is False
     assert report["promotion_evidence_eligible_count"] == 0
+
+
+@pytest.mark.parametrize("changed_generation", [False, True])
+def test_partial_receipt_snapshot_cannot_erase_later_cancel_or_generation(monkeypatch, changed_generation):
+    stock = _partial_sell_cancel_stock(monkeypatch)
+    assert execution_receipts.persist_pending_sell_cancel_intent_custody(stock, order_no="0000456", broker_route="SOR")
+    if changed_generation:
+        stock["sell_submit_generation"] = "f" * 32
+    before = dict(stock)
+    restored = execution_receipts._restore_pending_sell_submit_custody_retry_snapshot(stock)
+    assert restored is (not changed_generation)
+    assert stock["sell_submit_generation"] == before["sell_submit_generation"]
+    assert stock["sell_cancel_intent_order_no"] == "0000456"
+    assert stock["sell_cancel_intent_generation"] == before["sell_cancel_intent_generation"]
+
+
+def test_rotated_partial_restart_preserves_newer_durable_cancel_intent(monkeypatch):
+    stock = _partial_sell_cancel_stock(monkeypatch)
+    assert execution_receipts.persist_pending_sell_cancel_intent_custody(stock, order_no="0000456", broker_route="SOR")
+    state = stock[execution_receipts._SELL_EXECUTION_RECEIPT_STATE_KEY]
+    state.update(carried_qty=1, carried_amount=10000, cumulative_qty=0, order_no="", expected_qty=0)
+    # Reproduce the ledger written after terminal absence, before terminal custody.
+    assert execution_receipts._persist_sell_receipt_recovery_or_interlock(stock, code=stock["code"], reason="rotated_partial")
+    restarted = {"id": stock["id"], "code": stock["code"], "buy_qty": 2}
+    record = SimpleNamespace(id=stock["id"], buy_qty=2)
+    result, _ = sniper_sync._restore_sell_receipt_recovery(target_stock=restarted, record=record, code=stock["code"], broker_remaining_qty=1)
+    assert result is not None
+    assert restarted["status"] == "SELL_ORDERED"
+    assert restarted["sell_odno"] == "0000456"
+    assert execution_receipts.pending_sell_cancel_intent_exact(restarted, code=stock["code"], order_no="0000456")

@@ -5423,7 +5423,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_ISSUER_BYTES_PROFILE,
+        "current": handoff.REVIEWED_SELL_CANCEL_PROFILE,
         "inventory_origin_source": handoff.REVIEWED_INVENTORY_ORIGIN_PROFILE,
         "quantity_source": handoff.REVIEWED_QUANTITY_SOURCE_PROFILE,
         "stopped_preparation": handoff.REVIEWED_STOPPED_PREPARATION_PROFILE,
@@ -6931,3 +6931,51 @@ def test_ordered_closed_postclose_scope_keeps_distinct_source_roles(
         run()
         assert selector.read_bytes() == raw
     assert handoff._PREDECESSOR_REVIEW.get() is None
+
+
+@pytest.mark.parametrize("fault", [None, "pid", "manifest", "no_live_verification", "hold_changed", "collector_actor", "live_actor"])
+def test_closed_native_preopen_requires_original_pid_proof_and_operator_stop(tmp_path, monkeypatch, fault):
+    from src.engine.automation import ordered_intraday_deploy as D
+    day = "2026-10-28"
+    data = tmp_path / "data"
+    root = tmp_path / "release"
+    commit = "a" * 40
+    identity = dict(pid=2147483601, start_ticks="12345", cwd=str(root / "src"))
+    selected = dict(actual_pid_consumed=True, release_root=str(root), git_commit=commit,
+                    actual_pid_receipt=dict(schema="runtime_release_pid_receipt_v1", pid=identity["pid"], start_ticks=identity["start_ticks"], process_cwd=identity["cwd"], release_root=str(root), git_commit=commit, recorded_at_kst=day+"T07:55:30+09:00"))
+    def put(path, body):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(body))
+        return path
+    monkeypatch.setattr(handoff, "DATA_DIR", data)
+    monkeypatch.setattr(handoff.bootstrap, "BOOTSTRAP_DIR", data / "runtime/policy_bootstrap")
+    monkeypatch.setattr(handoff, "_preopen", lambda _: dict(selected_release_commit=commit))
+    monkeypatch.setattr(D, "_main_pids", lambda: [identity["pid"]] if fault == "live_actor" else [])
+    monkeypatch.setattr(D, "_session_absent", lambda: True)
+    selector = put(data / "runtime/runtime_release_selection.json", selected)
+    put(handoff._preopen_path(day), dict(selected_release_commit=commit))
+    put(handoff.bootstrap.manifest_path(day), dict(target_date=day, manifest_sha256="m"*64, selected_release_sha=commit))
+    handoff.bootstrap.env_path(day).write_text("EXACT=1\n")
+    verification = dict(status="pass", passed=True, target_date=day, pid=identity["pid"], pid_passed=True, pid_env_available=True, findings=[], pid_mismatches=[], pid_missing=[], manifest_sha256="m"*64, verified_at=day+"T07:55:25+09:00")
+    if fault == "pid": verification["pid"] += 1
+    if fault == "manifest": verification["manifest_sha256"] = "x"*64
+    if fault == "no_live_verification": verification["pid_passed"] = False
+    put(handoff.bootstrap.verify_path(day), verification)
+    evidence = tmp_path / "tmp/operator-stop"
+    hold = dict(schema="operator_incident_startup_hold_v1", active=True, authority="explicit_user_stop_repair_restart", source_release_commit=commit, source_pid=identity["pid"], source_start_ticks=identity["start_ticks"], created_at_kst=day+"T08:19:20+09:00", evidence=str(evidence))
+    put(data / "runtime/operator_startup_hold.json", hold)
+    put(evidence / "hold-original.json", {**hold, **({"active":False} if fault == "hold_changed" else {})})
+    pin = dict(pid=identity["pid"], start_ticks="wrong" if fault == "collector_actor" else identity["start_ticks"], path=str(data / "runtime/scalp_micro_reversion_forward_collector/latest.json"))
+    put(evidence / "baseline.json", dict(actor=identity, selection=selected, selector_sha256=handoff._sha(selector), collector_shutdown_pin=pin))
+    closed = put(data / "runtime/closed.json", dict(pid=identity["pid"]))
+    monkeypatch.setattr(D, "verify_collector_shutdown", lambda _: dict(status="verified", receipts=[dict(path=str(closed), sha256=handoff._sha(closed))]))
+    now = datetime.fromisoformat(day+"T08:30:00+09:00")
+    if fault:
+        with pytest.raises(ValueError):
+            handoff._closed_native_preopen_observation(day, now, root, commit, selected)
+    else:
+        proof = handoff._closed_native_preopen_observation(day, now, root, commit, selected)
+        assert proof["historical_consumption_verified"] is True
+        assert proof["new_pid_consumption_claimed"] is False
+        assert proof["pid_identity"] == identity
+        assert proof["source_hashes"][str(closed)] == handoff._sha(closed)

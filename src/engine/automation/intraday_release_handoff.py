@@ -229,6 +229,28 @@ def _native_predecessor(day, commit, previous, previous_commit, identity, path, 
             receipt,
         ]
     }
+    historical_native = False
+    if proof.get("actual_pid_consumed") is False:
+        closed = proof.get("closed_observation") or {}
+        snapshots = value.get("closed_source_snapshots") or {}
+        historical_native = bool(
+            proof.get("historical_consumption_verified") is True
+            and closed.get("basis") == "native_preopen_closed"
+            and closed.get("pid_identity") == identity
+            and closed.get("release_commit") == previous_commit
+            and closed.get("manifest_sha256") == manifest.get("manifest_sha256")
+            and snapshots and set(snapshots) == set(closed.get("source_hashes", {}))
+        )
+        for original, snapshot in snapshots.items():
+            archive = expected.parent / "native-source-originals" / (snapshot.get("sha256", "") + ".bytes")
+            if (snapshot.get("path") != str(archive)
+                or archive.resolve() != archive or archive.is_symlink()
+                or snapshot.get("sha256") != closed.get("source_hashes", {}).get(original)
+                or _sha(archive) != snapshot.get("sha256")):
+                historical_native = False
+        selection_source = snapshots.get(str(DATA_DIR / "runtime/runtime_release_selection.json")) or {}
+        if selection_source.get("sha256") != _sha(before):
+            historical_native = False
     if (
         value.get("schema") != "native_preopen_predecessor_v1"
         or value.get("authority") != "APPROVED_ORDERED_INTRADAY_DEPLOY_AND_RESTART"
@@ -236,7 +258,7 @@ def _native_predecessor(day, commit, previous, previous_commit, identity, path, 
         or proof.get("schema") != "intraday_pid_consumption_verification_v1"
         or proof.get("status") != "pass"
         or proof.get("basis") != "native_preopen"
-        or proof.get("actual_pid_consumed") is not True
+        or (proof.get("actual_pid_consumed") is not True and not historical_native)
         or proof.get("target_date") != day
         or proof.get("pid_identity") != identity
         or not identity.get("start_ticks")
@@ -416,6 +438,8 @@ def closed_consumption_observation(day=None, *, now=None):
         raise ValueError("intraday_closed_consumption_scope_invalid")
     root, commit = _selection(require_selected_cwd=False)
     handoff_path, consumed_path = _paths(day, commit)
+    if not handoff_path.exists():
+        return _closed_native_preopen_observation(day, current, root, commit, selected)
     consumed, consumed_raw = router._startup_receipt(consumed_path)
     identity = consumed.get("pid_identity") or {}
     expected = dict(
@@ -642,6 +666,93 @@ def closed_consumption_observation(day=None, *, now=None):
         current_observation_verified=False,
         new_pid_consumption_claimed=False,
     )
+
+
+def _closed_native_preopen_observation(day, current, root, commit, selected):
+    """Read the original live bootstrap verification plus exact collector closure.
+
+    Initial PREOPEN launches have no intraday handoff. Process absence alone,
+    or a new no-PID bootstrap check, cannot replace their original live proof.
+    """
+    from src.engine.automation import ordered_intraday_deploy as D
+    receipt = selected.get("actual_pid_receipt") or {}
+    identity = dict(pid=receipt.get("pid"), start_ticks=receipt.get("start_ticks"),
+                    cwd=receipt.get("process_cwd"))
+    paths = [DATA_DIR / "runtime/runtime_release_selection.json",
+             bootstrap.verify_path(day), bootstrap.manifest_path(day),
+             bootstrap.env_path(day), _preopen_path(day)]
+    raw = {str(p): p.read_bytes() for p in paths}
+    verified = json.loads(raw[str(bootstrap.verify_path(day))])
+    manifest = json.loads(raw[str(bootstrap.manifest_path(day))])
+    started = datetime.fromisoformat(receipt["recorded_at_kst"])
+    verified_at = datetime.fromisoformat(verified["verified_at"])
+    hold_path = DATA_DIR / "runtime/operator_startup_hold.json"
+    hold, hold_raw, _ = D._owned_metadata(hold_path)
+    if hold.get("schema") == "ordered_deployment_startup_hold_v1":
+        transition = Path(hold.get("transition") or "")
+        expected = DATA_DIR / "runtime/release_transitions" / day / str(hold.get("candidate_commit")) / "status.json"
+        if transition != expected:
+            raise ValueError("intraday_operator_stop_hold_path_invalid")
+        hold, hold_raw, _ = D._owned_metadata(transition.with_name("operator-startup-hold-before.json"))
+    evidence = Path(hold.get("evidence") or "")
+    if (hold.get("schema") != "operator_incident_startup_hold_v1"
+        or hold.get("active") is not True or not hold.get("authority")
+        or hold.get("source_release_commit") != commit
+        or hold.get("source_pid") != identity["pid"]
+        or hold.get("source_start_ticks") != identity["start_ticks"]
+        or not evidence.is_absolute() or evidence.resolve() != evidence
+        or not evidence.is_relative_to(DATA_DIR.parent / "tmp")):
+        raise ValueError("intraday_operator_stop_hold_invalid")
+    baseline, baseline_raw, _ = D._owned_metadata(evidence / "baseline.json")
+    original_hold, original_raw, _ = D._owned_metadata(evidence / "hold-original.json")
+    if (original_raw != hold_raw or baseline.get("actor") != identity
+        or baseline.get("selector_sha256") != hashlib.sha256(raw[str(paths[0])]).hexdigest()
+        or baseline.get("selection") != selected):
+        raise ValueError("intraday_operator_stop_origin_changed")
+    if (receipt.get("schema") != "runtime_release_pid_receipt_v1"
+        or receipt.get("git_commit") != commit
+        or receipt.get("release_root") != str(root)
+        or identity["cwd"] != str(root / "src")
+        or type(identity["pid"]) is not int or identity["pid"] <= 0
+        or not isinstance(identity["start_ticks"], str) or not identity["start_ticks"].isdigit()
+        or Path("/proc", str(identity["pid"])).exists()
+        or D._main_pids() or not D._session_absent()
+        or verified.get("status") != "pass" or verified.get("passed") is not True
+        or verified.get("target_date") != day or verified.get("pid") != identity["pid"]
+        or verified.get("pid_passed") is not True or verified.get("pid_env_available") is not True
+        or verified.get("findings") != [] or verified.get("pid_mismatches") != []
+        or verified.get("pid_missing") != []
+        or verified.get("manifest_sha256") != manifest.get("manifest_sha256")
+        or manifest.get("selected_release_sha") != commit
+        or _preopen(day).get("selected_release_commit") != commit
+        or started.tzinfo is None or verified_at.tzinfo is None
+        or not verified_at <= started <= datetime.fromisoformat(hold["created_at_kst"]) <= current
+        or verified_at.astimezone(KST).date().isoformat() != day):
+        raise ValueError("intraday_closed_native_consumption_unproven")
+    pin = baseline.get("collector_shutdown_pin") or {}
+    if (pin.get("pid") != identity["pid"] or pin.get("start_ticks") != identity["start_ticks"]
+        or pin.get("path") != str(DATA_DIR / "runtime/scalp_micro_reversion_forward_collector/latest.json")
+        or pin.get("basis") is not None):
+        raise ValueError("intraday_closed_native_collector_unproven")
+    closure = D.verify_collector_shutdown(pin)
+    raw[str(evidence / "baseline.json")] = baseline_raw
+    raw[str(evidence / "hold-original.json")] = original_raw
+    for entry in closure["receipts"]:
+        p = Path(entry["path"])
+        data = p.read_bytes()
+        if hashlib.sha256(data).hexdigest() != entry["sha256"]:
+            raise ValueError("intraday_closed_native_collector_changed")
+        raw[str(p)] = data
+    if (any(Path(p).read_bytes() != data for p, data in raw.items())
+        or D._main_pids() or not D._session_absent()):
+        raise ValueError("intraday_closed_native_consumption_changed")
+    return dict(schema="intraday_closed_consumption_observation_v1",
+                basis="native_preopen_closed", target_date=day, release_commit=commit,
+                pid_identity=identity, manifest_sha256=manifest["manifest_sha256"],
+                source_hashes={p: hashlib.sha256(data).hexdigest() for p, data in raw.items()},
+                collector_shutdown=closure, historical_consumption_verified=True,
+                runtime_effect=False, current_observation_verified=False,
+                new_pid_consumption_claimed=False)
 
 
 @contextmanager
@@ -1133,7 +1244,10 @@ def verify_closed_predecessor_consumption(day):
         checked = _checked_bootstrap(day, None)
         root, commit = _selection(require_selected_cwd=False)
         return dict(
-            schema="intraday_closed_predecessor_verification_v1",
+            schema=("intraday_pid_consumption_verification_v1"
+                    if proof.get("basis") == "native_preopen_closed"
+                    else "intraday_closed_predecessor_verification_v1"),
+            basis=("native_preopen" if proof.get("basis") == "native_preopen_closed" else "closed_intraday"),
             status="pass",
             target_date=day,
             selected_release_commit=commit,
@@ -12628,6 +12742,29 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Exact SELL reconciliation and operator-stop recovery over the complete current profile.
+REVIEWED_SELL_CANCEL_HASHES = {'src/engine/sniper_state_handlers.py': '739fa0bfc847af66436d59ce1ff15be2959dd5f9f4c69152bbd55b33600ae0ab', 'src/engine/sniper_execution_receipts.py': 'afff19e46688153fb18aa5ef477687459b15d85d197b5a5bfde2e528e99f721d', 'src/engine/sniper_sync.py': 'a8788beb561139657e18c4342abfbf4273d7ca6317eea8985b57c34962bc3c69', 'src/engine/automation/ordered_intraday_deploy.py': '9cc092cb1f592b6399ee73a049e07e05cfe613525350fcfdfbb37546a6eabaac', 'src/engine/infrastructure/startup_validation_code_context.py': '78b1f10698e79ed94abb10a6dd9f4f87886766ba2a8bee23e65feedc7e9138ef'}
+REVIEWED_SELL_CANCEL_ORIGINS = {'src/engine/sniper_state_handlers.py': '8e070b77c3cd1a53454862bc18c7a7ddee09da158d862f4e93fdd56226287672', 'src/engine/sniper_execution_receipts.py': 'c16009021a52faa9486d76f4b820c42b8574ebf2775c77192e60f87e1e7dcf90', 'src/engine/sniper_sync.py': 'da6289ec42399a5b7eea141defe6e061d6f78bcf06db3fd5e9d04e137695f1a2', 'src/engine/automation/ordered_intraday_deploy.py': 'ddf0b36a3ed279c7ab89ad60e39f29d5d171c8137215e67c5b6eecc9d04baf2a', 'src/engine/infrastructure/startup_validation_code_context.py': '5ef16fce0b5ba3cea8c82d2bd58a6434effae4c1205115b8a3e08dc1c21d6d4f'}
+REVIEWED_SELL_CANCEL_PROFILE = {**REVIEWED_ISSUER_BYTES_PROFILE, **REVIEWED_SELL_CANCEL_HASHES}
+REVIEWED_SELL_CANCEL_VARIANTS = {
+    (key[0], REVIEWED_SELL_CANCEL_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/sniper_state_handlers.py",
+        "selector_sha256": REVIEWED_SELL_CANCEL_HASHES["src/engine/sniper_state_handlers.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_SELL_CANCEL_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_SELL_CANCEL_HASHES.get(os.path.normpath(name), sha) for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_ISSUER_BYTES_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current) for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_SELL_CANCEL_ORIGINS[name]})
+    for name, current in REVIEWED_SELL_CANCEL_HASHES.items()
+}}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -13485,6 +13622,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_ISSUER_BYTES_PROFILE
         prepared_variants = REVIEWED_ISSUER_BYTES_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/sniper_state_handlers.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_SELL_CANCEL_HASHES["src/engine/sniper_state_handlers.py"]
+    ):
+        prepared_hashes = REVIEWED_SELL_CANCEL_PROFILE
+        prepared_variants = REVIEWED_SELL_CANCEL_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

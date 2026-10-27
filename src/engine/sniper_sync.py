@@ -1851,6 +1851,21 @@ def _restore_sell_receipt_recovery(
         target_stock["status"] = "HOLDING"
         target_stock.pop("sell_odno", None)
         target_stock.pop("sell_ord_no", None)
+    # The receipt snapshot may predate a durable cancel intent or outcome.
+    # Restore that journal last, before declaring this remaining position free.
+    prior_reconciliation_source = target_stock.get("sell_cancel_reconciliation_source")
+    pending_restored, pending_reason = _restore_pending_sell_submit_custody(
+        target_stock=target_stock, record=record, code=code
+    )
+    if not custody_retry_succeeded or not outbox_recovery_succeeded:
+        target_stock.update(status="SELL_ORDERED", sell_cancel_reconciliation_required=True,
+                            sell_cancel_reconciliation_source=prior_reconciliation_source)
+    if not pending_restored and pending_reason != "pending_submit_journal_missing":
+        target_stock.update(
+            status="SELL_ORDERED", sell_cancel_reconciliation_required=True,
+            sell_cancel_reconciliation_source=f"partial_receipt_pending_custody_invalid:{pending_reason}",
+        )
+        reason = f"{reason}:{pending_reason}"
     record.scale_in_locked = True
     return state, reason
 
@@ -1905,8 +1920,14 @@ def _restore_pending_sell_submit_custody(*, target_stock, record, code: str):
             "sell_pending_submit_rehydrated": True,
         }
     )
+    proof = target_stock.get("_sell_submit_receipt_proof") or {}
+    if (proof.get("custody_emitted") is True
+        and proof.get("generation") == fields.get("sell_submit_generation")
+        and proof.get("submit_context_sha256") == fields.get("sell_submit_context_sha256")):
+        target_stock["sell_submit_pending"] = False
     durable_cancel_order_no = str(
-        target_stock.get("sell_cancel_ack_order_no") or ""
+        target_stock.get("sell_cancel_ack_order_no")
+        or target_stock.get("sell_cancel_intent_order_no") or ""
     ).strip()
     if re.fullmatch(r"[0-9]{7}", durable_cancel_order_no):
         target_stock["sell_odno"] = durable_cancel_order_no

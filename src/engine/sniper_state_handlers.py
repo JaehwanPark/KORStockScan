@@ -29344,7 +29344,9 @@ def _dispatch_scalp_preset_exit(
             )
         )
         return bool(
-            not stock.get("manual_control_hard_stop_handoff_inflight")
+            stock.get("id") == target_id
+            and str(stock.get("code") or "").strip()[:6] == str(code).strip()[:6]
+            and not stock.get("manual_control_hard_stop_handoff_inflight")
             and not stock.get("manual_control_exclusion_blocked")
             and str(stock.get("status") or "").strip().upper() == "HOLDING"
             and _safe_int(stock.get("buy_qty"), 0) == expected_qty
@@ -30251,15 +30253,28 @@ def _dispatch_scalp_preset_exit(
             **sell_time_block_fields,
         )
 
-    _mutate_stock_state(
-        stock,
-        set_fields=set_fields
-        | {
-            "status": "SELL_ORDERED",
-            "sell_target_price": curr_p,
-        },
-        pop_fields=(_SELL_SUBMIT_CONTEXT_KEYS if success_custody_cleared else ()),
-    )
+    with ENTRY_LOCK:
+        # Receipt processing can finish or revive the mutable target after the
+        # response check, including while publishing sell_order_sent. Recheck
+        # the exact pending generation at the write, under the receipt lock.
+        if (
+            rem_qty <= 0
+            or stock.get("id") != target_id
+            or stock.get("status") != "SELL_ORDERED"
+            or _sell_submit_response_race_state(
+                stock,
+                generation=sell_submit_generation,
+                context_sha256=sell_submit_context_sha256,
+                requested_qty=rem_qty,
+                response_order_no=response_ord_no,
+            ) != "current_pending"
+        ):
+            return
+        _mutate_stock_state(
+            stock,
+            set_fields=set_fields | {"status": "SELL_ORDERED", "sell_target_price": curr_p},
+            pop_fields=(_SELL_SUBMIT_CONTEXT_KEYS if success_custody_cleared else ()),
+        )
 
 
 def _trusted_scalp_trailing_bid(
@@ -99344,8 +99359,8 @@ def handle_sell_ordered_state(stock, code):
         if not _dispatch_still_owns_sell():
             return
         log_error(
-            f"⚠️ [{stock['name']}] 매도 대기 {timeout_sec}초 초과. 호가 꼬임/VI 의심 ➡️ "
-            "취소 후 HOLDING 롤백 절차 진입."
+            f"⚠️ [{stock['name']}] 매도 대기 {timeout_sec}초 초과. "
+            "원주문·체결·잔고 대사 후 취소 및 보유 상태 복귀 여부를 확인합니다."
         )
         orig_ord_no = stock.get("sell_odno") or stock.get("sell_ord_no")
 
@@ -100348,6 +100363,12 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
             current_status = str(stock.get("status") or "").strip().upper()
             if stock.get("id") != target_id or current_status not in allowed_statuses:
                 return False
+            if set_fields and set_fields.get("sell_cancel_reconciliation_required") is True:
+                set_fields = dict(set_fields)
+                set_fields.setdefault(
+                    "sell_cancel_reconciliation_retry_at",
+                    time.time() + max(1, _rule_int("SELL_ORDER_FAILURE_RETRY_BACKOFF_SEC", 30)),
+                )
             _mutate_stock_state(
                 stock,
                 set_fields=set_fields,
