@@ -345,6 +345,80 @@ def resolve_symbol_venue_eligibility(
     )
 
 
+def holding_quote_source(stock_code, observed_at, source_snapshot):
+    """Select market data independently of order route or manual custody.
+
+    Only a dated native listing contract can select a source. An unavailable
+    venue stays unavailable; quote selection never changes broker authority.
+    """
+    from src.trading.market import session_contract as sessions
+
+    context = sessions.resolve_market_session(observed_at)
+    evidence = resolve_symbol_venue_eligibility(
+        stock_code, context.trade_date, source_snapshot
+    )
+    result = dict(
+        item=None,
+        route=None,
+        reason="holding_quote_eligibility_unverified",
+        trade_date=context.trade_date.isoformat(),
+        session=context.session_regime,
+        source_sha256=evidence.payload_sha256,
+        nxt_eligible=evidence.nxt_eligible,
+    )
+    if (
+        evidence.quality_state not in {QUALITY_VALID, QUALITY_PARTIAL}
+        or evidence.blockers
+    ):
+        return result
+    if (
+        evidence.observed_at_kst.date() != context.trade_date
+        or evidence.observed_at_kst > context.observed_at_kst
+    ):
+        return {**result, "reason": "holding_quote_eligibility_clock_invalid"}
+    # The decision cohort/open_venues is not the market-data item. Main's
+    # native PRE source is NXT-only; REG/AF may observe both eligible venues.
+    if context.session_regime == sessions.MARKET_SESSION_REGIME_LEGACY_PREMARKET:
+        candidates = (
+            ((VENUE_NXT, evidence.nxt_eligible),)
+            if context.exit_allowed_by_clock
+            else ()
+        )
+    elif context.session_regime in {
+        sessions.MARKET_SESSION_REGIME_KRX_REGULAR,
+        sessions.MARKET_SESSION_REGIME_LEGACY_KRX_ONLY,
+    }:
+        candidates = (
+            (VENUE_KRX, evidence.krx_regular_eligible),
+            (VENUE_NXT, evidence.nxt_eligible),
+        )
+    elif context.session_regime in {
+        sessions.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET,
+        sessions.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_CLOSE_ONLY,
+        sessions.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET_TERMINAL_EXIT,
+    }:
+        candidates = (
+            (VENUE_KRX, evidence.krx_aftermarket_eligible),
+            (VENUE_NXT, evidence.nxt_eligible),
+        )
+    else:
+        candidates = ()
+    available = {venue for venue, eligible in candidates if eligible is True}
+    if not available:
+        return {**result, "reason": "holding_quote_no_eligible_open_venue"}
+    route, suffix = (
+        ("SOR", "_AL")
+        if len(available) == 2
+        else (("KRX", "") if VENUE_KRX in available else ("NXT", "_NX"))
+    )
+    return {
+        **result,
+        "item": evidence.stock_code + suffix,
+        "route": route,
+        "reason": "holding_quote_eligible_session_source",
+    }
+
+
 def _invalid_result(
     stock_code: str,
     trade_date: date | None,

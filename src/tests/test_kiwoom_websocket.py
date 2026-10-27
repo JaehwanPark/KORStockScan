@@ -5167,3 +5167,75 @@ def test_connection_projection_preserves_remove_response_after_registry_cleanup(
     assert snapshot["order_authority"] is False
     snapshot["responses"][-1]["broker_result"] = "changed-copy"
     assert manager._control_receipts.responses[-1]["broker_result"] == "success"
+
+
+@pytest.mark.parametrize(
+    "item,other",
+    [
+        ("036930", "036930_NX"),
+        ("036930_NX", "036930"),
+        ("036930_AL", "036930_NX"),
+    ],
+)
+def test_holding_repair_pins_exact_primary_without_borrowing_other_route(
+    monkeypatch, item, other
+):
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_effective_kiwoom_code",
+        lambda code: pytest.fail("eligible exact item rewritten"),
+    )
+    manager = KiwoomWSManager("test-token")
+    manager.websocket = _FakeWS([])
+    manager._session_ready.set()
+    manager._market_data_transport_epoch = 7
+    monkeypatch.setattr(manager, "_integrated_aftermarket_route_required", lambda: True)
+    monkeypatch.setattr(manager, "_maybe_write_dashboard_snapshot", lambda: None)
+    monkeypatch.setattr(
+        manager, "_observe_micro_reversion_forward", lambda *a, **k: None
+    )
+    asyncio.run(
+        manager._send_reg(
+            [item],
+            source="holding_ws_freshness_repair",
+            include_alternate_route=False,
+            realtime_types=("0B", "0D"),
+        )
+    )
+    assert manager._runtime_primary_items_by_code["036930"] == item
+    assert "036930" not in manager._implicit_runtime_route_codes
+    assert json.loads(manager.websocket.sent[-1])["data"][0]["item"] == [item]
+    assert manager.get_exact_item_data("036930", item)["curr"] == 0
+
+    def receive(source, price):
+        asyncio.run(
+            manager._handle_message(
+                json.dumps(
+                    {
+                        "trnm": "REAL",
+                        "data": [
+                            {
+                                "type": "0B",
+                                "item": source,
+                                "values": {"10": str(price), "15": "+1"},
+                            }
+                        ],
+                    }
+                )
+            )
+        )
+
+    receive(item, 176000)
+    before = manager.get_exact_item_data("036930", item)
+    receive(other, 180000)
+    after = manager.get_exact_item_data("036930", item)
+    assert after["curr"] == before["curr"] == 176000
+    assert after["last_realtime_type_ts"]["0B"] == before["last_realtime_type_ts"]["0B"]
+    assert after["last_realtime_type_item"]["0B"] == item
+    assert manager._micro_reversion_observation_route_data[other]["curr"] == 180000
+    manager._market_data_transport_epoch = 8
+    assert manager.get_exact_item_data("036930", item) == {}
+    asyncio.run(manager._send_reg([item], source="runtime_subscription_reconnect"))
+    assert json.loads(manager.websocket.sent[-1])["data"][0]["item"] == [item]
+    assert manager._registered_item_epochs[item] == 8
+    assert "036930" not in manager._implicit_runtime_route_codes
+    assert manager._runtime_primary_items_by_code["036930"] == item

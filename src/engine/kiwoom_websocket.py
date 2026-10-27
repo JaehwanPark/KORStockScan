@@ -3996,9 +3996,7 @@ class KiwoomWSManager:
                             # but do not let them overwrite the integrated
                             # runtime's executable quote/tape frame.
                             observation_only_item = observation_only_item or bool(
-                                primary_item
-                                and self._runtime_integrated_route_active
-                                and normalized_raw_item != primary_item
+                                primary_item and normalized_raw_item != primary_item
                             )
                             # 1. 초기 데이터 구조 생성
                             target = self._ensure_target_defaults(
@@ -5619,6 +5617,8 @@ class KiwoomWSManager:
                     "0w" in requested_realtime_types or "0F" in requested_realtime_types
                 )
                 and not str(source).startswith("micro_reversion")
+                and source
+                not in {"holding_ws_freshness_repair", "runtime_subscription_reconnect"}
                 and not observation_only
             }
             explicit_runtime_codes = {
@@ -5642,7 +5642,10 @@ class KiwoomWSManager:
                 include_alternate_route=include_alternate_route,
                 alternate_route_codes=alternate_route_codes,
                 preserve_plain_route=(
-                    observation_only or str(source).startswith("micro_reversion")
+                    observation_only
+                    or str(source).startswith("micro_reversion")
+                    or source
+                    in {"holding_ws_freshness_repair", "runtime_subscription_reconnect"}
                 ),
             )
             if not normalized_codes:
@@ -5808,8 +5811,8 @@ class KiwoomWSManager:
                             self._registered_items_by_code[code] = registered_items
                             if (
                                 str(source).startswith("main_fixed_watch_")
-                                and not observation_only
-                            ):
+                                or str(source) == "holding_ws_freshness_repair"
+                            ) and not observation_only:
                                 for item in incoming_items:
                                     self._micro_reversion_observation_only_items.discard(
                                         item

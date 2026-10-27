@@ -220,3 +220,71 @@ def test_official_krx_rule_does_not_rewrite_historical_listing_contract():
     )
     assert result["krx_aftermarket_eligible"] is None
     assert result["krx_aftermarket_ruleset"] is None
+
+
+@pytest.mark.parametrize(
+    "hour,minute,regular,nxt,aftermarket,item",
+    [
+        (8, 20, True, False, True, None),
+        (8, 20, True, True, True, "005930_NX"),
+        (8, 50, True, True, True, None),
+        (9, 0, True, False, True, "005930"),
+        (9, 0, True, True, True, "005930_AL"),
+        (9, 0, False, True, True, "005930_NX"),
+        (9, 0, True, None, True, "005930"),
+        (15, 30, True, True, True, None),
+        (16, 0, True, False, True, "005930"),
+        (16, 0, True, True, True, "005930_AL"),
+        (16, 0, True, True, False, "005930_NX"),
+        (16, 0, True, False, False, None),
+        (19, 40, True, True, True, "005930_AL"),
+        (19, 45, True, False, True, "005930"),
+        (20, 0, True, True, True, None),
+    ],
+)
+def test_holding_quote_source_separates_data_item_from_decision_cohort(
+    hour, minute, regular, nxt, aftermarket, item
+):
+    observed = datetime(2026, 9, 14, hour, minute, tzinfo=contract.KST)
+    source = _snapshot(
+        observed_at_kst=observed.replace(hour=8, minute=0),
+        krx_regular_eligible=regular,
+        nxt_eligible=nxt,
+        krx_aftermarket_eligible=aftermarket,
+    )
+    result = contract.holding_quote_source("005930", observed, source)
+    assert result["item"] == item
+    assert result["source_sha256"] == source["payload_sha256"]
+    assert result["trade_date"] == "2026-09-14"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"trade_date": "2026-09-11"},
+        {"stock_code": "000660"},
+        {"source_revision": ""},
+        {"observed_at_kst": datetime(2026, 9, 14, 10, tzinfo=contract.KST)},
+        {"observed_at_kst": datetime(2026, 9, 11, 8, tzinfo=contract.KST)},
+        {"quality_state": "UNKNOWN"},
+        {"eligible_venues_json": ["KRX"], "nxt_eligible": True},
+    ],
+)
+def test_holding_quote_source_rejects_invalid_native_generation(change):
+    source = _snapshot(observed_at_kst=datetime(2026, 9, 14, 8, tzinfo=contract.KST))
+    source.update(change)
+    assert (
+        contract.holding_quote_source(
+            "005930", datetime(2026, 9, 14, 9, tzinfo=contract.KST), source
+        )["item"]
+        is None
+    )
+
+
+def test_holding_quote_source_missing_master_is_unknown_not_krx_default():
+    assert (
+        contract.holding_quote_source(
+            "005930", datetime(2026, 9, 14, 9, tzinfo=contract.KST), None
+        )["item"]
+        is None
+    )

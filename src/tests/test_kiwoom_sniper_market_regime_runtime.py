@@ -13081,3 +13081,141 @@ def test_ws_prune_retains_nxt_post_block_sampler_subscription(monkeypatch):
     kiwoom_sniper_v2._prune_ws_subscriptions_for_inactive_targets([])
 
     assert published == []
+
+
+@pytest.mark.parametrize(
+    "symbol,nxt,expected",
+    [
+        ("036930", False, "036930"),
+        ("005930", True, "005930_AL"),
+        ("034020", True, "034020_AL"),
+    ],
+)
+def test_restored_holding_selects_native_eligible_quote_before_fixed_watch(
+    monkeypatch, tmp_path, symbol, nxt, expected
+):
+    from zoneinfo import ZoneInfo
+    from src.engine.risk import manual_control_exclusion as manual
+
+    now = datetime(2026, 10, 27, 9, 1, tzinfo=ZoneInfo("Asia/Seoul"))
+    monkeypatch.setenv(manual.EXCLUDED_CODES_FILE_ENV, str(tmp_path / "absent.txt"))
+    monkeypatch.delenv(manual.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.delenv(manual.LEGACY_WATCH_EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "DB",
+        SimpleNamespace(
+            get_security_market_eligibility=lambda *a: dict(
+                stock_code=symbol,
+                trade_date=now.date(),
+                krx_regular_eligible=True,
+                nxt_eligible=nxt,
+                krx_aftermarket_eligible=True,
+                quality_state="VALID",
+                source_api_id="ka10099",
+                source_revision="fixture",
+                payload_sha256="a" * 64,
+                observed_at_kst=now.replace(hour=8),
+            )
+        ),
+    )
+    stock = dict(
+        code=symbol,
+        status="HOLDING",
+        strategy="SCALPING",
+        watch_origin="MAIN_FIXED_WATCH",
+        buy_qty=1,
+        broker_route="KRX",
+    )
+    assert kiwoom_sniper_v2._initial_ws_registration_groups(
+        [stock], now_ts=now.timestamp()
+    )[0] == [expected]
+    seen = []
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "WS_MANAGER",
+        SimpleNamespace(
+            get_exact_item_data=lambda code, item: seen.append(item)
+            or dict(
+                curr=176000,
+                last_realtime_type_item={"0B": item},
+                last_realtime_type_ts={"0B": now.timestamp()},
+                market_data_transport_epoch=7,
+                last_trade_tick=dict(
+                    item=item,
+                    transport_epoch=7,
+                    ts=now.timestamp(),
+                    price=176000,
+                    values={"10": "176000"},
+                ),
+            )
+        ),
+    )
+    data = kiwoom_sniper_v2._holding_ws_snapshot(symbol, now_ts=now.timestamp())
+    assert seen == [expected]
+    assert data["holding_quote_source"]["item"] == expected
+    assert not data.get("quote_stale")
+    assert stock["broker_route"] == "KRX"
+    with monkeypatch.context() as fast:
+        fast.setattr(
+            kiwoom_sniper_v2.DB,
+            "get_security_market_eligibility",
+            lambda *a: pytest.fail("fast WS wake performed DB I/O"),
+        )
+        frame = kiwoom_sniper_v2._fast_holding_ws_snapshot(
+            [stock], symbol, now_ts=now.timestamp()
+        )
+        assert not frame.get("quote_stale")
+        assert frame["curr"] == 176000
+        assert (
+            kiwoom_sniper_v2._fast_holding_ws_snapshot(
+                [stock], symbol, now_ts=now.replace(hour=16).timestamp()
+            )["quote_stale"]
+            is True
+        )
+
+    # Restart may have a frame owned by the former item; never borrow it.
+    monkeypatch.setattr(
+        kiwoom_sniper_v2.WS_MANAGER,
+        "get_exact_item_data",
+        lambda *a: dict(
+            curr=180000,
+            last_realtime_type_item={"0B": symbol + "_NX"},
+        ),
+    )
+    assert (
+        kiwoom_sniper_v2._holding_ws_snapshot(symbol, now_ts=now.timestamp())[
+            "quote_stale"
+        ]
+        is True
+    )
+    early = now.replace(hour=8, minute=20)
+    assert kiwoom_sniper_v2._initial_ws_registration_groups(
+        [stock], now_ts=early.timestamp()
+    )[0] == ([symbol + "_NX"] if nxt else [])
+
+
+def test_boot_publishes_eligible_holdings_through_exact_registration_owner(monkeypatch):
+    from zoneinfo import ZoneInfo
+
+    now = datetime(2026, 10, 27, 9, 1, tzinfo=ZoneInfo("Asia/Seoul"))
+    targets = [
+        dict(code="036930", status="HOLDING", strategy="SCALPING"),
+        dict(code="000660", status="WATCHING", strategy="SCALPING"),
+    ]
+    monkeypatch.setattr(
+        kiwoom_sniper_v2,
+        "_initial_ws_registration_groups",
+        lambda *a, **kw: (["036930", "005930_AL"], ["000660"]),
+    )
+    sent = []
+    kiwoom_sniper_v2._publish_initial_ws_registrations(
+        targets,
+        now_ts=now.timestamp(),
+        publish_reg=lambda name, payload: sent.append(payload),
+    )
+    assert sent == [
+        {"codes": ["036930"], "source": "holding_ws_freshness_repair"},
+        {"codes": ["005930_AL"], "source": "sniper_boot_priority_ws_budget"},
+        {"codes": ["000660"], "source": "scanner_boot_hot_ws_budget"},
+    ]

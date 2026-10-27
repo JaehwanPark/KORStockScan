@@ -1076,6 +1076,115 @@ def test_holding_handler_releases_auto_exclusion_before_block_guard(
     assert path.read_text(encoding="utf-8") == ""
 
 
+def test_auto_excluded_holding_repairs_eligible_quote_before_control_veto(
+    monkeypatch, tmp_path
+):
+    from types import SimpleNamespace
+    from zoneinfo import ZoneInfo
+    from src.engine.scalping import avg_down_replay_capture, strategy_owner_replay
+
+    now = datetime(2026, 10, 27, 9, 1, tzinfo=ZoneInfo("Asia/Seoul"))
+    path = tmp_path / "manual.txt"
+    path.write_text("036930 # auto_hard_stop_handoff holding\n")
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    snapshot = dict(
+        stock_code="036930",
+        trade_date=now.date(),
+        krx_regular_eligible=True,
+        nxt_eligible=False,
+        krx_aftermarket_eligible=True,
+        eligible_venues_json=["KRX"],
+        quality_state="VALID",
+        source_api_id="ka10099",
+        source_revision="fixture",
+        payload_sha256="a" * 64,
+        observed_at_kst=now.replace(hour=8),
+    )
+    published = []
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "DB",
+        SimpleNamespace(get_security_market_eligibility=lambda *args: snapshot),
+    )
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "EVENT_BUS",
+        SimpleNamespace(
+            publish=lambda name, payload: published.append((name, payload))
+        ),
+    )
+    for name in (
+        "_observe_initial_quantity_cap_following_tick",
+        "_observe_avg_down_runtime_config",
+        "_log_holding_pipeline",
+    ):
+        monkeypatch.setattr(sniper_state_handlers, name, lambda *a, **k: None)
+    monkeypatch.setattr(strategy_owner_replay, "observe_seed", lambda *a, **k: None)
+    for name in ("record_market_inputs", "record_ai_state"):
+        monkeypatch.setattr(avg_down_replay_capture, name, lambda *a, **k: None)
+    stock = dict(
+        id=49532,
+        code="036930",
+        status="HOLDING",
+        strategy="SCALPING",
+        buy_qty=1,
+        buy_price=171500,
+    )
+    sniper_state_handlers.handle_holding_state(
+        stock,
+        "036930",
+        {"curr": 0, "last_ws_update_ts": 0},
+        admin_id="offline",
+        market_regime="BULL",
+        now_ts=now.timestamp(),
+        now_dt=now,
+    )
+    assert published[0][0] == "COMMAND_WS_REG"
+    assert published[0][1]["codes"] == ["036930"]
+    assert published[0][1]["include_alternate_route"] is False
+    assert stock["manual_control_exclusion_blocked"] is True
+    assert path.read_text() == "036930 # auto_hard_stop_handoff holding\n"
+    assert stock["status"] == "HOLDING"
+
+    from src.engine.scalping import main_stop_policy
+    from src.trading.market.aftermarket_eligibility import holding_quote_source
+
+    monkeypatch.setattr(main_stop_policy, "release_source", lambda *a, **k: {})
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "_retry_pending_hard_stop_manual_handoff",
+        lambda *a, **k: True,
+    )
+    sniper_state_handlers.handle_holding_state(
+        stock,
+        "036930",
+        dict(
+            curr=176000,
+            last_ws_update_ts=now.timestamp(),
+            last_realtime_type_item={"0B": "036930"},
+            last_realtime_type_ts={"0B": now.timestamp()},
+            market_data_transport_epoch=7,
+            last_trade_tick=dict(
+                item="036930",
+                transport_epoch=7,
+                ts=now.timestamp(),
+                price=176000,
+                values={"10": "176000"},
+            ),
+            holding_quote_source=holding_quote_source("036930", now, snapshot),
+        ),
+        admin_id="offline",
+        market_regime="BULL",
+        now_ts=now.timestamp(),
+        now_dt=now,
+    )
+    assert path.read_text() == ""
+    assert not stock.get("manual_control_exclusion_blocked")
+    assert stock["status"] == "HOLDING"
+    assert len(published) == 1
+
+
 def test_manual_control_exclusion_empty_config_does_not_block(monkeypatch, tmp_path):
     monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
     monkeypatch.setenv(
@@ -1531,3 +1640,386 @@ def test_holding_handler_retries_pending_hard_stop_handoff_before_quote_logic(
         manual_control_exclusion.evaluate_manual_control_exclusion("005930").excluded
         is True
     )
+
+
+@pytest.fixture
+def current_holding_quote(monkeypatch, tmp_path):
+    from zoneinfo import ZoneInfo
+    from src.trading.market.aftermarket_eligibility import holding_quote_source
+    from src.engine.scalping import main_stop_policy
+
+    now = datetime(2026, 10, 27, 9, 1, tzinfo=ZoneInfo("Asia/Seoul"))
+    path = tmp_path / "auto.txt"
+    path.write_text("036930 # auto_hard_stop_handoff holding\n")
+    monkeypatch.setenv(manual_control_exclusion.EXCLUDED_CODES_FILE_ENV, str(path))
+    monkeypatch.delenv(manual_control_exclusion.EXCLUDED_CODES_ENV, raising=False)
+    monkeypatch.delenv(
+        manual_control_exclusion.LEGACY_WATCH_EXCLUDED_CODES_ENV, raising=False
+    )
+    source = holding_quote_source(
+        "036930",
+        now,
+        dict(
+            stock_code="036930",
+            trade_date=now.date(),
+            krx_regular_eligible=True,
+            krx_aftermarket_eligible=True,
+            nxt_eligible=False,
+            quality_state="VALID",
+            source_api_id="ka10099",
+            source_revision="fixture",
+            payload_sha256="a" * 64,
+            observed_at_kst=now.replace(hour=8),
+        ),
+    )
+    stock = dict(
+        code="036930",
+        status="HOLDING",
+        strategy="SCALPING",
+        buy_qty=1,
+        buy_price=171500,
+        broker_route="KRX",
+        manual_control_exclusion_blocked=True,
+        manual_control_auto_hard_stop_blocked=True,
+    )
+    data = dict(
+        curr=176000,
+        last_ws_update_ts=now.timestamp(),
+        last_realtime_type_item={"0B": "036930", "0D": "036930"},
+        last_realtime_type_ts={"0B": now.timestamp() - 1, "0D": now.timestamp()},
+        holding_quote_source=source,
+    )
+    data.update(
+        market_data_transport_epoch=7,
+        last_trade_tick=dict(
+            item="036930",
+            transport_epoch=7,
+            ts=now.timestamp() - 1,
+            price=176000,
+            values={"10": "176000"},
+        ),
+    )
+    releases = []
+    monkeypatch.setattr(
+        main_stop_policy, "release_source", lambda *a, **kw: releases.append(kw) or {}
+    )
+    monkeypatch.setattr(
+        sniper_state_handlers, "_log_holding_pipeline", lambda *a, **kw: None
+    )
+    return now, path, stock, data, releases
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "missing_binding",
+        "wrong_item",
+        "wrong_code",
+        "old_day",
+        "old_session",
+        "stale_trade_fresh_depth",
+        "future_trade",
+        "stale_flag",
+        "below_average",
+        "operator",
+        "env",
+        "legacy_env",
+        "probe",
+        "old_transport",
+        "wrong_tick_item",
+        "missing_trade_price",
+        "conflicting_trade_price",
+    ],
+)
+def test_current_auto_release_preserves_bad_source_and_explicit_custody(
+    monkeypatch, current_holding_quote, failure
+):
+    now, path, stock, data, releases = current_holding_quote
+    if failure == "missing_binding":
+        data.pop("holding_quote_source")
+    elif failure == "wrong_item":
+        data["last_realtime_type_item"]["0B"] = "036930_NX"
+    elif failure == "wrong_code":
+        data["holding_quote_source"]["item"] = "005930"
+    elif failure == "old_day":
+        data["holding_quote_source"]["trade_date"] = "2026-10-26"
+    elif failure == "old_session":
+        data["holding_quote_source"]["session"] = "krx_like_premarket"
+    elif failure == "stale_trade_fresh_depth":
+        data["last_realtime_type_ts"]["0B"] = now.timestamp() - 60
+        data["last_trade_tick"]["ts"] = now.timestamp() - 60
+    elif failure == "future_trade":
+        data["last_realtime_type_ts"]["0B"] = now.timestamp() + 1
+        data["last_trade_tick"]["ts"] = now.timestamp() + 1
+    elif failure == "stale_flag":
+        data["quote_stale"] = True
+    elif failure == "below_average":
+        data["curr"] = 171499
+        data["last_trade_tick"]["price"] = 171499
+        data["last_trade_tick"]["values"]["10"] = "171499"
+    elif failure == "old_transport":
+        data["last_trade_tick"]["transport_epoch"] = 6
+    elif failure == "wrong_tick_item":
+        data["last_trade_tick"]["item"] = "036930_NX"
+    elif failure == "missing_trade_price":
+        data["last_trade_tick"]["values"].pop("10")
+    elif failure == "conflicting_trade_price":
+        data["last_trade_tick"]["values"]["10"] = "170000"
+    elif failure == "operator":
+        path.write_text(path.read_text() + "036930 # manual_operator user veto\n")
+    elif failure in {"env", "legacy_env"}:
+        monkeypatch.setenv(
+            (
+                manual_control_exclusion.EXCLUDED_CODES_ENV
+                if failure == "env"
+                else manual_control_exclusion.LEGACY_WATCH_EXCLUDED_CODES_ENV
+            ),
+            "036930",
+        )
+    elif failure == "probe":
+        stock["simulation_book"] = sniper_state_handlers.SCALP_SIMULATION_BOOK
+        stock["actual_order_submitted"] = False
+        stock["broker_order_forbidden"] = True
+    assert (
+        not sniper_state_handlers._maybe_release_auto_manual_control_at_average_price(
+            stock, "036930", ws_data=data, now_ts=now.timestamp()
+        )
+    )
+    assert manual_control_exclusion.evaluate_main_bot_control_exclusion(
+        "036930", new_entry=False
+    ).excluded
+    assert stock["manual_control_exclusion_blocked"]
+    assert stock["broker_route"] == "KRX"
+    assert releases == []
+
+
+def test_current_auto_release_consumes_own_trade_clock_and_preserves_other_rows(
+    current_holding_quote,
+):
+    now, path, stock, data, releases = current_holding_quote
+    data["last_trade_tick"]["values"]["10"] = "-176000"
+    path.write_text(path.read_text() + "042660 # machine_owner_scope historical\n")
+    assert sniper_state_handlers._maybe_release_auto_manual_control_at_average_price(
+        stock, "036930", ws_data=data, now_ts=now.timestamp()
+    )
+    assert path.read_text() == "042660 # machine_owner_scope historical\n"
+    assert not stock.get("manual_control_exclusion_blocked")
+    assert not stock.get("manual_control_auto_hard_stop_blocked")
+    assert releases[0]["quote_at"] == data["last_realtime_type_ts"]["0B"]
+    assert stock["broker_route"] == "KRX"
+
+
+@pytest.mark.parametrize("veto", ["operator", "env", "legacy_env", "retired_marker"])
+def test_holding_quote_repair_does_not_subscribe_explicit_or_retired_custody(
+    monkeypatch, current_holding_quote, veto
+):
+    from types import SimpleNamespace
+
+    now, path, stock, data, releases = current_holding_quote
+    if veto == "operator":
+        path.write_text(path.read_text() + "036930 # manual_operator user veto\n")
+    elif veto == "retired_marker":
+        path.write_text("036930 # machine_owner_scope independent owner\n")
+    else:
+        monkeypatch.setenv(
+            (
+                manual_control_exclusion.EXCLUDED_CODES_ENV
+                if veto == "env"
+                else manual_control_exclusion.LEGACY_WATCH_EXCLUDED_CODES_ENV
+            ),
+            "036930",
+        )
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "DB",
+        SimpleNamespace(
+            get_security_market_eligibility=lambda *a: pytest.fail(
+                "explicit custody read"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "EVENT_BUS",
+        SimpleNamespace(
+            publish=lambda *a: pytest.fail("explicit custody subscription")
+        ),
+    )
+    fields = {}
+    sniper_state_handlers._maybe_publish_holding_ws_repair(
+        {}, stock, "036930", fields, now_ts=now.timestamp()
+    )
+    assert not fields["holding_ws_reg_reissued"]
+    assert (
+        fields["holding_ws_repair_suppressed_reason"] == "holding_quote_manual_custody"
+    )
+
+
+def test_holding_quote_repair_rechecks_new_source_generation_without_retry_flood(
+    monkeypatch, current_holding_quote
+):
+    from types import SimpleNamespace
+
+    now, path, stock, data, releases = current_holding_quote
+    source = data["holding_quote_source"]
+    source.update(item=None, route=None, reason="holding_quote_eligibility_unverified")
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "_holding_quote_source_selection",
+        lambda *a, **kw: dict(source),
+    )
+    sent = []
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "EVENT_BUS",
+        SimpleNamespace(publish=lambda name, payload: sent.append(payload)),
+    )
+    state = {}
+    sniper_state_handlers._maybe_publish_holding_ws_repair(
+        state, stock, "036930", {}, now_ts=now.timestamp()
+    )
+    assert sent == []
+    source.update(
+        item="036930",
+        route="KRX",
+        source_sha256="b" * 64,
+        reason="holding_quote_eligible_session_source",
+    )
+    for offset in (1, 2, 3):
+        sniper_state_handlers._maybe_publish_holding_ws_repair(
+            state, stock, "036930", {}, now_ts=now.timestamp() + offset
+        )
+    assert [row["codes"] for row in sent] == [["036930"]]
+    source.update(
+        item="036930_AL", route="SOR", nxt_eligible=True, source_sha256="c" * 64
+    )
+    sniper_state_handlers._maybe_publish_holding_ws_repair(
+        state, stock, "036930", {}, now_ts=now.timestamp() + 4
+    )
+    assert [row["codes"] for row in sent] == [["036930"], ["036930_AL"]]
+    assert all(row["include_alternate_route"] is False for row in sent)
+
+
+def test_unknown_holding_quote_source_cannot_gain_rest_positive_authority(
+    monkeypatch, current_holding_quote
+):
+    now, path, stock, data, releases = current_holding_quote
+    data["holding_quote_source"].update(
+        item=None, reason="holding_quote_eligibility_unverified"
+    )
+    data["quote_stale"] = True
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "_fetch_holding_rest_quote_snapshot",
+        lambda *a, **kw: pytest.fail("unverified source REST"),
+    )
+    monkeypatch.setattr(
+        sniper_state_handlers, "_maybe_publish_holding_ws_repair", lambda *a, **kw: None
+    )
+    _, blocked, fields = sniper_state_handlers._holding_ws_freshness_recover_or_block(
+        stock, "036930", data, now_ts=now.timestamp()
+    )
+    assert blocked
+    assert (
+        fields["holding_ws_recovery_outcome"] == "holding_quote_eligibility_unverified"
+    )
+
+
+def test_native_ws_to_holding_consumer_releases_only_eligible_current_generation(
+    monkeypatch, current_holding_quote
+):
+    import asyncio
+    import json
+    from src.engine import kiwoom_sniper_v2
+    from src.engine.kiwoom_websocket import KiwoomWSManager
+
+    now, path, stock, data, releases = current_holding_quote
+    source = data["holding_quote_source"]
+    monkeypatch.setattr(
+        sniper_state_handlers,
+        "_holding_quote_source_selection",
+        lambda *a, **kw: dict(source),
+    )
+    monkeypatch.setattr(
+        "src.utils.kiwoom_utils.get_effective_kiwoom_code",
+        lambda code: pytest.fail("exact source rewritten"),
+    )
+    manager = KiwoomWSManager("offline")
+
+    class Wire:
+        async def send(self, value):
+            pass
+
+    manager.websocket = Wire()
+    manager._session_ready.set()
+    manager._market_data_transport_epoch = 7
+    monkeypatch.setattr(manager, "_maybe_write_dashboard_snapshot", lambda: None)
+    monkeypatch.setattr(
+        manager, "_observe_micro_reversion_forward", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(kiwoom_sniper_v2, "WS_MANAGER", manager)
+    asyncio.run(manager._send_reg(["036930"], source="holding_ws_freshness_repair"))
+
+    def receive(item, price, kind="0B"):
+        asyncio.run(
+            manager._handle_message(
+                json.dumps(
+                    {
+                        "trnm": "REAL",
+                        "data": [
+                            {
+                                "type": kind,
+                                "item": item,
+                                "values": {"10": str(price), "15": "+1"},
+                            }
+                        ],
+                    }
+                ),
+                received_at=now,
+                transport_epoch=7,
+            )
+        )
+
+    def attempt():
+        frame = kiwoom_sniper_v2._holding_ws_snapshot("036930", now_ts=now.timestamp())
+        return (
+            sniper_state_handlers._maybe_release_auto_manual_control_at_average_price(
+                stock, "036930", ws_data=frame, now_ts=now.timestamp()
+            )
+        )
+
+    receive("036930_NX", 180000)
+    assert not attempt()
+    receive("036930", 171000)
+    receive("036930", 180000, "0F")
+    assert manager.get_latest_data("036930")["curr"] == 180000
+    assert not attempt()  # Fresh non-trade data must not lift an older trade price.
+    receive("036930", 176000)
+    manager._market_data_transport_epoch = 8
+    asyncio.run(manager._send_reg(["036930"], source="runtime_subscription_reconnect"))
+    assert not attempt()  # REG is not a fresh price receipt from the new epoch.
+    manager._market_data_transport_epoch = 7
+    assert not attempt()  # Registration is now bound to epoch 8, not 7.
+    manager._market_data_transport_epoch = 8
+    asyncio.run(
+        manager._handle_message(
+            json.dumps(
+                {
+                    "trnm": "REAL",
+                    "data": [
+                        {
+                            "type": "0B",
+                            "item": "036930",
+                            "values": {"10": "176000", "15": "+1"},
+                        }
+                    ],
+                }
+            ),
+            received_at=now,
+            transport_epoch=8,
+        )
+    )
+    assert attempt()
+    assert path.read_text() == ""
+    assert len(releases) == 1
+    assert stock["broker_route"] == "KRX"

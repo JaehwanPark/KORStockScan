@@ -6139,7 +6139,13 @@ def _initial_ws_registration_groups(targets, now_ts=None):
             scanner_targets.append(target)
             continue
         priority_item = code
-        if main_fixed_watch.is_fixed_watch(target):
+        if _holding_quote_selection_applies(target, now_ts):
+            selection = sniper_state_handlers._holding_quote_source_selection(
+                code, now_ts=now_ts, db=DB
+            )
+            target["_holding_quote_source"] = selection
+            priority_item = selection["item"]
+        elif main_fixed_watch.is_fixed_watch(target):
             route = main_fixed_watch.session_route(
                 now_ts, str(target.get("code") or "")[:6]
             )
@@ -6163,6 +6169,72 @@ def _initial_ws_registration_groups(targets, now_ts=None):
             seen_scanner.add(code)
 
     return priority_codes, scanner_codes
+
+
+def _holding_quote_selection_applies(stock, now_ts):
+    return (
+        _is_real_holding_target(stock)
+        and normalize_strategy(stock.get("strategy")) == "SCALPING"
+        and datetime.fromtimestamp(float(now_ts), tz=session_contract.KST).date()
+        >= session_contract.MARKET_SESSION_EFFECTIVE_DATE
+    )
+
+
+def _holding_ws_snapshot(code, *, now_ts, selection=None):
+    """Bind one holding quote to its eligible source without changing orders."""
+    if selection is None:
+        selection = sniper_state_handlers._holding_quote_source_selection(
+            code, now_ts=now_ts, db=DB
+        )
+    item = selection.get("item")
+    reader = getattr(WS_MANAGER, "get_exact_item_data", None)
+    snapshot = dict(reader(code, item) or {}) if item and callable(reader) else {}
+    snapshot["holding_quote_source"] = selection
+    quote = sniper_state_handlers._holding_source_trade_quote(
+        snapshot, now_ts=now_ts, code=code
+    )
+    if quote is None:
+        snapshot["quote_stale"] = True
+    else:
+        snapshot["curr"] = quote[0]
+    return snapshot
+
+
+def _fast_holding_ws_snapshot(targets, code, *, now_ts):
+    # WS wakes reuse the last native Main binding, never perform DB/provider I/O.
+    # The reader still rejects another date/session/item/transport or stale tick.
+    stock = next(
+        (target for target in targets or []
+         if str(target.get("code") or "")[:6] == code
+         and _holding_quote_selection_applies(target, now_ts)),
+        None,
+    )
+    return _holding_ws_snapshot(
+        code, now_ts=now_ts,
+        selection=(stock or {}).get("_holding_quote_source") or {},
+    )
+
+
+def _publish_initial_ws_registrations(targets, *, now_ts, publish_reg):
+    priority, scanner = _initial_ws_registration_groups(targets, now_ts=now_ts)
+    holdings = {
+        str(target.get("code") or "")[:6]
+        for target in targets or []
+        if _holding_quote_selection_applies(target, now_ts)
+    }
+    for items, source in (
+        (
+            [item for item in priority if item[:6] in holdings],
+            "holding_ws_freshness_repair",
+        ),
+        (
+            [item for item in priority if item[:6] not in holdings],
+            "sniper_boot_priority_ws_budget",
+        ),
+        (scanner, "scanner_boot_hot_ws_budget"),
+    ):
+        if items:
+            publish_reg("COMMAND_WS_REG", {"codes": items, "source": source})
 
 
 def _reconcile_main_fixed_watch(targets, *, now_ts, publish_reg):
@@ -14782,6 +14854,9 @@ def _run_sniper_iterations(
 
             if _is_scanner_watching_target(stock) and code in scanner_ws_snapshot_cache:
                 ws_data = scanner_ws_snapshot_cache.get(code) or {}
+            elif _holding_quote_selection_applies(stock, now_ts):
+                ws_data = _holding_ws_snapshot(code, now_ts=now_ts)
+                stock["_holding_quote_source"] = ws_data["holding_quote_source"]
             elif status == "WATCHING" and main_fixed_watch.is_fixed_watch(stock):
                 route = main_fixed_watch.session_route(now_ts, code)
                 ws_data = (
@@ -16907,23 +16982,9 @@ def run_sniper(is_test_mode=False):
             "[TRADING_PAUSED] engine booted with 신규 매수 및 추가매수 중단 상태 active"
         )
 
-    priority_codes, scanner_boot_codes = _initial_ws_registration_groups(
-        targets, now_ts=time.time()
+    _publish_initial_ws_registrations(
+        targets, now_ts=time.time(), publish_reg=event_bus.publish
     )
-    boot_priority_items = list(priority_codes)
-    if boot_priority_items:
-        event_bus.publish(
-            "COMMAND_WS_REG",
-            {
-                "codes": boot_priority_items,
-                "source": "sniper_boot_priority_ws_budget",
-            },
-        )
-    if scanner_boot_codes:
-        event_bus.publish(
-            "COMMAND_WS_REG",
-            {"codes": scanner_boot_codes, "source": "scanner_boot_hot_ws_budget"},
-        )
 
     last_msg_min = -1
     scanner_ws_reg_last_emit_ts: dict[tuple[str, str], float] = {}
@@ -16937,12 +16998,8 @@ def run_sniper(is_test_mode=False):
         fast_exit_interval_sec = 0.25
     fast_exit_monitor = ScalpExitSafetyMonitor(
         targets_provider=lambda: targets,
-        ws_snapshot_provider=(
-            lambda code: (
-                WS_MANAGER.get_latest_data(code)
-                if WS_MANAGER is not None and hasattr(WS_MANAGER, "get_latest_data")
-                else {}
-            )
+        ws_snapshot_provider=lambda code: _fast_holding_ws_snapshot(
+            targets, code, now_ts=time.time()
         ),
         evaluator=sniper_state_handlers.evaluate_and_dispatch_fast_scalp_exit,
         state_lock=ENTRY_LOCK,

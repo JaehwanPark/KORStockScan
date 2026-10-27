@@ -288,11 +288,13 @@ from src.engine.lifecycle.ofi_ai_smoothing import (
     ofi_smoothing_log_fields,
 )
 from src.engine.risk.manual_control_exclusion import (
+    EXCLUDED_CODES_ENV,
     ManualControlExclusionDecision,
     add_manual_control_exclusion_code,
     evaluate_main_bot_control_exclusion,
     evaluate_manual_control_exclusion,
     manual_control_auto_exclusion_source,
+    manual_control_operator_exclusion_source,
     remove_auto_manual_control_exclusion_code,
 )
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
@@ -50816,7 +50818,52 @@ def _holding_ws_repair_session_bucket(now_ts: float) -> str:
     return "closed_or_transition"
 
 
+def _holding_quote_source_selection(code, *, now_ts, db=None):
+    """Read the existing native master; never fetch a provider or select an order."""
+    from src.trading.market.aftermarket_eligibility import holding_quote_source
+
+    observed = datetime.fromtimestamp(float(now_ts), tz=_KST)
+    exclusion = evaluate_main_bot_control_exclusion(code, new_entry=False)
+    if exclusion.excluded and (
+        not manual_control_auto_exclusion_source(code)
+        or manual_control_operator_exclusion_source(code)
+        or exclusion.source == EXCLUDED_CODES_ENV
+    ):
+        return {
+            **holding_quote_source(code, observed, None),
+            "reason": "holding_quote_manual_custody",
+        }
+    reader = DB if db is None else db
+    try:
+        snapshot = reader.get_security_market_eligibility(code, observed.date())
+    except (AttributeError, OSError, ValueError, TypeError):
+        snapshot = None
+    return holding_quote_source(code, observed, snapshot)
+
+
 def _maybe_publish_holding_ws_repair(state, stock, code, fields, *, now_ts):
+    observed_dt = datetime.fromtimestamp(float(now_ts), tz=_KST)
+    current_contract = (
+        observed_dt.date() >= session_contract.MARKET_SESSION_EFFECTIVE_DATE
+    )
+    source = (
+        _holding_quote_source_selection(code, now_ts=now_ts)
+        if current_contract
+        else None
+    )
+    source_key = (
+        tuple(
+            source.get(key)
+            for key in ("trade_date", "session", "item", "source_sha256", "reason")
+        )
+        if source is not None
+        else None
+    )
+    source_changed = current_contract and source_key != (state or {}).get(
+        "last_ws_repair_source_key"
+    )
+    if isinstance(state, dict):
+        state["last_ws_repair_source_key"] = source_key
     min_interval_sec = _holding_ws_repair_min_interval_sec()
     last_reg_ts = _safe_float((state or {}).get("last_ws_repair_reg_ts"), 0.0)
     last_decision_ts = _safe_float((state or {}).get("last_ws_repair_decision_ts"), 0.0)
@@ -50830,6 +50877,7 @@ def _maybe_publish_holding_ws_repair(state, stock, code, fields, *, now_ts):
     if (
         max(last_reg_ts, last_decision_ts) > 0
         and float(now_ts) < next_after
+        and not source_changed
         and (not last_session_bucket or last_session_bucket == current_session_bucket)
     ):
         fields["holding_ws_reg_reissued"] = False
@@ -50846,13 +50894,22 @@ def _maybe_publish_holding_ws_repair(state, stock, code, fields, *, now_ts):
         )
         return
 
-    observed_dt = datetime.fromtimestamp(float(now_ts), tz=_KST)
-    route_resolution = _resolve_holding_sell_dmst_stex_tp(
-        stock,
-        code,
-        now_t=observed_dt.time(),
-        observed_at=observed_dt,
-    )
+    if current_contract:
+        route_resolution = dict(
+            dmst_stex_tp=source["route"],
+            blocked=not source["item"],
+            reason=source["reason"],
+            nxt_enabled=source["nxt_eligible"],
+            nxt_flag_source="exact_date_native_market_eligibility",
+        )
+        fields["holding_quote_source"] = source
+    else:
+        route_resolution = _resolve_holding_sell_dmst_stex_tp(
+            stock,
+            code,
+            now_t=observed_dt.time(),
+            observed_at=observed_dt,
+        )
     route = str(route_resolution.get("dmst_stex_tp") or "").strip().upper()
     nxt_enabled = route_resolution.get("nxt_enabled")
     fields.update(
@@ -50892,7 +50949,9 @@ def _maybe_publish_holding_ws_repair(state, stock, code, fields, *, now_ts):
 
     exact_nxt_route = route == "NXT"
     registration_codes = (
-        [f"{str(code or '').strip()[:6]}_NX"] if exact_nxt_route else [code]
+        [source["item"]]
+        if source is not None
+        else ([f"{str(code or '').strip()[:6]}_NX"] if exact_nxt_route else [code])
     )
     try:
         EVENT_BUS.publish(
@@ -50902,11 +50961,12 @@ def _maybe_publish_holding_ws_repair(state, stock, code, fields, *, now_ts):
                 "source": "holding_ws_freshness_repair",
                 "force": True,
                 "repair_cycle": "holding_ws_stale_or_missing",
-                # KRX regular-session recovery keeps the SOR companion.  NXT
-                # execution sessions request the exact official `_NX` item
-                # required by the executable-bid consumer; `_AL` is not proof
-                # of the NXT-only route.  This grants no order/exit authority.
-                "include_alternate_route": not exact_nxt_route,
+                # Current holdings request only their eligible data item.
+                # Historical routing retains its original companion contract.
+                # Market data grants no order or exit authority.
+                "include_alternate_route": (
+                    False if current_contract else not exact_nxt_route
+                ),
             },
         )
         if isinstance(state, dict):
@@ -50975,6 +51035,14 @@ def _holding_ws_freshness_recover_or_block(stock, code, ws_data, *, now_ts):
         "holding_ws_recovery_miss_count": miss_count,
         **_ws_realtime_type_freshness_fields(ws_data, now_ts=now_ts),
     }
+
+    source = ws_data.get("holding_quote_source")
+    if isinstance(source, dict) and not source.get("item"):
+        # An unknown/closed source cannot gain positive authority via REST.
+        _maybe_publish_holding_ws_repair(state, stock, code, fields, now_ts=now_ts)
+        fields["holding_ws_recovery_outcome"] = source.get("reason")
+        _log_holding_pipeline(stock, code, "holding_ws_source_unavailable", **fields)
+        return ws_data, True, fields
 
     last_rest_ts = _safe_float(state.get("last_rest_quote_ts"), 0.0)
     rest_due = (
@@ -88448,6 +88516,57 @@ def _manual_control_exclusion_blocked(
     return True
 
 
+def _holding_source_trade_quote(ws_data, *, now_ts, code):
+    """Require the price's own receive clock, not a newer depth/other route."""
+    data = ws_data or {}
+    price = _safe_int(data.get("curr"), 0)
+    clock = _safe_float(data.get("last_ws_update_ts"), 0.0)
+    observed = datetime.fromtimestamp(float(now_ts), tz=_KST)
+    if observed.date() >= session_contract.MARKET_SESSION_EFFECTIVE_DATE:
+        source = data.get("holding_quote_source") or {}
+        item = source.get("item")
+        context = session_contract.resolve_market_session(observed)
+        if (
+            not item
+            or str(item)[:6] != str(code).strip()[:6]
+            or source.get("trade_date") != observed.date().isoformat()
+            or source.get("session") != context.session_regime
+            or (data.get("last_realtime_type_item") or {}).get("0B") != item
+        ):
+            return None
+        tick = data.get("last_trade_tick") or {}
+        epoch = data.get("market_data_transport_epoch")
+        if (
+            tick.get("item") != item
+            or epoch is None
+            or tick.get("transport_epoch") != epoch
+        ):
+            return None
+        price = _safe_int(tick.get("price"), 0)
+        # The parser may carry curr when FID10 is absent. That is not a new
+        # positive price receipt, even if another 0B field refreshed its clock.
+        if abs(_safe_int((tick.get("values") or {}).get("10"), 0)) != price:
+            return None
+        clock = _safe_float(tick.get("ts"), 0.0)
+        if (
+            clock <= 0
+            or session_contract.resolve_market_session(
+                datetime.fromtimestamp(clock, tz=_KST)
+            ).session_regime
+            != context.session_regime
+        ):
+            return None
+    age = float(now_ts) - clock if clock > 0 else None
+    if (
+        price <= 0
+        or _boolish_true(data.get("quote_stale"))
+        or age is None
+        or not 0 <= age <= _holding_exit_ws_max_age_sec()
+    ):
+        return None
+    return price, clock, age
+
+
 def _maybe_release_auto_manual_control_at_average_price(
     stock,
     code,
@@ -88465,19 +88584,12 @@ def _maybe_release_auto_manual_control_at_average_price(
         return False
 
     average_price = _safe_float((stock or {}).get("buy_price"), 0.0)
-    current_price = _safe_int((ws_data or {}).get("curr"), 0)
-    quote_stale = _boolish_true((ws_data or {}).get("quote_stale"))
-    last_ws_update_ts = _safe_float((ws_data or {}).get("last_ws_update_ts"), 0.0)
-    quote_age_sec = float(now_ts) - last_ws_update_ts if last_ws_update_ts > 0 else None
+    quote = _holding_source_trade_quote(ws_data, now_ts=now_ts, code=code)
+    if quote is None:
+        return False
+    current_price, last_ws_update_ts, quote_age_sec = quote
     max_age_sec = _holding_exit_ws_max_age_sec()
-    fresh_quote = bool(
-        current_price > 0
-        and not quote_stale
-        and quote_age_sec is not None
-        and quote_age_sec >= 0
-        and quote_age_sec <= max_age_sec
-    )
-    if not fresh_quote or average_price <= 0 or current_price < average_price:
+    if average_price <= 0 or current_price < average_price:
         return False
 
     removal = remove_auto_manual_control_exclusion_code(
@@ -91554,6 +91666,19 @@ def handle_holding_state(
         ws_data=ws_data,
         ai_engine=ai_engine,
     )
+
+    if (
+        manual_control_auto_exclusion_source(code)
+        and not _has_sim_probe_provenance(stock)
+        and _holding_source_trade_quote(ws_data, now_ts=now_ts, code=code) is None
+    ):
+        # Quote observation may recover while order/control custody stays vetoed.
+        # This path never fetches REST, releases a slot, or dispatches an order.
+        repair_state = stock.setdefault("_holding_ws_freshness_recovery", {})
+        repair_fields = {}
+        _maybe_publish_holding_ws_repair(
+            repair_state, stock, code, repair_fields, now_ts=now_ts
+        )
 
     _maybe_release_auto_manual_control_at_average_price(
         stock,
