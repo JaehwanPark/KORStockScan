@@ -42,11 +42,20 @@
 
 ## 실행 항목
 
-- [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-27`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
+- [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 정책·bootstrap 소비와 다음 정규 완주 확인` (`Due: 2026-10-28`, `Slot: PREOPEN`, `TimeWindow: 06:25~08:05`, `Track: RuntimeStability`)
+  - 10/27 저장공간 수리: source26 원본6.97GiB+완료 투영0.97GiB의 관측 증가·표시 중복·2.17GiB 공백을 대사했다. 기존 publisher의 원문 보존 압축 표기/임시 중복 제거와 중단된 투영본 압축 재개·06:25 일일 sweep 코드를 검증한다. 운영26 원본/정책일 보호 유지, 통합 배포·installer 적용·source27 정식 생산/후속 소비 및10/28 06:25 적격26 보존 검증은 이 owner의 기존 Acceptance에서 OPEN. [원인·검증·적용 상태](../audits/report-storage-growth-review-2026-10-27.md).
   - 10/27 승인 통합: 95def870e와 final detector 잠금 admission 수리. 기존600초/06:50 경계·선택 재검증·새 영수증 및 과거07:29 지연 보존. [수리·검증](../audits/postclose-root-cause-recovery-review-2026-10-19.md#finalization-admission-and-holding-quote-integration-2026-10-27). 후보/선택 P5→ordered 전환→실제 PID 소비 검증 후 source27→10/28 무개입 수용은 기존 창에서 확인한다.
-  - 11:51 통합194307750/PID128751 기동·정책 소비 PASS. 두 보고서의 후속 코드 검증 연결 누락을 추가 수리한다. 원본·과거 지연·null 유지; 최종 선택/PID와 새 건강 검증은 같은 owner에서 이어간다.
+  - 최종 통합 `bcfedb8ad`/Main `295584`(start71535364): 12:14:37 ordered 전환·실제 정책 소비, 후보/선택 P5 PASS. 12:18:19 native 건강6PASS/과거06:50 지연 WARNING1. 두 보고서 코드 인계 경고 해소; 원본·과거 지연·null 보존. 다음 source27→28 무개입 전체 수용은 기존 일정/Acceptance로 OPEN.
+  - 12:22:13 후속 native 건강5PASS/2WARNING·0FAIL: 두 보고서 코드 결속은 계속 verified. 새 probe의 stale/route snapshot 미결에 따른 bounded observation WARNING과 과거 지연 WARNING 보존; source 원인은 기존 MainEntrySourceTerminalRepair1022에서 대사한다.
   - 10/27 09:09 수량 통합198286cf2 전환: Main3940489 정상 drain 후 연구 부적격과 종료 검증의 혼동으로 선택 전 차단. 원 selector/실패 hold/종료 epoch 보존, 기존 ordered recovery에서 정확한 종료·과거 소비 검증과 CAS 인계를 수리하고 새 후보/P5→재기동/실제 소비까지 완료한다. [원인·보존·수리](../audits/postclose-root-cause-recovery-review-2026-10-19.md#quantity-historical-diagnostics-daily-handoff-2026-10-27).
   - 10/27 09:35 후속 검증: e930a7c95/PID4025821 실제 소비 후, 이전 collector latest의 정상 갱신을 immutable 변경으로 오인한 최종 전환 결함을 재현했다. 시작 전 현재 포인터/시작 후 불변 종료 증거의 수명을 분리하고, 기존 failed-hold CAS·원 정책 및 현재 PID 검증을 거쳐 보완본 전환·observer/health를 완료한다.
+  - 10/27 10:00 복구 완료: 97bc1f62e/PID4063772, start70694913, 후보·선택 후 P5 및 실제 정책 소비 PASS. 원 실패/종료 증거 보존, CAS 인계 후 startup hold 해제. 새 PID observer current, Main full health 6 PASS·기존 장후 지연 복구 WARNING 1.
+  - 10/26 장후→10/27 기동은 수리 후 완료: 원 EOD·6개 계산 terminal 보존, strict/summary/controller·최종 준비와 native 최종화07:29:43 확인. 정규 PREOPEN07:35~07:39:05 및07:55 Main3905944/start69986929의 native 정책 소비 PASS.
+  - 10/27 08:23:43 최종 통합ab663e13b의 ordered 전환 PASS, PID3940489/start70152682·cwd·원 정책6b93eb6a 실제 소비 확인. 후보P5c8023670와 최종 prepared P5b04c7277 모두 PASS; Sentinel/observer exit0·현재 세대 확인.08:25:42 native full health는 검증 유예 없이 FAIL0이며 역사적 수량 비용 결손·observer partial·최종화 지연 경고를 보존한다.
+  - 다음 수리 없는 수용: source10/27 20:05 장후→10/28 05:35~06:50 최종화→07:35 PREOPEN→07:55 Main/정책/PID 및 current observer/health. 위 native calendar상 다음 거래일10/28, 수동 보정·임의 재생성 없이 전체 일정과 압축/정리·의미 계약을 완주해야 이 owner를 닫는다. 이번 recovered completion은 이 수용을 대신하지 않는다.
+  - 관측 한계: 새 PID의10분 창·자연 표본/실제 체결·경제성은 미확인.08:16:45의196170 FIRST_PRICE_HOLD 무효화는 이전 actor의 진단으로 보존하며 현재 PID 결함으로 전용하지 않는다.08:20:44의356860 ws_remove_unconfirmed도 새 PID 생성 전 종료 중 원본/ACK미확인 상태로 남긴다. 현재 원천 손실·세대 불일치가 새로 발생하면 같은 원천 owner에서 원인을 재대사한다.
+  - 근거: [장후부터 실제 기동까지 최종 기록](../audits/postclose-root-cause-recovery-review-2026-10-19.md#postclose-through-actual-main-consumption-2026-10-27).
+
   - Source: [runtime_approval_summary_2026-10-26.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-26.json)
   - 판정 기준: source_date=`2026-10-26`, apply_date=`2026-10-27`, preopen_state=`pending`, due_policy_receipts=`compact_auxiliary(valid=True, handoff=incumbent_preserved); entry_cancel_wait(valid=True, handoff=blocked); entry_split(valid=True, handoff=blocked); main_mechanistic_entry(valid=True, handoff=incumbent_preserved); pre_submit_delay(valid=True, handoff=initial_quote_timing_policy_published); rising_missed(valid=True, handoff=not_applicable); scale_in_split(valid=True, handoff=not_applicable); main_stop_confirmation(policy=72679159acafbdb11bbab599458076de43b90d4c37f3b8875a9cc3e130e47f50, pid_unobserved)`의 schema·semantic hash·scope와 bootstrap accepted/rejected 결과를 확인한다.
   - incumbent 정책은 runtime override가 0이어야 하고 validated edge는 단일축 allowlist·operator lock·retired OFF·same-stage guard를 통과해야 한다.

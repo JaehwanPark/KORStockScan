@@ -68,6 +68,7 @@ OPERATIONS = (
     "holding-exit-sentinel",
     "error-detection",
     "log-retention",
+    "snapshot-archive",
     "monitor-snapshot",
 )
 RELEASE_SET_LOCK = "runtime_release_set.lock"
@@ -1325,6 +1326,16 @@ def make_plan(
             str(root / "deploy/run_ai_entry_setup_paired_replay_postclose.sh"),
             target_date,
         ]
+    elif operation == "snapshot-archive":
+        command = [
+            "/bin/bash",
+            str(root / "deploy/run_with_owned_log.sh"),
+            "--owner", "snapshot_archive_daily",
+            "--log", str(workspace / "logs/snapshot_archive_daily.log"),
+            str(root / ".venv/bin/python"), "-m",
+            "src.engine.compress_db_backfilled_files",
+            "--snapshots-only", "--days", "1",
+        ]
     elif operation == "archive":
         command = [
             "/bin/bash",
@@ -1650,7 +1661,7 @@ def main() -> int:
             workspace = requested_workspace
         if args.resolve_effective_today and args.operation != "finalize":
             raise ValueError("resolve_effective_today_requires_finalize")
-        scheduled = args.operation in TAGS.values() and not args.print_plan
+        scheduled = args.operation in {*TAGS.values(), "snapshot-archive"} and not args.print_plan
         if scheduled:
             scheduled_fd = leases.enter_context(scheduled_execution_lease(workspace))
         root, commit = selected_release(workspace)

@@ -3029,7 +3029,7 @@ def test_one_native_census_reaches_fact_quantity_and_stop_consumers(
         tmp_path, monkeypatch, large=False, database_only=database_only
     )
     if release_alias:
-        mounted = tmp_path.parent / (tmp_path.name + "-release")
+        mounted = tmp_path / "release"
         mounted.mkdir()
         (mounted / "data").symlink_to(tmp_path, target_is_directory=True)
         path = mounted / "data/report/monitor_snapshots" / path.name

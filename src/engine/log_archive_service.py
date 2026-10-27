@@ -6,6 +6,7 @@ import gzip
 import gc
 import hashlib
 import json
+import zlib
 import os
 import resource
 import tempfile
@@ -35,6 +36,7 @@ class SnapshotRows(list):
         super().__init__()
         self._file = tempfile.TemporaryFile(mode="w+b")
         self._rows = []
+        self._written = {}
         self._cached = None
         self.extend(rows)
 
@@ -43,15 +45,21 @@ class SnapshotRows(list):
 
     def _write(self, value):
         raw = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
+        identity = (len(raw), hashlib.sha256(raw).digest())
+        if identity in self._written:
+            return self._written[identity]
+        compressed = zlib.compress(raw, level=1)
         try:
             self._file.seek(0, 2)
             offset = self._file.tell()
-            self._file.write(raw)
+            self._file.write(compressed)
         except OSError as exc:
             # Local scratch exhaustion is a failed snapshot, not bad market
             # source evidence eligible for publication as a source gap.
             raise RuntimeError("snapshot_private_storage_write_failed") from exc
-        return offset, len(raw), hashlib.sha256(raw).digest()
+        reference = (offset, len(compressed), identity)
+        self._written[identity] = reference
+        return reference
 
     def append(self, value):
         self._rows.append(self._write(value))
@@ -69,10 +77,17 @@ class SnapshotRows(list):
         reference = self._rows[index]
         if self._cached is not None and self._cached[0] == reference:
             return self._cached[1]
-        offset, size, digest = reference
+        offset, size, (logical_size, digest) = reference
         self._file.seek(offset)
-        raw = self._file.read(size)
-        if len(raw) != size or hashlib.sha256(raw).digest() != digest:
+        compressed = self._file.read(size)
+        try:
+            decoder = zlib.decompressobj()
+            raw = decoder.decompress(compressed, logical_size + 1)
+        except zlib.error as exc:
+            raise ValueError("snapshot_private_row_changed") from exc
+        if (len(compressed) != size or len(raw) != logical_size
+                or not decoder.eof or decoder.unused_data
+                or hashlib.sha256(raw).digest() != digest):
             raise ValueError("snapshot_private_row_changed")
         value = json.loads(raw)
         self._cached = (reference, value)
@@ -109,6 +124,31 @@ def snapshot_json_sha256(value, *, default=None):
     for chunk in encoder.iterencode(value):
         digest.update(chunk.encode("utf-8"))
     return digest.hexdigest()
+
+
+def _write_trade_snapshot(payload, writer):
+    """Compact row bodies while retaining the native root/section locators.
+
+    Carry-position readers authenticate the complete source and locate root
+    keys at two spaces and projection arrays at four spaces. Keep those
+    boundaries, field order and every value; only redundant whitespace changes.
+    """
+    writer.write("{\n")
+    for index, (key, value) in enumerate(payload.items()):
+        if index:
+            writer.write(",\n")
+        writer.write("  " + json.dumps(key, ensure_ascii=False) + ": ")
+        if key == "sections" and isinstance(value, dict):
+            writer.write("{\n")
+            for section_index, (name, rows) in enumerate(value.items()):
+                if section_index:
+                    writer.write(",\n")
+                writer.write("    " + json.dumps(name, ensure_ascii=False) + ": ")
+                json.dump(rows, writer, ensure_ascii=False, separators=(",", ":"))
+            writer.write("\n  }")
+        else:
+            json.dump(value, writer, ensure_ascii=False, separators=(",", ":"))
+    writer.write("\n}")
 
 
 def _env_float(name: str, default: float = 0.0) -> float:
@@ -555,7 +595,10 @@ def save_monitor_snapshot(kind: str, target_date: str, payload: dict) -> Path:
                 )
 
                 native_writer = NativeJSONWriter(handle)
-                json.dump(payload, native_writer, ensure_ascii=False, indent=2)
+                if kind == "trade_review":
+                    _write_trade_snapshot(payload, native_writer)
+                else:
+                    json.dump(payload, native_writer, ensure_ascii=False, indent=2)
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp_path, path)
@@ -573,19 +616,22 @@ def save_monitor_snapshot(kind: str, target_date: str, payload: dict) -> Path:
                 path.parent.parent.parent, path, native_writer.generation(path)
             )
 
-    if (
-        kind == "trade_review"
-        and (payload.get("meta") or {}).get("snapshot_profile") == "postclose_exit"
-    ):
-        if payload.get("date") != target_date:
-            raise ValueError(
-                "trade_review_completed_projection_invalid:completed_census_source_date_mismatch"
+    from src.utils.jsonl_io import json_artifact_generation_lock
+
+    with json_artifact_generation_lock(path, exclusive=True):
+        if (
+            kind == "trade_review"
+            and (payload.get("meta") or {}).get("snapshot_profile") == "postclose_exit"
+        ):
+            if payload.get("date") != target_date:
+                raise ValueError(
+                    "trade_review_completed_projection_invalid:completed_census_source_date_mismatch"
+                )
+            _save_trade_review_completed_projection(
+                path, payload, publish_snapshot=publish_snapshot
             )
-        _save_trade_review_completed_projection(
-            path, payload, publish_snapshot=publish_snapshot
-        )
-    else:
-        publish_snapshot()
+        else:
+            publish_snapshot()
     return path
 
 

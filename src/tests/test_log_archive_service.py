@@ -2033,3 +2033,57 @@ def test_snapshot_scratch_failure_is_not_published_as_a_source_gap(monkeypatch):
     with pytest.raises(RuntimeError, match="snapshot_private_storage_write_failed"):
         rows.append({"source": "valid"})
     assert len(rows) == 0
+
+
+def test_snapshot_private_storage_compresses_and_reuses_identical_rows():
+    from src.engine.log_archive_service import SnapshotRows
+
+    value = {"fields": {"evidence": "preserved quote " * 10000}, "pnl": None}
+    rows = SnapshotRows([value] * 100)
+    assert len(rows) == 100 and all(row == value for row in rows)
+    assert len(set(rows._rows)) == 1
+    assert rows._file.seek(0, 2) < len(json.dumps(value)) // 10
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_compact_snapshot_preserves_carry_reader_and_whole_source_binding(
+    tmp_path, monkeypatch, compressed
+):
+    import hashlib
+    from src.engine import compress_db_backfilled_files as archive
+    from src.engine.lifecycle.snapshot_archive import generation
+
+    day = "2026-10-26"
+    directory = tmp_path / "report/monitor_snapshots"
+    directory.mkdir(parents=True)
+    monkeypatch.setattr(service, "MONITOR_SNAPSHOT_DIR", directory)
+    monkeypatch.setattr(archive, "MONITOR_SNAPSHOT_DIR", directory)
+    # Force the large-source reader without a resident multi-GB fixture.
+    event = dict(stage="holding_started", timestamp=day + " 09:00:00",
+                 fields={"id": "1", "proof": "x" * 1000})
+    carried = dict(stage="position_rebased_after_fill", timestamp=day + " 09:01:00",
+                   fields={"id": "1", "fill_qty": 1, "cost": None})
+    body = dict(date=day, meta={"warnings": []}, metrics={
+        "open_scalp_position_projection_status": "current_db_census"}, sections={
+        "recent_trades": [{"timeline": [event] * 9000}],
+        "open_scalp_position_projection": [dict(id=1, code="123456", timeline=[carried])],
+    })
+    path = service.save_monitor_snapshot("trade_review", day, body)
+    raw = path.read_bytes()
+    assert len(raw) < len(json.dumps(body, ensure_ascii=False, indent=2).encode())
+    assert json.loads(raw) == body
+    assert b'\n    "open_scalp_position_projection": [' in raw
+    manifest = directory / "manifests" / f"monitor_snapshot_manifest_{day}_postclose_exit.json"
+    manifest.parent.mkdir()
+    manifest.write_text(json.dumps(dict(target_date=day, profile="postclose_exit",
+        snapshot_paths={"trade_review": str(path)},
+        snapshot_sha256={"trade_review": hashlib.sha256(raw).hexdigest()})))
+    before = generation(path)
+    if compressed:
+        archive._gzip_file(path, dry_run=False)
+    projected, receipt = service.load_prior_entry_projection(day, data_root=tmp_path)
+    assert projected["sections"]["open_scalp_position_projection"][0]["timeline"] == [carried]
+    assert generation(path) == before
+    manifest.write_text(manifest.read_text().replace(hashlib.sha256(raw).hexdigest(), "0" * 64))
+    with pytest.raises(ValueError, match="source_hash_invalid"):
+        service.load_prior_entry_projection(day, data_root=tmp_path)
