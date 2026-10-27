@@ -44,6 +44,7 @@
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-27`, `Slot: PREOPEN`, `TimeWindow: 07:35~08:05`, `Track: RuntimeStability`)
   - 10/27 승인 통합: 95def870e와 final detector 잠금 admission 수리. 기존600초/06:50 경계·선택 재검증·새 영수증 및 과거07:29 지연 보존. [수리·검증](../audits/postclose-root-cause-recovery-review-2026-10-19.md#finalization-admission-and-holding-quote-integration-2026-10-27). 후보/선택 P5→ordered 전환→실제 PID 소비 검증 후 source27→10/28 무개입 수용은 기존 창에서 확인한다.
+  - 11:51 통합194307750/PID128751 기동·정책 소비 PASS. 두 보고서의 후속 코드 검증 연결 누락을 추가 수리한다. 원본·과거 지연·null 유지; 최종 선택/PID와 새 건강 검증은 같은 owner에서 이어간다.
   - 10/27 09:09 수량 통합198286cf2 전환: Main3940489 정상 drain 후 연구 부적격과 종료 검증의 혼동으로 선택 전 차단. 원 selector/실패 hold/종료 epoch 보존, 기존 ordered recovery에서 정확한 종료·과거 소비 검증과 CAS 인계를 수리하고 새 후보/P5→재기동/실제 소비까지 완료한다. [원인·보존·수리](../audits/postclose-root-cause-recovery-review-2026-10-19.md#quantity-historical-diagnostics-daily-handoff-2026-10-27).
   - 10/27 09:35 후속 검증: e930a7c95/PID4025821 실제 소비 후, 이전 collector latest의 정상 갱신을 immutable 변경으로 오인한 최종 전환 결함을 재현했다. 시작 전 현재 포인터/시작 후 불변 종료 증거의 수명을 분리하고, 기존 failed-hold CAS·원 정책 및 현재 PID 검증을 거쳐 보완본 전환·observer/health를 완료한다.
   - Source: [runtime_approval_summary_2026-10-26.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-10-26.json)

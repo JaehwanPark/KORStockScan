@@ -11517,6 +11517,36 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Reviewed exact family capability reader; no report or runtime policy mutation.
+REVIEWED_HOLDING_CAPABILITY_ORIGINS = {'src/engine/monitoring/policy_generation_code_handoff.py': '93f96eb1ee42111142201a257155616a246cd9d7b8bbbabe5560a24892c82120', 'src/engine/infrastructure/startup_validation_code_context.py': '4d8020b118e9a83c0faa372ced6c30df4b725643740710cce469a449adba7830'}
+REVIEWED_HOLDING_CAPABILITY_HASHES = {'src/engine/monitoring/policy_generation_code_handoff.py': '7f557af576c9bf36a8311b713cd6bbde2de40ad7c626b983c75952526d672529', 'src/engine/infrastructure/startup_validation_code_context.py': '39769bb29e24735db71e036385f9c86a4395bc9ce1001a6ca8b0cfb1dcf29bd5'}
+REVIEWED_HOLDING_CAPABILITY_PROFILE = {
+    **REVIEWED_FINALIZATION_ADMISSION_PROFILE, **REVIEWED_HOLDING_CAPABILITY_HASHES
+}
+REVIEWED_HOLDING_CAPABILITY_VARIANTS = {
+    (key[0], REVIEWED_HOLDING_CAPABILITY_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_HOLDING_CAPABILITY_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_HOLDING_CAPABILITY_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_HOLDING_CAPABILITY_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_FINALIZATION_ADMISSION_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+                    for value in pair} | {REVIEWED_FINALIZATION_ADMISSION_PROFILE.get(name, REVIEWED_HOLDING_CAPABILITY_ORIGINS[name])}
+    )
+    for name, current in REVIEWED_HOLDING_CAPABILITY_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -12213,6 +12243,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_FINALIZATION_ADMISSION_PROFILE
         prepared_variants = REVIEWED_FINALIZATION_ADMISSION_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/infrastructure/startup_validation_code_context.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_HOLDING_CAPABILITY_HASHES["src/engine/infrastructure/startup_validation_code_context.py"]
+    ):
+        prepared_hashes = REVIEWED_HOLDING_CAPABILITY_PROFILE
+        prepared_variants = REVIEWED_HOLDING_CAPABILITY_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

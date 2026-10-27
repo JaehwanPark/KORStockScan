@@ -2566,6 +2566,15 @@ for _name, _sha in REVIEWED_FINALIZATION_ADMISSION_SOURCES.items():
     _history.update((old, _sha) for old in _prior)
 
 
+
+# Exact reviewed holding-source capability reader; retain original generations.
+REVIEWED_HOLDING_CAPABILITY_SOURCES = {'src/engine/monitoring/policy_generation_code_handoff.py': '7f557af576c9bf36a8311b713cd6bbde2de40ad7c626b983c75952526d672529'}
+REVIEWED_HOLDING_CAPABILITY_ORIGINS = {'src/engine/monitoring/policy_generation_code_handoff.py': '93f96eb1ee42111142201a257155616a246cd9d7b8bbbabe5560a24892c82120'}
+for _name, _sha in REVIEWED_HOLDING_CAPABILITY_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _prior = {v for pair in _history for v in pair} | {REVIEWED_HOLDING_CAPABILITY_ORIGINS[_name]}
+    _history.update((_old, _sha) for _old in _prior)
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

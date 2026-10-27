@@ -985,6 +985,25 @@ REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["holding_vote"] += (
 )
 
 
+# Reviewed 95def holding-only market eligibility and exact 0B/custody repair.
+# Shared handler bytes change capability generations, not these family reports.
+# Bind the preserved 10/23 and 10/26 originals directly; fresh exact-generation
+# fixtures remain mandatory, with their original contracts and null economics.
+# Review: postclose-root-cause-recovery-review-2026-10-19.md, 2026-10-27 integration.
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["rising_missed"] += (
+    ("6d662d9e2cc6f67ec9945dfa3d9da37e3acd22765cc48a1c30d95b892a432eb7",
+     "9019999ecd6e980cf5dfe689bed7815c08b16632c65a879b6d202c4e305bd791"),
+    ("28baa874610d6f76379c6be1fe4f76accbbfbc5f473b0c4ffcb2f323cdf75922",
+     "9019999ecd6e980cf5dfe689bed7815c08b16632c65a879b6d202c4e305bd791"),
+)
+REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["holding_vote"] += (
+    ("2c8493a70cb399e336773c02f3d292d2f5d225fe742750089049b63ecc1a23b0",
+     "05037a9d11e962bb160d3fa3e589935f36ab2290d5e087b25a98f8ed5f6e81cf"),
+    ("7f30d09769b17801ad614d2403ca5742c5a45d4e56fb27212447de1384829386",
+     "05037a9d11e962bb160d3fa3e589935f36ab2290d5e087b25a98f8ed5f6e81cf"),
+)
+
+
 def current_fixture_observation(observed, data):
     family = observed.get("family")
     pair = REVIEWED_SUCCESSORS.get(family)
