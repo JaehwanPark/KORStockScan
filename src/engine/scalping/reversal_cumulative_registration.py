@@ -7,6 +7,7 @@ import fcntl
 import json
 import hashlib
 import re
+import math
 from datetime import date
 from fractions import Fraction
 from functools import lru_cache
@@ -20,6 +21,119 @@ SCHEMA = "main_cumulative_registration_request_v2"
 PREPARED = "main_cumulative_registration_prepared_v2"
 AUTHORITY = "APPROVED_CUMULATIVE_POLICY_REGISTRATION_V2"
 SELECTION_AUTHORITY = "APPROVED_FIXED_CUMULATIVE_VARIANT_SELECTION_V2"
+
+
+SCORING_SCHEMA = "cumulative_scoring_contract_v1"
+SCORING_AUTHORITY = "APPROVED_REGULAR_NONFIXED_CHRONOLOGICAL_WILSON_V1"
+SCORE_VERSION = "chronological_target_first_wilson_v1"
+SCOPED_METRIC = "scope_bound_chronological_wilson_and_raw_fraction"
+SCORE_Z = 1.959963984540054
+STATISTICAL_WINDOW = 1800
+SCORING_ALIASES = {
+    "other_non_fixed|REGULAR|LT_20000|SOR": ("A05", "A09"),
+    "other_non_fixed|REGULAR|20000_TO_100000|SOR": ("A08",),
+    "other_non_fixed|REGULAR|GE_100000|SOR": ("A12", "A14"),
+}
+
+
+def scoring_spec():
+    return dict(
+        version=SCORE_VERSION,
+        z=SCORE_Z,
+        seconds=STATISTICAL_WINDOW,
+        unit="first_confirmation_per_day_symbol_route",
+        unresolved_occupies_window=True,
+        label_contract=C.LABEL,
+    )
+
+
+def wilson_score(w, n):
+    if type(w) is not int or type(n) is not int or not 0 <= w <= n:
+        raise ValueError("cumulative_counts_invalid")
+    if not n:
+        return None
+    p, z = w / n, SCORE_Z
+    return (
+        p + z * z / (2 * n) - z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
+    ) / (1 + z * z / n)
+
+
+def validate_scoring(contract, *, approved=True, check_sources=False):
+    if not isinstance(contract, dict) or (
+        contract.get("schema") != SCORING_SCHEMA
+        or contract.get("artifact_content_sha256")
+        != P.seal(contract)["artifact_content_sha256"]
+        or contract.get("spec") != scoring_spec()
+        or contract.get("operator_receipt") != (SCORING_AUTHORITY if approved else None)
+        or set(contract.get("scopes", {})) != set(SCORING_ALIASES)
+        or any(contract.get(k) != v for k, v in P.AUTH.items())
+    ):
+        raise ValueError("cumulative_scoring_contract_invalid")
+    _dates(contract.get("publication_date"), contract.get("target_date"))
+    for name in ("parent_bundle_sha256", "source_manifest_sha256", "registry_sha256"):
+        if not re.fullmatch("[0-9a-f]{64}", str(contract.get(name, ""))):
+            raise ValueError("cumulative_scoring_binding_invalid")
+    batch = contract.get("research_batch_sha256")
+    catalog = Q.catalog(batch)
+    if contract["registry_sha256"] != Q.registry(batch):
+        raise ValueError("cumulative_scoring_registry_changed")
+    for sid, aliases in SCORING_ALIASES.items():
+        cfg = contract["scopes"][sid]
+        base = cfg.get("parent_branch_ids", [])
+        expected = {
+            "ADD_" + a: sorted(set(base) | {catalog["groups"][sid]["additions"][a]})
+            for a in aliases
+        }
+        if cfg.get("alternatives") != expected or any(
+            ids != sorted(set(ids)) or not Q.valid_membership(sid, ids, batch)
+            for ids in [base, *expected.values()]
+        ):
+            raise ValueError("cumulative_scoring_membership_invalid")
+    receipts = contract.get("source_receipts")
+    if not isinstance(receipts, list) or not receipts:
+        raise ValueError("cumulative_scoring_source_missing")
+    for r in receipts:
+        if (
+            not isinstance(r, dict)
+            or not Path(r.get("path", "")).is_absolute()
+            or not re.fullmatch("[0-9a-f]{64}", str(r.get("sha256", "")))
+        ):
+            raise ValueError("cumulative_scoring_source_invalid")
+        if check_sources and P.file_hash(r["path"]) != r["sha256"]:
+            raise ValueError("cumulative_scoring_source_changed")
+    if not contract.get("contract_file_sha256"):
+        raise ValueError("cumulative_scoring_code_missing")
+    return contract
+
+
+def scoring_for_build(data_root, parent, day, source_sha):
+    old = parent["continuous_reversal"]["operating_manifest"].get(
+        "cumulative_scoring_contract"
+    )
+    path = N.root(Path(data_root)) / "cumulative-scoring.json"
+    request = N._read(path) if path.exists() else old
+    if request is None:
+        return None
+    validate_scoring(request, check_sources=True)
+    if (
+        approval(parent["continuous_reversal"]["operating_manifest"])[
+            "research_batch_sha256"
+        ]
+        != request["research_batch_sha256"]
+    ):
+        raise ValueError("cumulative_scoring_parent_registry_changed")
+    if old and request["artifact_content_sha256"] == old.get("artifact_content_sha256"):
+        return request
+    if (
+        request["parent_bundle_sha256"] != parent["bundle_sha256"]
+        or request["publication_date"] != day
+        or request["source_manifest_sha256"] != source_sha
+    ):
+        raise ValueError("cumulative_scoring_parent_source_or_date_changed")
+    scopes = parent["continuous_reversal"]["operating_manifest"]["scopes"]
+    if any(scopes[s] != c["parent_branch_ids"] for s, c in request["scopes"].items()):
+        raise ValueError("cumulative_scoring_parent_membership_changed")
+    return request
 
 
 def pending_path(data_root):
@@ -119,15 +233,39 @@ def counts(metric):
     return w, n
 
 
-def select_variant(group, current, metrics, *, authority):
-    if authority != SELECTION_AUTHORITY:
+def select_variant(
+    group, current, metrics, *, authority, scoring=None, scope=None, research_only=False
+):
+    if authority != (None if research_only else SELECTION_AUTHORITY):
         raise ValueError("cumulative_selection_not_delegated")
+    if research_only and scoring is None:
+        raise ValueError("cumulative_scoring_research_contract_missing")
+    if scoring is not None:
+        validate_scoring(scoring, approved=not research_only)
+        if (
+            scope not in scoring["scopes"]
+            or group["alternatives"] != scoring["scopes"][scope]["alternatives"]
+        ):
+            raise ValueError("cumulative_scoring_scope_changed")
     variants = dict(group["alternatives"], CURRENT_NATIVE=sorted(current))
     baseline = metrics.get("CURRENT_NATIVE") or {}
     cohort = baseline.get("source_universe_sha256")
     usable = []
     for name, ids in variants.items():
         m = metrics.get(name) or {}
+        if scoring is not None:
+            if (
+                m.get("statistic_contract_sha256") != P.digest(scoring_spec())
+                or m.get("scoring_contract_sha256")
+                != scoring["artifact_content_sha256"]
+            ):
+                raise ValueError("cumulative_scoring_metric_contract_changed")
+            m = dict(
+                m,
+                counts=(m.get("chronological") or {}).get("counts", {}),
+                comparison_complete=m.get("comparison_complete") is True
+                and m.get("statistic_source_complete") is True,
+            )
         w, n = counts(m)
         if (
             not n
@@ -140,7 +278,58 @@ def select_variant(group, current, metrics, *, authority):
         usable.append(dict(name=name, ids=ids, w=w, n=n))
     old = next((x for x in usable if x["name"] == "CURRENT_NATIVE"), None)
     if old is None:
-        return dict(branch_ids=sorted(current), status="comparison_incomplete_carry")
+        return dict(
+            branch_ids=sorted(current),
+            status="comparison_incomplete_carry",
+            **(dict(research_only=True) if research_only else {}),
+            **(
+                dict(
+                    research_ranking=[
+                        dict(
+                            variant=x["name"],
+                            wins=x["w"],
+                            resolved=x["n"],
+                            score=wilson_score(x["w"], x["n"]),
+                        )
+                        for x in sorted(
+                            usable,
+                            key=lambda x: (
+                                -wilson_score(x["w"], x["n"]),
+                                -x["w"],
+                                len(x["ids"]),
+                                x["name"],
+                            ),
+                        )
+                    ]
+                )
+                if scoring
+                else {}
+            ),
+        )
+    if scoring is not None:
+        winner = min(
+            usable,
+            key=lambda x: (
+                -wilson_score(x["w"], x["n"]),
+                -x["w"],
+                x["name"] != "CURRENT_NATIVE",
+                len(x["ids"]),
+                x["name"],
+            ),
+        )
+        if wilson_score(winner["w"], winner["n"]) <= wilson_score(old["w"], old["n"]):
+            winner = old
+        return dict(
+            branch_ids=winner["ids"],
+            variant=winner["name"],
+            status="selected" if winner["ids"] != sorted(current) else "carried",
+            **(dict(research_only=True) if research_only else {}),
+            wins=winner["w"],
+            resolved=winner["n"],
+            score=wilson_score(winner["w"], winner["n"]),
+            statistic_contract_sha256=P.digest(scoring_spec()),
+            scoring_contract_sha256=scoring["artifact_content_sha256"],
+        )
     best = max((Fraction(x["w"], x["n"]), x["w"]) for x in usable)
     ties = [x for x in usable if (Fraction(x["w"], x["n"]), x["w"]) == best]
     winner = min(
@@ -513,6 +702,9 @@ def apply_selection(machine, parent):
     if not registered:
         return machine
     current = parent["continuous_reversal"]["operating_manifest"]["scopes"]
+    scoring = manifest.get("cumulative_scoring_contract")
+    if scoring is not None:
+        validate_scoring(scoring)
     chosen = {}
     complete = machine.get("status") == "completed" and bool(
         machine.get("source_manifest_receipt")
@@ -522,7 +714,10 @@ def apply_selection(machine, parent):
         cohort = P.digest(
             [machine["source_manifest_sha256"], sid, machine["label_contract"]]
         )
-        alternatives = Q.variants(sid, batch)
+        scoped = scoring if scoring and sid in scoring["scopes"] else None
+        alternatives = (
+            scoped["scopes"][sid]["alternatives"] if scoped else Q.variants(sid, batch)
+        )
         metrics = {
             name: dict(
                 machine["proposal_metrics"].get(sid + "::" + name) or {},
@@ -537,6 +732,8 @@ def apply_selection(machine, parent):
             current[sid],
             metrics,
             authority=manifest.get("cumulative_selection_authority"),
+            scoring=scoped,
+            scope=sid,
         )
         manifest["scopes"][sid] = chosen[sid]["branch_ids"]
     manifest["definitions"] = {
@@ -551,7 +748,19 @@ def apply_selection(machine, parent):
     )
     manifest["cumulative_selection_receipt"] = P.seal(
         dict(
-            schema="cumulative_variant_selection_v2",
+            schema=(
+                "cumulative_variant_selection_v3"
+                if scoring
+                else "cumulative_variant_selection_v2"
+            ),
+            **(
+                dict(
+                    scoring_contract_sha256=scoring["artifact_content_sha256"],
+                    statistic_contract_sha256=P.digest(scoring_spec()),
+                )
+                if scoring
+                else {}
+            ),
             authority=SELECTION_AUTHORITY,
             parent_bundle_sha256=parent["bundle_sha256"],
             source_manifest_sha256=machine["source_manifest_sha256"],
@@ -564,7 +773,9 @@ def apply_selection(machine, parent):
             machine,
             operating_manifest=manifest,
             cumulative_selection=chosen,
-            variant_selection_basis="cumulative_target_first_win_fraction",
+            variant_selection_basis=(
+                SCORE_VERSION if scoring else "cumulative_target_first_win_fraction"
+            ),
         )
     )
 
@@ -586,6 +797,36 @@ def validate_manifest(manifest):
     ):
         raise ValueError("cumulative_variant_authority_changed")
     receipt = manifest.get("cumulative_selection_receipt")
+    scoring = manifest.get("cumulative_scoring_contract")
+    if scoring is not None:
+        validate_scoring(scoring)
+        if (
+            not receipt
+            or receipt.get("schema") != "cumulative_variant_selection_v3"
+            or receipt.get("scoring_contract_sha256")
+            != scoring["artifact_content_sha256"]
+            or receipt.get("statistic_contract_sha256") != P.digest(scoring_spec())
+            or scoring["research_batch_sha256"] != batch
+        ):
+            raise ValueError("cumulative_scoring_receipt_invalid")
+        for sid in scoring["scopes"]:
+            selected = receipt.get("selected", {}).get(sid, {})
+            if selected.get("status") == "selected" and scoring["scopes"][sid][
+                "alternatives"
+            ].get(selected.get("variant")) != selected.get("branch_ids"):
+                raise ValueError("cumulative_scoring_selected_variant_invalid")
+            if selected.get("status") == "comparison_incomplete_carry":
+                continue
+            if (
+                selected.get("score")
+                != wilson_score(selected.get("wins"), selected.get("resolved"))
+                or selected.get("scoring_contract_sha256")
+                != scoring["artifact_content_sha256"]
+                or selected.get("statistic_contract_sha256") != P.digest(scoring_spec())
+            ):
+                raise ValueError("cumulative_scoring_selected_metric_invalid")
+    elif receipt and receipt.get("schema") != "cumulative_variant_selection_v2":
+        raise ValueError("cumulative_selection_schema_invalid")
     if receipt and (
         receipt.get("artifact_content_sha256")
         != P.seal(receipt)["artifact_content_sha256"]
@@ -654,6 +895,154 @@ def run_postclose(data_root, day, publication, mode, *, source=None):
     return O.initial_reports(data_root, day, publication, parent, machine)
 
 
+def prepare_scoring(data_root, output, *, parent, day):
+    """Freeze a completed native comparison; no selection pointer is written."""
+    from src.engine.automation import postclose_summary_handoff as H
+    from src.engine.scalping import continuous_reversal_operating_postclose as O
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+
+    issues = H.stage_receipt_issues(
+        Path(data_root) / "report", day, "main_machine_policy"
+    )
+    if issues:
+        raise ValueError(
+            "cumulative_scoring_source_terminal_invalid:" + ",".join(issues)
+        )
+    path = O.directory(data_root, day) / "machine.json"
+    machine = N._read(path)
+    if (
+        machine.get("artifact_content_sha256")
+        != P.seal(machine)["artifact_content_sha256"]
+        or machine.get("source_date") != day
+        or machine.get("status") != "completed"
+        or machine.get("parent_bundle_sha256") != parent["bundle_sha256"]
+        or machine.get("label_contract") != C.LABEL
+    ):
+        raise ValueError("cumulative_scoring_native_comparison_invalid")
+    N.validate(parent, target_date=parent["target_date"])
+    receipt = machine.get("source_manifest_receipt") or {}
+    source = P.ensure_population(
+        data_root,
+        day,
+        source_generation=receipt.get("source_generation"),
+        expected_sha256=machine["source_manifest_sha256"],
+    )
+    if P.population_receipt(source) != receipt or not any(
+        r["day"] == day and r["venue"] == "SOR" and "REGULAR" in r["session"]
+        for r in source["normalized_sources"]["partitions"]
+    ):
+        raise ValueError("cumulative_scoring_current_source_missing")
+    manifest = parent["continuous_reversal"]["operating_manifest"]
+    batch = approval(manifest)["research_batch_sha256"]
+    catalog = Q.catalog(batch)
+    scopes = {}
+    for sid, aliases in SCORING_ALIASES.items():
+        ids = sorted(manifest["scopes"][sid])
+        scopes[sid] = dict(
+            parent_branch_ids=ids,
+            alternatives={
+                "ADD_" + a: sorted(set(ids) | {catalog["groups"][sid]["additions"][a]})
+                for a in aliases
+            },
+        )
+    output = Path(output)
+    sources = [
+        _archive(q, output / "evidence")
+        for q in (
+            path,
+            Path(receipt["path"]),
+            H.stage_path(Path(data_root) / "report", day, "main_machine_policy"),
+        )
+    ]
+    contract = P.seal(
+        dict(
+            schema=SCORING_SCHEMA,
+            spec=scoring_spec(),
+            operator_receipt=None,
+            parent_bundle_sha256=parent["bundle_sha256"],
+            source_manifest_sha256=source["artifact_content_sha256"],
+            publication_date=day,
+            target_date=N.next_target(day),
+            scopes=scopes,
+            research_batch_sha256=batch,
+            registry_sha256=Q.registry(batch),
+            source_receipts=sources,
+            contract_file_sha256={
+                Path(m.__file__).name: P.file_hash(m.__file__)
+                for m in V.contract_modules()
+            },
+            **P.AUTH,
+        )
+    )
+    validate_scoring(contract, approved=False, check_sources=True)
+    destination = output / "prepared-scoring.json"
+    if destination.exists() and N._read(destination) != contract:
+        raise ValueError("cumulative_scoring_preparation_conflict")
+    P.write(destination, contract)
+    return contract
+
+
+def intake_scoring(data_root, prepared_path, *, confirm, origin_root, origin_commit):
+    """Explicit activation request under the existing policy publisher lock."""
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+
+    if confirm != SCORING_AUTHORITY:
+        raise ValueError("cumulative_scoring_explicit_authority_required")
+    prepared = validate_scoring(
+        N._read(Path(prepared_path)), approved=False, check_sources=True
+    )
+    if prepared["contract_file_sha256"] != {
+        Path(m.__file__).name: P.file_hash(m.__file__) for m in V.contract_modules()
+    }:
+        raise ValueError("cumulative_scoring_prepared_code_changed")
+    parent = V._attested_activation_parent(
+        data_root,
+        prepared["publication_date"],
+        origin_root=origin_root,
+        origin_commit=origin_commit,
+    )
+    if parent["bundle_sha256"] != prepared["parent_bundle_sha256"]:
+        raise ValueError("cumulative_scoring_parent_changed")
+    request = P.seal(dict(prepared, operator_receipt=confirm))
+    validate_scoring(request, check_sources=True)
+    root = N.root(Path(data_root))
+    with (root / "publisher.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if (
+            N._read(root / "current.json")["bundle_sha256"]
+            != prepared["parent_bundle_sha256"]
+        ):
+            raise ValueError("cumulative_scoring_parent_changed")
+        path = root / "cumulative-scoring.json"
+        if path.exists() and N._read(path) != request:
+            raise ValueError("cumulative_scoring_request_conflict")
+        if pending(data_root, parent, prepared["target_date"]) is not None:
+            raise ValueError("cumulative_scoring_conflicts_with_registration")
+        manifest = parent["continuous_reversal"]["operating_manifest"]
+        consumed_hashes = {
+            r.get("artifact_content_sha256")
+            for r in manifest.get("registration_receipts", [])
+            + [manifest.get("change_receipt") or {}]
+        }
+        for name in (
+            "extended-registration.json",
+            "residual-registration.json",
+            "joint-registration.json",
+        ):
+            other_path = root / name
+            if other_path.exists():
+                other = N._read(other_path)
+                if (
+                    other.get("parent_bundle_sha256") == parent["bundle_sha256"]
+                    and other.get("artifact_content_sha256") not in consumed_hashes
+                ):
+                    raise ValueError(
+                        "cumulative_scoring_conflicts_with_registration:" + name
+                    )
+        P.write(path, request)
+    return request
+
+
 def main(argv=None):
     import argparse
 
@@ -670,6 +1059,15 @@ def main(argv=None):
         adopt.add_argument("--" + name, type=Path, required=True)
     adopt.add_argument("--origin-commit", required=True)
     adopt.add_argument("--confirm", required=True)
+    scoring = sub.add_parser("prepare-scoring")
+    for name in ("data-root", "output", "parent"):
+        scoring.add_argument("--" + name, type=Path, required=True)
+    scoring.add_argument("--source-date", required=True)
+    activate = sub.add_parser("intake-scoring")
+    for name in ("data-root", "prepared", "origin-root"):
+        activate.add_argument("--" + name, type=Path, required=True)
+    activate.add_argument("--origin-commit", required=True)
+    activate.add_argument("--confirm", required=True)
     args = parser.parse_args(argv)
     if args.operation == "prepare":
         result = prepare(
@@ -680,6 +1078,21 @@ def main(argv=None):
             publication=args.publication_date,
             target_date=args.target_date,
             research_batch=args.research_batch_sha256,
+        )
+    elif args.operation == "prepare-scoring":
+        result = prepare_scoring(
+            args.data_root,
+            args.output,
+            parent=N._read(args.parent),
+            day=args.source_date,
+        )
+    elif args.operation == "intake-scoring":
+        result = intake_scoring(
+            args.data_root,
+            args.prepared,
+            confirm=args.confirm,
+            origin_root=args.origin_root,
+            origin_commit=args.origin_commit,
         )
     else:
         result = intake(

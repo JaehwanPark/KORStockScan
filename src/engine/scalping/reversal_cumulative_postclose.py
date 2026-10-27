@@ -6,6 +6,9 @@ from src.engine.scalping.continuous_reversal_source import iter_normalized_symbo
 import copy
 import gzip
 import json
+import math
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from collections import Counter, defaultdict
 from pathlib import Path
 from src.engine.ai import offline_comparison_store as S
@@ -20,6 +23,157 @@ from src.engine.scalping import reversal_extended_runtime as LIVE
 from src.engine.scalping import reversal_operating_evaluation as E
 from src.engine.scalping.reversal_cumulative_runtime import prefix_features
 from src.engine.scalping.reversal_extended_state import State
+
+
+def chronological_points(points):
+    """A failed or unresolved first confirmation consumes the same window as a win."""
+    unique = {}
+    for point in points:
+        key = point["opportunity_key"]
+        if key in unique and unique[key] != point:
+            raise ValueError("cumulative_statistical_key_conflict")
+        unique[key] = point
+    result, until = [], {}
+    for p in sorted(
+        unique.values(),
+        key=lambda x: (
+            x["day"],
+            x["symbol"],
+            x["route"],
+            x["confirmation_epoch"],
+            x["opportunity_key"],
+        ),
+    ):
+        bucket = (p["day"], p["symbol"], p["route"])
+        at = p["confirmation_epoch"]
+        if type(at) not in (int, float) or not math.isfinite(at):
+            raise ValueError("cumulative_confirmation_clock_invalid")
+        if at < until.get(bucket, -math.inf):
+            continue
+        result.append(p)
+        until[bucket] = at + G.STATISTICAL_WINDOW
+    return result
+
+
+def chronological_metric(points):
+    value = E.metric(Counter(p["outcome"]["status"] for p in points))
+    value["score"] = G.wilson_score(value["wins"], value["resolved"])
+    return value
+
+
+def scoring_metrics(records, configs, current, contract, store, *, research_only=False):
+    """Read existing point objects once; the full table owns keys, projections only counts."""
+    G.validate_scoring(contract, approved=not research_only)
+    points = defaultdict(list)
+    excluded = defaultdict(list)
+    for p in records:
+        sid = p["scope"]
+        if sid not in contract["scopes"]:
+            continue
+        ids = {b for v in configs[sid].values() for b in v}
+        if not any(p["truth"].get(b) == "TRUE" for b in ids):
+            continue
+        event, _ = store.get(p["snapshot_obj"])
+        at, route = event.get("epoch"), sid.rsplit("|", 1)[1]
+        try:
+            clock_valid = (
+                type(at) in (int, float)
+                and math.isfinite(at)
+                and datetime.fromtimestamp(at, ZoneInfo("Asia/Seoul"))
+                .date()
+                .isoformat()
+                == p["day"]
+            )
+        except (ValueError, OverflowError, OSError):
+            clock_valid = False
+        if (
+            not clock_valid
+            or event.get("symbol") != p["symbol"]
+            or event.get("venue") != route
+            or event.get("source_item") != p["symbol"] + "_AL"
+            or p["outcome"].get("status")
+            not in ("WIN", "FAIL_STOP", "FAIL_TIMEOUT", "UNRESOLVED")
+        ):
+            excluded[sid].append(p["opportunity_key"])
+            continue
+        points[sid].append(dict(p, confirmation_epoch=at, route=route))
+    metrics, effects = {}, {}
+    for sid in contract["scopes"]:
+        selected = {}
+        for name, ids in configs[sid].items():
+            rows = [
+                p for p in points[sid] if any(p["truth"].get(b) == "TRUE" for b in ids)
+            ]
+            seq = chronological_points(rows)
+            selected[name] = {p["opportunity_key"]: p for p in seq}
+            c = chronological_metric(seq)
+            c.update(
+                by_day={
+                    d: chronological_metric([p for p in seq if p["day"] == d])
+                    for d in sorted({p["day"] for p in points[sid]})
+                },
+                by_symbol={
+                    v: chronological_metric([p for p in seq if p["symbol"] == v])
+                    for v in sorted({p["symbol"] for p in seq})
+                },
+            )
+            metrics[sid + "::" + name] = dict(
+                E.metric(Counter(p["outcome"]["status"] for p in rows)),
+                chronological=c,
+                statistic_contract_sha256=P.digest(G.scoring_spec()),
+                scoring_contract_sha256=contract["artifact_content_sha256"],
+                statistic_source_complete=True,
+                statistic_excluded_rows=len(excluded[sid]),
+            )
+        baseline = selected["CURRENT_NATIVE"]
+        bykey = {p["opportunity_key"]: p for p in points[sid]}
+        baseline_raw = {
+            k
+            for k, p in bykey.items()
+            if any(p["truth"].get(b) == "TRUE" for b in current[sid])
+        }
+        for name, rows in selected.items():
+            added, removed = sorted(rows.keys() - baseline.keys()), sorted(
+                baseline.keys() - rows.keys()
+            )
+            ids = configs[sid][name]
+            addition = [
+                p
+                for k, p in bykey.items()
+                if k not in baseline_raw
+                and any(p["truth"].get(b) == "TRUE" for b in ids)
+            ]
+            variant_raw = {
+                k
+                for k, p in bykey.items()
+                if any(p["truth"].get(b) == "TRUE" for b in ids)
+            }
+            effects[sid + "::" + name] = dict(
+                added=E.metric(
+                    Counter(
+                        bykey[k]["outcome"]["status"]
+                        for k in variant_raw - baseline_raw
+                    )
+                ),
+                removed=E.metric(
+                    Counter(
+                        bykey[k]["outcome"]["status"]
+                        for k in baseline_raw - variant_raw
+                    )
+                ),
+                chronological_added=chronological_metric([rows[k] for k in added]),
+                chronological_removed=chronological_metric(
+                    [baseline[k] for k in removed]
+                ),
+                selected_keys=sorted(rows),
+                added_keys=added,
+                removed_keys=removed,
+                incremental_standalone=chronological_metric(
+                    chronological_points(addition)
+                ),
+                excluded_keys=sorted(excluded[sid]),
+            )
+    return metrics, effects
 
 
 def materialize(store, point, ids):
@@ -129,6 +283,15 @@ def build(data_root, day, publication, parent, *, source=None, publish_outputs=T
         != P.seal(source)["artifact_content_sha256"]
     ):
         raise ValueError("cumulative_source_manifest_changed")
+    scoring = G.scoring_for_build(
+        data_root, parent, publication, source["artifact_content_sha256"]
+    )
+    if scoring is not None:
+        if change:
+            raise ValueError("cumulative_scoring_conflicts_with_registration")
+        if day != publication:
+            raise ValueError("cumulative_scoring_observation_publication_mismatch")
+        manifest["cumulative_scoring_contract"] = scoring
     out = O.directory(data_root, day)
     out.mkdir(parents=True, exist_ok=True)
     configs = {}
@@ -139,6 +302,9 @@ def build(data_root, day, publication, parent, *, source=None, publish_outputs=T
             if sid in registered
             else dict(CURRENT_NATIVE=current[sid])
         )
+    if scoring is not None:
+        for sid, cfg in scoring["scopes"].items():
+            configs[sid] = dict(cfg["alternatives"], CURRENT_NATIVE=current[sid])
     code = {
         Path(m.__file__).name: P.file_hash(m.__file__) for m in V.contract_modules()
     }
@@ -149,7 +315,7 @@ def build(data_root, day, publication, parent, *, source=None, publish_outputs=T
     canonical = {}
     conflicts = set()
     partitions = []
-    receipts = []
+    receipts = list(scoring["source_receipts"]) if scoring else []
     bars = {}
     census = Counter()
     observed = Counter()
@@ -391,6 +557,14 @@ def build(data_root, day, publication, parent, *, source=None, publish_outputs=T
                     ("added", union & ~baseline),
                 ]
             }
+    if scoring is not None:
+        with S.Store(data_root, readonly=True) as store:
+            scored, deltas = scoring_metrics(
+                canonical.values(), configs, current, scoring, store
+            )
+        for key, value in scored.items():
+            metrics[key].update(value)
+            effects[key].update(deltas[key])
     source_receipt = P.population_receipt(source)
     if source_receipt:
         receipts.append(source_receipt)
@@ -427,7 +601,22 @@ def build(data_root, day, publication, parent, *, source=None, publish_outputs=T
             source_quality_gate="frozen_source_hash_and_eligible_rows_only",
             metric_role="main_entry_win_rate_selection",
             decision_authority="registered_fixed_variant_selection_only",
-            primary_decision_metric="cost_bound_cumulative_target_first_fraction",
+            primary_decision_metric=(
+                G.SCOPED_METRIC
+                if scoring
+                else "cost_bound_cumulative_target_first_fraction"
+            ),
+            **(
+                dict(
+                    scoring_contract=scoring,
+                    statistic_contract=G.scoring_spec(),
+                    scope_decision_metrics={
+                        sid: G.SCORE_VERSION for sid in scoring["scopes"]
+                    },
+                )
+                if scoring
+                else {}
+            ),
             sample_floor="none",
             window_policy="all_eligible_cumulative_source_from_2026_09_29",
             forbidden_uses=[
@@ -454,7 +643,16 @@ def build(data_root, day, publication, parent, *, source=None, publish_outputs=T
     # and semantic readers consume the bounded selected/current projection.
     table = P.seal(
         dict(
-            schema="cumulative_fixed_comparison_table_v2",
+            schema=(
+                "cumulative_fixed_comparison_table_v3"
+                if scoring
+                else "cumulative_fixed_comparison_table_v2"
+            ),
+            **(
+                dict(scoring_contract=scoring, statistic_contract=G.scoring_spec())
+                if scoring
+                else {}
+            ),
             parent_bundle_sha256=parent["bundle_sha256"],
             source_manifest_sha256=source["artifact_content_sha256"],
             fixed_proposals=configs,
@@ -505,7 +703,11 @@ def build(data_root, day, publication, parent, *, source=None, publish_outputs=T
             small_metrics[sid + "::" + name] = metrics.get(
                 sid + "::" + origin, metrics[sid + "::CURRENT_NATIVE"]
             )
-        selected_effects[sid] = effects[sid + "::" + selected]
+        selected_effects[sid] = {
+            k: v
+            for k, v in effects[sid + "::" + selected].items()
+            if not k.endswith("_keys")
+        }
     report = P.seal(
         dict(
             report,

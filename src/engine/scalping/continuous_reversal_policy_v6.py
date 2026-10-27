@@ -157,6 +157,7 @@ def detector_manifest(parent, *, effective_date, changes=None):
             "cumulative_variant_groups",
             "cumulative_selection_authority",
             "cumulative_selection_receipt",
+            "cumulative_scoring_contract",
         ):
             if name in old:
                 manifest[name] = copy.deepcopy(old[name])
@@ -170,6 +171,7 @@ def detector_manifest(parent, *, effective_date, changes=None):
         manifest["cumulative_variant_groups"] = copy.deepcopy(changes["variant_groups"])
         manifest["cumulative_selection_authority"] = changes["selection_authority"]
         manifest.pop("cumulative_selection_receipt", None)
+        manifest.pop("cumulative_scoring_contract", None)
     # Effective date, receipt and report lineage do not reset identical FSMs.
     manifest["detector_manifest_hash"] = digest(
         {k: manifest[k] for k in ("schema", "scopes", "definitions", "registry_sha256")}
@@ -237,6 +239,16 @@ def validate_family(f):
     from src.engine.scalping import reversal_cumulative_registration as Q
 
     cumulative = Q.validate_manifest(m)
+    if m.get("cumulative_scoring_contract"):
+        receipt = m["cumulative_selection_receipt"]
+        if (
+            f.get("selection_metric") != Q.SCOPED_METRIC
+            or receipt["parent_bundle_sha256"] != f.get("parent_bundle_sha256")
+            or receipt["source_manifest_sha256"] != f.get("source_manifest_sha256")
+        ):
+            raise ValueError("v6_cumulative_scoring_metric_or_source_changed")
+    elif f.get("selection_metric") == Q.SCOPED_METRIC:
+        raise ValueError("v6_cumulative_scoring_contract_missing")
     if m.get("approved_variant_groups"):
         from src.engine.scalping import reversal_joint_registration as J
 
@@ -1244,7 +1256,11 @@ def stage(
             publication_date=publication,
             effective_date=target_date,
             effective_mode=effective_mode,
-            selection_metric="cumulative_raw_win_fraction",
+            selection_metric=(
+                Q.SCOPED_METRIC
+                if machine["operating_manifest"].get("cumulative_scoring_contract")
+                else "cumulative_raw_win_fraction"
+            ),
             release_commit=release_commit,
             parent_bundle_sha256=parent["bundle_sha256"],
             native_parent_bundle=native,

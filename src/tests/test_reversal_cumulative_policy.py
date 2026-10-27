@@ -1100,3 +1100,517 @@ def test_original_source_unknown_remains_unknown_through_refinement(
     assert not signals
     assert state.coverage_snapshot[child] == "UNKNOWN"
     assert state.coverage_counts[child]["UNKNOWN"] > 0
+
+
+def scoring_contract():
+    from src.engine.scalping import continuous_reversal_postclose as P
+
+    return P.seal(
+        dict(
+            schema=R.SCORING_SCHEMA,
+            spec=R.scoring_spec(),
+            operator_receipt=R.SCORING_AUTHORITY,
+            publication_date="2026-10-27",
+            target_date="2026-10-28",
+            parent_bundle_sha256="e" * 64,
+            source_manifest_sha256="b" * 64,
+            research_batch_sha256=Q.RESEARCH_RESULT,
+            registry_sha256=Q.registry(),
+            source_receipts=[dict(path="/fixture/source.json", sha256="c" * 64)],
+            contract_file_sha256={"fixture": "d" * 64},
+            scopes={
+                sid: dict(
+                    parent_branch_ids=g["baseline"],
+                    alternatives={
+                        "ADD_" + a: sorted(set(g["baseline"]) | {g["additions"][a]})
+                        for a in R.SCORING_ALIASES[sid]
+                    },
+                )
+                for sid, g in Q.GROUPS.items()
+                if sid in R.SCORING_ALIASES
+            },
+            **P.AUTH,
+        )
+    )
+
+
+def scored_metric(contract, w, s=0, t=0, u=0, **kw):
+    from src.engine.scalping import continuous_reversal_postclose as P
+
+    return dict(
+        metric(w, s, t, u),
+        chronological=metric(w, s, t, u),
+        statistic_contract_sha256=P.digest(R.scoring_spec()),
+        scoring_contract_sha256=contract["artifact_content_sha256"],
+        statistic_source_complete=True,
+        **kw,
+    )
+
+
+@pytest.mark.parametrize(
+    "w,n,expected",
+    [
+        (0, 0, None),
+        (1, 1, 0.20654931437723745),
+        (2, 2, 0.34238022750665303),
+        (102, 188, 0.4711993273835544),
+    ],
+)
+def test_wilson_fixed_values_and_null(w, n, expected):
+    actual = R.wilson_score(w, n)
+    assert actual is None if expected is None else actual == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("w,n", [(True, 1), (-1, 1), (2, 1), (1.0, 2)])
+def test_wilson_invalid_counts(w, n):
+    with pytest.raises(ValueError, match="counts_invalid"):
+        R.wilson_score(w, n)
+
+
+def test_scoped_score_breaks_tiny_perfect_lock_without_changing_raw():
+    c = scoring_contract()
+    sid = next(iter(R.SCORING_ALIASES))
+    cfg = c["scopes"][sid]
+    m = {
+        "CURRENT_NATIVE": scored_metric(c, 2),
+        "ADD_A05": scored_metric(c, 36, t=26),
+        "ADD_A09": scored_metric(c, 102, t=86),
+    }
+    old = R.select_variant(
+        cfg, cfg["parent_branch_ids"], m, authority=R.SELECTION_AUTHORITY
+    )
+    new = R.select_variant(
+        cfg,
+        cfg["parent_branch_ids"],
+        m,
+        authority=R.SELECTION_AUTHORITY,
+        scoring=c,
+        scope=sid,
+    )
+    assert old["variant"] == "CURRENT_NATIVE"
+    assert new["variant"] == "ADD_A09"
+    assert new["wins"] == 102 and new["resolved"] == 188
+    m["ADD_A09"]["statistic_source_complete"] = False
+    assert (
+        R.select_variant(
+            cfg,
+            cfg["parent_branch_ids"],
+            m,
+            authority=R.SELECTION_AUTHORITY,
+            scoring=c,
+            scope=sid,
+        )["variant"]
+        == "ADD_A05"
+    )
+    m["CURRENT_NATIVE"]["chronological"] = metric(0, u=4)
+    assert (
+        R.select_variant(
+            cfg,
+            cfg["parent_branch_ids"],
+            m,
+            authority=R.SELECTION_AUTHORITY,
+            scoring=c,
+            scope=sid,
+        )["status"]
+        == "comparison_incomplete_carry"
+    )
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "scope",
+        "version",
+        "z",
+        "window",
+        "label",
+        "authority",
+        "source",
+        "membership",
+        "metric",
+    ],
+)
+def test_scoring_rejects_contract_and_metric_mutations(damage):
+    from src.engine.scalping import continuous_reversal_postclose as P
+
+    c = scoring_contract()
+    sid = next(iter(R.SCORING_ALIASES))
+    cfg = c["scopes"][sid]
+    m = {n: scored_metric(c, 2) for n in ["CURRENT_NATIVE", *cfg["alternatives"]]}
+    if damage == "scope":
+        sid = SCOPE
+    elif damage in {"version", "z", "label"}:
+        c["spec"][{"label": "label_contract"}.get(damage, damage)] = "wrong"
+    elif damage == "window":
+        c["spec"]["seconds"] = 900
+    elif damage == "authority":
+        c["operator_receipt"] = None
+    elif damage == "source":
+        c["source_manifest_sha256"] = None
+    elif damage == "membership":
+        cfg["alternatives"]["ADD_A05"].append("unknown")
+    elif damage == "metric":
+        m["CURRENT_NATIVE"]["statistic_contract_sha256"] = "wrong"
+    c = P.seal(c)
+    with pytest.raises(ValueError, match="cumulative_scoring"):
+        R.select_variant(
+            cfg,
+            cfg["parent_branch_ids"],
+            m,
+            authority=R.SELECTION_AUTHORITY,
+            scoring=c,
+            scope=sid,
+        )
+
+
+def test_chronological_first_unknown_stop_ties_boundaries_and_displacement():
+    from src.engine.scalping import reversal_cumulative_postclose as CP
+
+    def point(key, at, status="WIN", **kw):
+        return dict(
+            opportunity_key=key,
+            confirmation_epoch=at,
+            outcome={"status": status},
+            **dict(day="2026-10-27", symbol="000001", route="SOR", **kw),
+        )
+
+    initial = point("a", 0, "UNRESOLVED")
+    values = [
+        point("d", 1801),
+        point("c", 1800, "FAIL_STOP"),
+        point("b", 1),
+        initial,
+        initial,
+        dict(point("e", 1), route="NXT"),
+        dict(point("f", 1), day="2026-10-28"),
+        dict(point("g", 1), symbol="000002"),
+    ]
+    keys = {p["opportunity_key"] for p in CP.chronological_points(values)}
+    assert keys == {"a", "c", "e", "f", "g"}
+    assert (
+        CP.chronological_metric(CP.chronological_points(values))["counts"]["UNRESOLVED"]
+        == 1
+    )
+    assert (
+        CP.chronological_points([point("z", 0), point("a", 0, "FAIL_STOP")])[0][
+            "opportunity_key"
+        ]
+        == "a"
+    )
+    assert (
+        CP.chronological_points([point("old-win", 10)])[0]["opportunity_key"]
+        == "old-win"
+    )
+    assert (
+        CP.chronological_points(
+            [point("old-win", 10), point("new-stop", 0, "FAIL_STOP")]
+        )[0]["opportunity_key"]
+        == "new-stop"
+    )
+    with pytest.raises(ValueError, match="statistical_key_conflict"):
+        CP.chronological_points([point("a", 1), point("a", 2)])
+
+
+def test_scored_producer_selection_manifest_and_projection(tmp_path, monkeypatch):
+    import gzip, json
+    from src.engine.scalping import reversal_cumulative_postclose as CP
+    from src.engine.scalping import continuous_reversal_postclose as P
+    from src.engine.ai import offline_comparison_store as S
+
+    parent, m = postclose_fixture(monkeypatch)
+    parent["bundle_sha256"] = "e" * 64
+    c = scoring_contract()
+    sid = next(iter(R.SCORING_ALIASES))
+    cfg = c["scopes"][sid]
+    m["cumulative_scoring_contract"] = c
+    monkeypatch.setattr(R, "pending", lambda *a: None)
+    monkeypatch.setattr(R, "scoring_for_build", lambda *a: c)
+    monkeypatch.setattr(P, "population_receipt", lambda *a: dict(path="fixture"))
+    source = P.seal(dict(normalized_sources=dict(partitions=[])))
+    report = CP.build(
+        tmp_path,
+        "2026-10-27",
+        "2026-10-27",
+        parent,
+        source=source,
+        publish_outputs=False,
+    )
+    assert (
+        report["primary_decision_metric"]
+        == "scope_bound_chronological_wilson_and_raw_fraction"
+    )
+    assert R.validate_manifest(report["operating_manifest"])
+    with gzip.open(report["fixed_comparison_table"]["path"], "rt") as f:
+        archive = json.load(f)
+    assert archive["schema"] == "cumulative_fixed_comparison_table_v3"
+    assert archive["scoring_contract"] == c
+    assert (
+        report["proposal_metrics"][sid + "::CURRENT_NATIVE"]["chronological"]["score"]
+        is None
+    )
+    assert "chronological" not in report["proposal_metrics"][SCOPE + "::CURRENT_NATIVE"]
+    with S.Store(tmp_path) as store:
+        records = []
+        epoch = 1793070000  # 2026-10-27 12:00 KST
+        for i, (offset, status, which) in enumerate(
+            [
+                (0, "FAIL_STOP", "ADD_A05"),
+                (10, "WIN", "CURRENT_NATIVE"),
+                (1900, "WIN", "ADD_A05"),
+            ]
+        ):
+            bid = (
+                cfg["parent_branch_ids"]
+                if which == "CURRENT_NATIVE"
+                else [Q.GROUPS[sid]["additions"]["A05"]]
+            )[0]
+            snapshot = store.put(
+                [
+                    dict(
+                        epoch=epoch + offset,
+                        symbol="000001",
+                        venue="SOR",
+                        source_item="000001_AL",
+                    ),
+                    {},
+                ]
+            )
+            records.append(
+                dict(
+                    opportunity_key=str(i),
+                    day="2026-10-27",
+                    symbol="000001",
+                    scope=sid,
+                    truth={bid: "TRUE"},
+                    outcome={"status": status},
+                    snapshot_obj=snapshot,
+                )
+            )
+        store.commit()
+        configs = {
+            s: dict(v["alternatives"], CURRENT_NATIVE=v["parent_branch_ids"])
+            for s, v in c["scopes"].items()
+        }
+        metrics, effects = CP.scoring_metrics(
+            records,
+            configs,
+            {s: v["parent_branch_ids"] for s, v in c["scopes"].items()},
+            c,
+            store,
+        )
+    e = effects[sid + "::ADD_A05"]
+    assert e["removed_keys"] == ["1"] and e["added_keys"] == ["0", "2"]
+    assert metrics[sid + "::ADD_A05"]["chronological"]["resolved"] == 2
+    changed = copy.deepcopy(report["operating_manifest"])
+    changed.pop("cumulative_scoring_contract")
+    with pytest.raises(ValueError, match="selection_schema"):
+        R.validate_manifest(changed)
+
+
+def test_scoring_pending_parent_source_generation_and_consumed_carry(
+    tmp_path, monkeypatch
+):
+    from src.engine.scalping import continuous_reversal_postclose as P
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+
+    c = scoring_contract()
+    parent = dict(
+        bundle_sha256="e" * 64,
+        continuous_reversal=dict(
+            operating_manifest=dict(
+                scopes={s: v["parent_branch_ids"] for s, v in c["scopes"].items()},
+                registration_receipts=[request()],
+            )
+        ),
+    )
+    path = N.root(tmp_path) / "cumulative-scoring.json"
+    P.write(path, c)
+    monkeypatch.setattr(P, "file_hash", lambda p: "c" * 64)
+    assert R.scoring_for_build(tmp_path, parent, "2026-10-27", "b" * 64) == c
+    for day, sha, bundle in [
+        ("2026-10-28", "b" * 64, "e" * 64),
+        ("2026-10-27", "f" * 64, "e" * 64),
+        ("2026-10-27", "b" * 64, "f" * 64),
+    ]:
+        p = dict(parent, bundle_sha256=bundle)
+        with pytest.raises(ValueError, match="parent_source_or_date"):
+            R.scoring_for_build(tmp_path, p, day, sha)
+    parent["continuous_reversal"]["operating_manifest"][
+        "cumulative_scoring_contract"
+    ] = c
+    assert R.scoring_for_build(tmp_path, parent, "2026-10-28", "f" * 64) == c
+    with pytest.raises(ValueError, match="explicit_authority"):
+        R.intake_scoring(
+            tmp_path,
+            path,
+            confirm="implementation",
+            origin_root=tmp_path,
+            origin_commit="x",
+        )
+
+
+def test_scoring_prepare_fails_before_any_write_on_open_terminal(tmp_path, monkeypatch):
+    from src.engine.automation import postclose_summary_handoff as H
+
+    monkeypatch.setattr(
+        H, "stage_receipt_issues", lambda *a: ["terminal_missing_or_invalid"]
+    )
+    with pytest.raises(ValueError, match="source_terminal_invalid"):
+        R.prepare_scoring(tmp_path, tmp_path / "out", parent={}, day="2026-10-27")
+    assert not (tmp_path / "out").exists()
+
+
+def test_scoring_preparation_and_intake_are_separate_and_hash_bound(
+    tmp_path, monkeypatch
+):
+    from src.engine.automation import postclose_summary_handoff as H
+    from src.engine.scalping import continuous_reversal_postclose as P
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+
+    c = scoring_contract()
+    day = "2026-10-27"
+    parent = dict(
+        bundle_sha256="e" * 64,
+        target_date=day,
+        continuous_reversal=dict(
+            operating_manifest=dict(
+                scopes={s: v["parent_branch_ids"] for s, v in c["scopes"].items()},
+                registration_receipts=[request()],
+            )
+        ),
+    )
+    source = P.seal(
+        dict(
+            normalized_sources=dict(
+                partitions=[dict(day=day, venue="SOR", session="SOR_REGULAR")]
+            )
+        )
+    )
+    source_path = tmp_path / "source.json"
+    P.write(source_path, source)
+    receipt = dict(path=str(source_path), sha256=P.file_hash(source_path))
+    machine = P.seal(
+        dict(
+            source_date=day,
+            status="completed",
+            parent_bundle_sha256=parent["bundle_sha256"],
+            label_contract=C.LABEL,
+            source_manifest_receipt=receipt,
+            source_manifest_sha256=source["artifact_content_sha256"],
+        )
+    )
+    P.write(
+        tmp_path / "report/continuous_reversal_operating" / day / "machine.json",
+        machine,
+    )
+    P.write(
+        H.stage_path(tmp_path / "report", day, "main_machine_policy"), {"fixture": True}
+    )
+    monkeypatch.setattr(H, "stage_receipt_issues", lambda *a: [])
+    monkeypatch.setattr(N, "validate", lambda *a, **kw: True)
+    monkeypatch.setattr(P, "ensure_population", lambda *a, **kw: source)
+    monkeypatch.setattr(P, "population_receipt", lambda *a: receipt)
+    prepared = R.prepare_scoring(
+        tmp_path, tmp_path / "prepared", parent=parent, day=day
+    )
+    pointer = N.root(tmp_path) / "cumulative-scoring.json"
+    assert not pointer.exists() and prepared["operator_receipt"] is None
+    with pytest.raises(ValueError, match="scoring_contract_invalid"):
+        R.validate_scoring(prepared)
+    P.write(
+        N.root(tmp_path) / "current.json", dict(bundle_sha256=parent["bundle_sha256"])
+    )
+    monkeypatch.setattr(V, "_attested_activation_parent", lambda *a, **kw: parent)
+    args = dict(
+        confirm=R.SCORING_AUTHORITY, origin_root=tmp_path, origin_commit="a" * 40
+    )
+    adopted = R.intake_scoring(
+        tmp_path, tmp_path / "prepared/prepared-scoring.json", **args
+    )
+    assert adopted["operator_receipt"] == R.SCORING_AUTHORITY
+    assert (
+        R.scoring_for_build(tmp_path, parent, day, source["artifact_content_sha256"])
+        == adopted
+    )
+    assert (
+        R.intake_scoring(tmp_path, tmp_path / "prepared/prepared-scoring.json", **args)
+        == adopted
+    )
+    Path(prepared["source_receipts"][0]["path"]).write_text("corrupted")
+    with pytest.raises(ValueError, match="source_changed"):
+        R.intake_scoring(tmp_path, tmp_path / "prepared/prepared-scoring.json", **args)
+
+
+def test_scoring_bad_point_is_excluded_without_blocking_valid_rows(tmp_path):
+    from src.engine.scalping import continuous_reversal_postclose as P
+    from src.engine.scalping import reversal_cumulative_postclose as CP
+    from src.engine.ai import offline_comparison_store as S
+
+    c = scoring_contract()
+    sid = next(iter(R.SCORING_ALIASES))
+    cfg = c["scopes"][sid]
+    configs = {
+        s: dict(v["alternatives"], CURRENT_NATIVE=v["parent_branch_ids"])
+        for s, v in c["scopes"].items()
+    }
+    current = {s: v["parent_branch_ids"] for s, v in c["scopes"].items()}
+    with S.Store(tmp_path) as store:
+        records = []
+        for i, at in enumerate([1793070000, float(10**30)]):
+            snap = store.put(
+                [
+                    dict(
+                        epoch=at, symbol="000001", venue="SOR", source_item="000001_AL"
+                    ),
+                    {},
+                ]
+            )
+            records.append(
+                dict(
+                    opportunity_key=str(i),
+                    scope=sid,
+                    day="2026-10-27",
+                    symbol="000001",
+                    outcome={"status": "WIN"},
+                    truth={cfg["parent_branch_ids"][0]: "TRUE"},
+                    snapshot_obj=snap,
+                )
+            )
+        m, e = CP.scoring_metrics(records, configs, current, c, store)
+        assert m[sid + "::CURRENT_NATIVE"]["chronological"]["wins"] == 1
+        assert m[sid + "::CURRENT_NATIVE"]["wins"] == 1
+        assert m[sid + "::CURRENT_NATIVE"]["statistic_source_complete"] is True
+        assert e[sid + "::CURRENT_NATIVE"]["excluded_keys"] == ["1"]
+        research = P.seal(dict(c, operator_receipt=None))
+        mr, _ = CP.scoring_metrics(
+            records, configs, current, research, store, research_only=True
+        )
+    same = {
+        n: dict(
+            mr[sid + "::" + n],
+            source_complete=True,
+            comparison_complete=True,
+            source_universe_sha256="s",
+        )
+        for n in configs[sid]
+    }
+    result = R.select_variant(
+        cfg,
+        current[sid],
+        same,
+        authority=None,
+        scoring=research,
+        scope=sid,
+        research_only=True,
+    )
+    assert result["research_only"] and result["variant"] == "CURRENT_NATIVE"
+    with pytest.raises(ValueError, match="scoring_contract_invalid"):
+        R.select_variant(
+            cfg,
+            current[sid],
+            same,
+            authority=R.SELECTION_AUTHORITY,
+            scoring=research,
+            scope=sid,
+        )
