@@ -601,7 +601,7 @@ def test_completion_wrapper_does_not_revisit_holding_or_successor_owner(
         assert lane.stock["_scanner_async_generation_id"] == "new-generation"
 
 
-def _complete_unsent_pass(lane, monkeypatch, *, protect=None):
+def _complete_unsent_pass(lane, monkeypatch, *, protect=None, price_change=False):
     """Use real Main completion and submit observer; no broker/provider call."""
     from src.engine.monitoring.entry_attempt_identity import observe_submit_attempt
 
@@ -620,7 +620,47 @@ def _complete_unsent_pass(lane, monkeypatch, *, protect=None):
 
     @observe_submit_attempt(on_finish=H._observe_entry_submit_finished)
     def guarded_submit(stock, code):
-        H._set_async_terminal(stock, "real_weak_pullback_entry_block")
+        if price_change:
+            # This fixture's machine receipt is synthetic. Keep the real
+            # local-not-sent/custody transition while supplying its exact ID.
+            monkeypatch.setattr(
+                H,
+                "submit_attempt_machine_lineage",
+                lambda *_a: {"evaluation_attempt_id": "original-evaluation"},
+            )
+            event = old_claim["snapshot"][0]
+            stock["_async_entry_submission_identity"] = dict(
+                request_id=request.context.request_id,
+                evaluation_attempt_id="original-evaluation",
+                ai_decision_trace_id="original-trace",
+                code=code,
+                native_claim_token=old_claim["token"],
+                native_generation=old_claim["generation"],
+                native_venue=event["venue"],
+                native_market=event["market"],
+                source_item=event["source_item"],
+                native_epoch=event["native_epoch"],
+            )
+            monkeypatch.setattr(
+                H,
+                "default_order_owner_registry",
+                lambda: SimpleNamespace(intent_for_client=lambda **kw: None),
+            )
+            disposition = H._initial_entry_known_not_sent(
+                stock,
+                code,
+                owner_context=SimpleNamespace(),
+                reason="execution_price_changed_reprice_required",
+            )
+            assert not disposition.get("local_not_sent_custody_gap"), disposition
+        H._set_async_terminal(
+            stock,
+            (
+                "entry_physical_send_guard_block"
+                if price_change
+                else "real_weak_pullback_entry_block"
+            ),
+        )
         return False
 
     def accepted_path(stock, code, *_a, **kwargs):
@@ -645,6 +685,129 @@ def _complete_unsent_pass(lane, monkeypatch, *, protect=None):
     lane.finish("completed", payload)
     lane.consume()
     return old_event, old_claim, request, successor
+
+
+@pytest.mark.parametrize("lane", ["nonfixed_regular"], indirect=True)
+def test_price_change_not_sent_admits_fresh_native_request_with_parent_lineage(
+    lane, monkeypatch
+):
+    old_event, old_claim, original, successor = _complete_unsent_pass(
+        lane, monkeypatch, price_change=True
+    )
+    assert (
+        lane.stock["_async_entry_nonexecution_identity"]["physical_disposition"][
+            "physical_send_attempt_count"
+        ]
+        == 0
+    )
+    lane.visit()
+    refresh = H._resolve_watching_state_change_refresh(
+        lane.stock, lane.ws, now_ts=lane.clock.time(), last_ai_time=0, cooldown_sec=60
+    )
+    assert refresh["allowed"] and refresh["event_id"] == successor["event_id"]
+    fresh_claim = lane.stock["_continuous_reversal_pending_claim"]
+    assert fresh_claim["token"] != old_claim["token"]
+    queued = []
+    submit = lane.coordinator.submit
+
+    def admit(request):
+        queued.append(request)
+        return submit(request)
+
+    monkeypatch.setattr(lane.coordinator, "submit", admit)
+    outcome = H._resolve_scanner_async_entry_ai(
+        lane.stock,
+        lane.code,
+        lane.ws,
+        None,
+        dict(
+            scanner_async_eval_coordinator=lane.coordinator,
+            scanner_async_generation=original.context.generation,
+        ),
+        trigger_reason="native_signal",
+        last_ai_time=0,
+        current_ai_score=0,
+    )
+    assert outcome["status"] == "dispatched" and len(queued) == 1
+    fresh = queued[0]
+    assert fresh.context.request_id != original.context.request_id
+    assert fresh.context.deadline_epoch == successor["epoch"] + 5
+    assert original.context.deadline_epoch == old_event["epoch"] + 5
+    assert (
+        fresh.context.stock_snapshot["entry_fresh_parent_request_id"]
+        == original.context.request_id
+    )
+    assert (
+        fresh.context.stock_snapshot["entry_fresh_parent_evaluation_attempt_id"]
+        == "original-evaluation"
+    )
+    assert (
+        lane.stock["_async_entry_nonexecution_identity"]["fresh_successor_request_id"]
+        == fresh.context.request_id
+    )
+    # Do not execute preparation/provider I/O; publish a controlled fresh result
+    # through the real coordinator and verify the existing disposition reader.
+    lane.coordinator._finish(
+        fresh,
+        status="completed",
+        preparation_started_epoch=lane.clock.time(),
+        preparation_completed_epoch=lane.clock.time(),
+        completed_epoch=lane.clock.time(),
+        observation_only=False,
+        ai_payload=dict(
+            action="WAIT",
+            evaluation_attempt_id="fresh-evaluation",
+            ai_decision_trace_id="fresh-trace",
+        ),
+    )
+    result = lane.coordinator.peek_completed(
+        generation_id=fresh.context.generation.generation_id,
+        cache_key=fresh.context.cache_key,
+    )
+    assert (
+        result.origin_fields["entry_fresh_parent_request_id"]
+        == original.context.request_id
+    )
+    assert result.ai_payload["ai_decision_trace_id"] == "fresh-trace"
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "custody",
+        "outbox",
+        "sent",
+        "other_route",
+        "other_market",
+        "old_claim",
+        "already_admitted",
+        "malformed",
+    ],
+)
+def test_price_change_parent_link_never_fabricates_retry_authority(
+    lane, monkeypatch, fault
+):
+    _, old_claim, _, _ = _complete_unsent_pass(lane, monkeypatch, price_change=True)
+    parent = lane.stock["_async_entry_nonexecution_identity"]
+    fresh = deepcopy(old_claim)
+    fresh["token"] = "fresh-token"
+    if fault == "custody":
+        parent["physical_disposition"]["local_not_sent_custody_gap"] = "gap"
+    if fault == "outbox":
+        parent["physical_disposition"]["local_not_sent_outbox_gap"] = "gap"
+    if fault == "sent":
+        parent["physical_disposition"]["physical_send_attempt_count"] = 1
+    if fault == "other_route":
+        fresh["snapshot"][0]["source_item"] = "other-item"
+    if fault == "other_market":
+        fresh["snapshot"][0]["market"] = "OTHER"
+    if fault == "malformed":
+        fresh["snapshot"] = 1
+    if fault == "old_claim":
+        fresh["token"] = old_claim["token"]
+    if fault == "already_admitted":
+        parent["fresh_successor_request_id"] = "admitted"
+    assert H._price_change_fresh_parent_fields(lane.stock, lane.code, fresh) == {}
 
 
 def test_unsent_native_pass_releases_arm_before_first_successor_revisit(

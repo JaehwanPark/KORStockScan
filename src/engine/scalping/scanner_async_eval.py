@@ -865,6 +865,10 @@ class ScannerAsyncEvalCoordinator:
                         "market_session_bucket",
                         "entry_machine_bundle_sha256",
                         "entry_auxiliary_policy_sha256",
+                        "entry_fresh_parent_request_id",
+                        "entry_fresh_parent_evaluation_attempt_id",
+                        "entry_fresh_parent_ai_decision_trace_id",
+                        "entry_fresh_parent_terminal_reason",
                     )
                 }
             ),

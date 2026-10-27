@@ -12141,6 +12141,80 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Exact complete submit-local repair; retain the selected predecessor profile.
+REVIEWED_SUBMIT_FRESH_HASHES = {
+    "src/engine/kiwoom_sniper_v2.py": "35393c7ffa067328fc6e2a2df931a5e352adc65ca15730513ef74da3274d0881",
+    "src/engine/monitoring/policy_generation_code_handoff.py": "2205cfa0be617994a148557397ae4bc1a13c1c9052d9b045cbc4ac0c1475223d",
+    "src/engine/scalping/scanner_async_eval.py": "376aef38820f7e2f2a6869b65822e1072eb0abe426836644c3ee9d7357b8bac7",
+    "src/engine/sniper_state_handlers.py": "8e070b77c3cd1a53454862bc18c7a7ddee09da158d862f4e93fdd56226287672",
+    "src/scanners/zero_base_discovery_queue.py": "47da6fad4d1f301e99da12f38505a193ce6b2f9bbfc122cb338503bf4b177d3e",
+    "src/scanners/zero_base_discovery_runtime.py": "441f47be2b070d26f1210b81088a7e879c87060335e9f4bef6b2dc55851fafd4",
+    "src/trading/entry/physical_send_guard.py": "182543858c29babbb6875ec4511aa93c09fa230f016ec758c389c5f4511f9c20",
+    "src/engine/infrastructure/startup_validation_code_context.py": "f99aa2aacd650730e076b4dd1fa9a56d6812eef16a8b5812a4110e1a036e6ed2",
+}
+REVIEWED_SUBMIT_FRESH_ORIGINS = {
+    "src/engine/kiwoom_sniper_v2.py": "66b57f8ca7d37af5be3f6d5897a20e3a4ee5b7f32b5e2b511954d713d9e4006a",
+    "src/engine/monitoring/policy_generation_code_handoff.py": "bdf9c47cb05206eea269ba3ead0ba0083ff79a51da390cb3862d96d7782db40d",
+    "src/engine/scalping/scanner_async_eval.py": "6daadef71a1e62c814986fdf9dd806a5a26b7d3aac1814900e24505f0d2256ca",
+    "src/engine/sniper_state_handlers.py": "16fc3202f724a2fb78d0da7e01989966560d39c7fa7439473b692a160308a2eb",
+    "src/scanners/zero_base_discovery_queue.py": "d8c93e78f8944428b6cfb726a88af9e4e0c39aee724c81c97d74d721d6d89d6b",
+    "src/scanners/zero_base_discovery_runtime.py": "61ebea82400e4139ed2b0dd66a2b7af5dff9e890c491af7185739b5045e36675",
+    "src/trading/entry/physical_send_guard.py": "83506e38c29ef132b05732320ac8d41f53d571bcf950cb4c0b17ed0ffbd1d41f",
+    "src/engine/infrastructure/startup_validation_code_context.py": "9261405f04df1337774293dc47a2a6703c229f3ee9b0ed93d30c93ea42d67c6e",
+}
+REVIEWED_SUBMIT_FRESH_PROJECTED_ORIGINS = {
+    "src/engine/kiwoom_sniper_v2.py": "66b57f8ca7d37af5be3f6d5897a20e3a4ee5b7f32b5e2b511954d713d9e4006a",
+    "src/engine/monitoring/policy_generation_code_handoff.py": "bdf9c47cb05206eea269ba3ead0ba0083ff79a51da390cb3862d96d7782db40d",
+    "src/engine/scalping/scanner_async_eval.py": "9fb2ac9ff75f620f008fb38a6611e5f08c6984d552c475e3314fa6ad6f3fefdf",
+    "src/engine/sniper_state_handlers.py": "16fc3202f724a2fb78d0da7e01989966560d39c7fa7439473b692a160308a2eb",
+    "src/scanners/zero_base_discovery_queue.py": "d8c93e78f8944428b6cfb726a88af9e4e0c39aee724c81c97d74d721d6d89d6b",
+    "src/scanners/zero_base_discovery_runtime.py": "61ebea82400e4139ed2b0dd66a2b7af5dff9e890c491af7185739b5045e36675",
+    "src/trading/entry/physical_send_guard.py": "1d5d6f7feb0fba4062d770db52dc74d0a8fca8dbdd10b48e0485c9ec80865c27",
+    "src/engine/infrastructure/startup_validation_code_context.py": "9261405f04df1337774293dc47a2a6703c229f3ee9b0ed93d30c93ea42d67c6e",
+}
+REVIEWED_SUBMIT_FRESH_PROFILE = {
+    **REVIEWED_DELAY_COLLECTION_PROFILE,
+    **REVIEWED_SUBMIT_FRESH_HASHES,
+}
+REVIEWED_SUBMIT_FRESH_VARIANTS = {
+    (key[0], REVIEWED_SUBMIT_FRESH_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_SUBMIT_FRESH_HASHES[
+            "src/engine/infrastructure/startup_validation_code_context.py"
+        ],
+        "dependencies": {**value["dependencies"], **REVIEWED_SUBMIT_FRESH_HASHES},
+        "contract_extensions": {
+            origin: {
+                name: REVIEWED_SUBMIT_FRESH_HASHES.get(os.path.normpath(name), sha)
+                for name, sha in paths.items()
+            }
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_DELAY_COLLECTION_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {
+    **REVIEWED_ENTRY_COST_PAIRS,
+    **{
+        name: REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+        + tuple(
+            (old, current)
+            for old in {
+                value
+                for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+                for value in pair
+            }
+            | {
+                REVIEWED_SUBMIT_FRESH_ORIGINS[name],
+                REVIEWED_SUBMIT_FRESH_PROJECTED_ORIGINS[name],
+            }
+        )
+        for name, current in REVIEWED_SUBMIT_FRESH_HASHES.items()
+    },
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -12914,6 +12988,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_DELAY_COLLECTION_PROFILE
         prepared_variants = REVIEWED_DELAY_COLLECTION_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/infrastructure/startup_validation_code_context.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_SUBMIT_FRESH_HASHES["src/engine/infrastructure/startup_validation_code_context.py"]
+    ):
+        prepared_hashes = REVIEWED_SUBMIT_FRESH_PROFILE
+        prepared_variants = REVIEWED_SUBMIT_FRESH_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

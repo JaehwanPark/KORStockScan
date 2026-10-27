@@ -8923,13 +8923,22 @@ def _zero_base_consumer_readiness():
     from src.engine.scalping.zero_base_probe import consumer_readiness
     from src.engine.scalping.reversal_current_backend import backend
 
+    with _ZERO_BASE_PROBE_LOCK:
+        closing = _ZERO_BASE_PROBE_CLOSING.is_set()
     readiness = consumer_readiness(
         ws_manager=WS_MANAGER,
         ai_engine=AI_ENGINE,
         token=KIWOOM_TOKEN,
-        enabled=_zero_base_runtime_enabled(),
+        enabled=_zero_base_runtime_enabled() and not closing,
         family_sha256=getattr(backend(), "_GENERATION", None),
     )
+    if closing:
+        readiness.update(
+            ready=False,
+            consumer_open=False,
+            reason="probe_admission_closed",
+            first_missing_dependency="probe_admission_closed",
+        )
     readiness["main_target_snapshot"] = _zero_base_active_target_snapshot(readiness)
     return readiness
 

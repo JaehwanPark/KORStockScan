@@ -106,6 +106,21 @@ def check(case, **kwargs):
     )
 
 
+@pytest.mark.parametrize("clock", ["epoch", "perf"])
+def test_expired_original_budget_never_enters_expensive_readers(case, clock):
+    setattr(case.clock, clock, 105.001 if clock == "epoch" else 15.001)
+    calls = []
+    context = replace(
+        case.context,
+        binding_reader=lambda: calls.append("binding") or case.state["binding"],
+        snapshot_reader=lambda: calls.append("snapshot") or case.state["snapshot"],
+    )
+    with pytest.raises(guard.EntrySendGuardBlocked) as blocked:
+        context.check(api_id="kt10000", owner_context=case.owner, payload=case.payload)
+    assert blocked.value.receipt["reason"] == "original_entry_deadline_expired"
+    assert calls == []
+
+
 def test_policy_revalidation_clock_survives_physical_terminal(case):
     error = ValueError("auxiliary_decision_generation_changed")
     error.entry_submit_revalidation = {
@@ -474,6 +489,7 @@ def test_adapter_returns_known_local_no_call_and_does_not_mark_registry_ambiguou
 
 
 @pytest.mark.parametrize("order_type", ["0", "00", "3"])
+@pytest.mark.parametrize("unrelated_fields", [False, True])
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -494,7 +510,7 @@ def test_adapter_returns_known_local_no_call_and_does_not_mark_registry_ambiguou
     ],
 )
 def test_main_producer_rechecks_current_state_authority_and_policy_after_token_delay(
-    case, monkeypatch, mutation, order_type
+    case, monkeypatch, mutation, unrelated_fields, order_type
 ):
     from src.engine import sniper_state_handlers as main
     from src.engine.scalping import (
@@ -544,6 +560,14 @@ def test_main_producer_rechecks_current_state_authority_and_policy_after_token_d
         deadline_epoch=105,
         deadline_perf=15,
     )
+    if unrelated_fields:
+
+        class Unused(dict):
+            def items(self):
+                raise AssertionError("unrelated replay payload traversed at submit")
+
+        original.ai_payload["unused_replay_capsule"] = Unused(large="fixture")
+        original.prepared_context["unused_feature_packet"] = Unused(large="fixture")
     # The committed provenance includes the exact trace as the production
     # Main consumer does; its display telemetry is not used by this test.
     stock["last_watching_ai_machine_primary_fields"]["ai_decision_trace_id"] = "trace"

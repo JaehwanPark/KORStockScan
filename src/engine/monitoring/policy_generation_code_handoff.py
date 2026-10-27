@@ -616,6 +616,29 @@ REVIEWED_INTEGRATED_CONSUMED_SUCCESSORS = {
 }
 
 
+# Submit-local latency/identity changes preserve policy and historical reports.
+# Independent current-generation fixtures remain mandatory.
+REVIEWED_SUBMIT_FRESH_SOURCE_SUCCESSORS = {
+    "rising_missed": (
+        "28baa874610d6f76379c6be1fe4f76accbbfbc5f473b0c4ffcb2f323cdf75922",
+        "211e66b1be20bfe4470e65e7c9d6f710c5fb480908bae3c112460e7177c0a06b",
+    ),
+    "holding_vote": (
+        "7f30d09769b17801ad614d2403ca5742c5a45d4e56fb27212447de1384829386",
+        "efba28203d17ad1a8d8b11ce08e504a3203134ba3c931cbf7bb3500fbc235d69",
+    ),
+}
+REVIEWED_SUBMIT_FRESH_CONSUMED_SUCCESSORS = {
+    "rising_missed": (
+        "1a206224114b7dc0b03fdce56db85a99e1e70cb4e44b4deacd0bd73c6ea4514c",
+        "211e66b1be20bfe4470e65e7c9d6f710c5fb480908bae3c112460e7177c0a06b",
+    ),
+    "holding_vote": (
+        "231d058214999b2b9aa417be8b5b528e98c4499a7a54303503c44e1834e10831",
+        "efba28203d17ad1a8d8b11ce08e504a3203134ba3c931cbf7bb3500fbc235d69",
+    ),
+}
+
 
 def _historical_fixture(contract, data, family, *, late_report=None):
     """Preserve a prior fixture without using it to certify the successor."""
@@ -1050,7 +1073,6 @@ REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS["holding_vote"] += (
 )
 
 
-
 # Same frozen reports after preclaim diagnostic-only handler edits.
 # Native fresh fixtures and original source/economic nulls remain mandatory.
 REVIEWED_FROZEN_INPUT_SOURCE_SUCCESSORS['rising_missed'] += (('6d662d9e2cc6f67ec9945dfa3d9da37e3acd22765cc48a1c30d95b892a432eb7', '77005017209bc2c64ee43ba0d5281fc67d40d9fb129fc053f65093401b7a174a'), ('28baa874610d6f76379c6be1fe4f76accbbfbc5f473b0c4ffcb2f323cdf75922', '77005017209bc2c64ee43ba0d5281fc67d40d9fb129fc053f65093401b7a174a'))
@@ -1184,6 +1206,8 @@ def current_fixture_observation(observed, data):
         or actual_pair == REVIEWED_ARCHIVE_RETENTION_SOURCE_SUCCESSORS.get(family)
         or actual_pair == REVIEWED_INTEGRATED_OBSERVATION_SUCCESSORS.get(family)
         or actual_pair == REVIEWED_INTEGRATED_CONSUMED_SUCCESSORS.get(family)
+        or actual_pair == REVIEWED_SUBMIT_FRESH_CONSUMED_SUCCESSORS.get(family)
+        or actual_pair == REVIEWED_SUBMIT_FRESH_SOURCE_SUCCESSORS.get(family)
     )
     if reader_match:
         pair = actual_pair
@@ -1276,6 +1300,8 @@ def current_fixture_observation(observed, data):
                     REVIEWED_NATIVE_SELECTION_SUCCESSORS,
                     REVIEWED_NATIVE_SELECTION_SOURCE_SUCCESSORS,
                     REVIEWED_NATIVE_SELECTION_CONSUMED_SUCCESSORS,
+                    REVIEWED_SUBMIT_FRESH_CONSUMED_SUCCESSORS,
+                    REVIEWED_SUBMIT_FRESH_SOURCE_SUCCESSORS,
                 )
             )
             else None

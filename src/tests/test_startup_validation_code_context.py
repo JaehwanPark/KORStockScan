@@ -2761,7 +2761,7 @@ def test_main_preparation_uses_reviewed_stopped_origin_code(name):
     review = json.loads((ROOT / H._FORMATTING_REVIEW_PATH).read_text())
     predecessor = review["sources"][name]["before_sha256"]
     if review["sources"][name]["after_sha256"] != current:
-        assert H.REVIEWED_DELAY_COLLECTION_PROFILE[name] == current
+        assert H.REVIEWED_SUBMIT_FRESH_PROFILE[name] == current
         C._pairs({name: review["sources"][name]["after_sha256"]}, {name: current})
     origins = {old for old, new in pairs if new in {predecessor, current}}
     origins.add(predecessor)
@@ -3027,7 +3027,7 @@ def test_main_preparation_independently_reviews_closed_scanner(origin, damage):
 )
 def test_migration_configuration_has_independent_exact_source_pairs(name):
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-    assert H.REVIEWED_DELAY_COLLECTION_PROFILE[name] == current
+    assert H.REVIEWED_SUBMIT_FRESH_PROFILE[name] == current
     for old in H.REVIEWED_MIGRATION_ORIGINS[name]:
         C._pairs({name: old}, {name: H.REVIEWED_CLOSED_LOADER_PROFILE[name]})
         C._pairs({name: old}, {name: current})
@@ -3235,7 +3235,7 @@ def test_entry_capability_independent_preparation_exact_pairs(relative, fault):
 def test_nonfixed_identifier_preparation_uses_independent_exact_sources(name,fault):
     old=H.REVIEWED_NONFIXED_IDENTITY_ORIGINS[name]
     current=hashlib.sha256((ROOT/name).read_bytes()).hexdigest()
-    assert H.REVIEWED_DELAY_COLLECTION_PROFILE[name]==current
+    assert H.REVIEWED_SUBMIT_FRESH_PROFILE[name]==current
     if fault=='source':old='0'*64
     if fault=='target':current='0'*64
     if fault=='path':name='src/engine/unknown_identifier_owner.py'
@@ -3282,8 +3282,24 @@ def test_invalidation_cadence_independent_preparation_exact_pairs(relative, faul
 def test_delay_collection_independent_preparation_exact_pairs(relative, fault):
     old = C.REVIEWED_DELAY_COLLECTION_ORIGINS[relative]
     current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
-    assert H.REVIEWED_DELAY_COLLECTION_PROFILE[relative] == current
+    assert H.REVIEWED_SUBMIT_FRESH_PROFILE[relative] == current
     if fault == "origin": old = "0" * 64
     if fault == "successor": current = "0" * 64
     if fault == "path": relative = "src/engine/unknown_collection_owner.py"
+    assert C.reviewed_preparation_pair(relative, old, current) is (fault is None)
+
+
+@pytest.mark.parametrize("relative", sorted(C.REVIEWED_SUBMIT_FRESH_SOURCES))
+@pytest.mark.parametrize("fault", [None, "origin", "successor", "path"])
+@pytest.mark.parametrize("projected", [False, True])
+def test_submit_fresh_independent_preparation_exact_pairs(relative, fault, projected):
+    old = (
+        C.REVIEWED_SUBMIT_FRESH_PROJECTED_ORIGINS[relative]
+        if projected else C.REVIEWED_SUBMIT_FRESH_ORIGINS[relative]
+    )
+    current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+    assert current == C.REVIEWED_SUBMIT_FRESH_SOURCES[relative]
+    if fault == "origin": old = "0" * 64
+    if fault == "successor": current = "0" * 64
+    if fault == "path": relative = "src/engine/unknown_submit_owner.py"
     assert C.reviewed_preparation_pair(relative, old, current) is (fault is None)

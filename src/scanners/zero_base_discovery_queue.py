@@ -7,6 +7,7 @@ calls a trading policy, attaches WATCHING, or submits an order.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from copy import deepcopy
 from datetime import date, datetime
 from math import isfinite
 import re
@@ -58,6 +59,30 @@ class Candidate:
     handoff_id: str = ""
     residence_wait_since_epoch: float = 0.0
     long_residence_deferred_count: int = 0
+
+    def __deepcopy__(self, memo):
+        # Native fields are scalar. Retain ordinary deepcopy semantics for
+        # unexpected/mutable extensions without walking every scalar value.
+        result = type(self).__new__(type(self))
+        memo[id(self)] = result
+        result.__dict__ = {
+            key: (
+                value
+                if type(value) in (str, int, float, bool, type(None))
+                else deepcopy(value, memo)
+            )
+            for key, value in vars(self).items()
+        }
+        return result
+
+    def _snapshot(self):
+        fields = vars(self)
+        if fields.keys() == self.__dataclass_fields__.keys() and all(
+            type(value) in (str, int, float, bool, type(None))
+            for value in fields.values()
+        ):
+            return fields.copy()
+        return asdict(self)
 
 
 class DiscoveryQueue:
@@ -595,7 +620,7 @@ class DiscoveryQueue:
             "session_date": self.session_date,
             "claim_sequence": self._claim_sequence,
             "candidates": [
-                asdict(row)
+                row._snapshot()
                 for row in sorted(
                     self._candidates.values(), key=lambda row: (row.code, row.route)
                 )

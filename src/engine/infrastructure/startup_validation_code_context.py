@@ -2899,6 +2899,46 @@ for _name, _sha in REVIEWED_DELAY_COLLECTION_SOURCES.items():
     _history.update((_old, _sha) for _old in _prior)
 
 
+# Exact current submit-local repair; independent child verifies both endpoints.
+REVIEWED_SUBMIT_FRESH_ORIGINS = {
+    "src/engine/kiwoom_sniper_v2.py": "66b57f8ca7d37af5be3f6d5897a20e3a4ee5b7f32b5e2b511954d713d9e4006a",
+    "src/engine/monitoring/policy_generation_code_handoff.py": "bdf9c47cb05206eea269ba3ead0ba0083ff79a51da390cb3862d96d7782db40d",
+    "src/engine/scalping/scanner_async_eval.py": "6daadef71a1e62c814986fdf9dd806a5a26b7d3aac1814900e24505f0d2256ca",
+    "src/engine/sniper_state_handlers.py": "16fc3202f724a2fb78d0da7e01989966560d39c7fa7439473b692a160308a2eb",
+    "src/scanners/zero_base_discovery_queue.py": "d8c93e78f8944428b6cfb726a88af9e4e0c39aee724c81c97d74d721d6d89d6b",
+    "src/scanners/zero_base_discovery_runtime.py": "61ebea82400e4139ed2b0dd66a2b7af5dff9e890c491af7185739b5045e36675",
+    "src/trading/entry/physical_send_guard.py": "83506e38c29ef132b05732320ac8d41f53d571bcf950cb4c0b17ed0ffbd1d41f",
+}
+REVIEWED_SUBMIT_FRESH_SOURCES = {
+    "src/engine/kiwoom_sniper_v2.py": "35393c7ffa067328fc6e2a2df931a5e352adc65ca15730513ef74da3274d0881",
+    "src/engine/monitoring/policy_generation_code_handoff.py": "2205cfa0be617994a148557397ae4bc1a13c1c9052d9b045cbc4ac0c1475223d",
+    "src/engine/scalping/scanner_async_eval.py": "376aef38820f7e2f2a6869b65822e1072eb0abe426836644c3ee9d7357b8bac7",
+    "src/engine/sniper_state_handlers.py": "8e070b77c3cd1a53454862bc18c7a7ddee09da158d862f4e93fdd56226287672",
+    "src/scanners/zero_base_discovery_queue.py": "47da6fad4d1f301e99da12f38505a193ce6b2f9bbfc122cb338503bf4b177d3e",
+    "src/scanners/zero_base_discovery_runtime.py": "441f47be2b070d26f1210b81088a7e879c87060335e9f4bef6b2dc55851fafd4",
+    "src/trading/entry/physical_send_guard.py": "182543858c29babbb6875ec4511aa93c09fa230f016ec758c389c5f4511f9c20",
+}
+REVIEWED_SUBMIT_FRESH_PROJECTED_ORIGINS = {
+    "src/engine/kiwoom_sniper_v2.py": "66b57f8ca7d37af5be3f6d5897a20e3a4ee5b7f32b5e2b511954d713d9e4006a",
+    "src/engine/monitoring/policy_generation_code_handoff.py": "bdf9c47cb05206eea269ba3ead0ba0083ff79a51da390cb3862d96d7782db40d",
+    "src/engine/scalping/scanner_async_eval.py": "9fb2ac9ff75f620f008fb38a6611e5f08c6984d552c475e3314fa6ad6f3fefdf",
+    "src/engine/sniper_state_handlers.py": "16fc3202f724a2fb78d0da7e01989966560d39c7fa7439473b692a160308a2eb",
+    "src/scanners/zero_base_discovery_queue.py": "d8c93e78f8944428b6cfb726a88af9e4e0c39aee724c81c97d74d721d6d89d6b",
+    "src/scanners/zero_base_discovery_runtime.py": "61ebea82400e4139ed2b0dd66a2b7af5dff9e890c491af7185739b5045e36675",
+    "src/trading/entry/physical_send_guard.py": "1d5d6f7feb0fba4062d770db52dc74d0a8fca8dbdd10b48e0485c9ec80865c27",
+    "src/engine/infrastructure/startup_validation_code_context.py": "9261405f04df1337774293dc47a2a6703c229f3ee9b0ed93d30c93ea42d67c6e",
+}
+for _name, _sha in REVIEWED_SUBMIT_FRESH_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _prior = {v for pair in _history for v in pair} | {
+        REVIEWED_SUBMIT_FRESH_ORIGINS[_name],
+        REVIEWED_SUBMIT_FRESH_PROJECTED_ORIGINS[_name],
+    }
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _prior.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _prior)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

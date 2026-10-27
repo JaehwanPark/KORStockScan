@@ -5415,7 +5415,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_DELAY_COLLECTION_PROFILE,
+        "current": handoff.REVIEWED_SUBMIT_FRESH_PROFILE,
+        "delay_collection": handoff.REVIEWED_DELAY_COLLECTION_PROFILE,
         "consumed_nonfixed_final": handoff.REVIEWED_NONFIXED_FINAL_PROFILE,
         "nonfixed_final": handoff.REVIEWED_NONFIXED_FINAL_PROFILE,
         "nonfixed_current": handoff.REVIEWED_NONFIXED_CURRENT_PROFILE,
