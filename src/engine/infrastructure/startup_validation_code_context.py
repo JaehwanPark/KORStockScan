@@ -2557,6 +2557,15 @@ for _name, _sha in REVIEWED_HOLDING_QUOTE_SOURCES.items():
     _history.update((old, _sha) for old in _prior)
 
 
+# Final detector admission shares the existing finalization wall deadline.
+REVIEWED_FINALIZATION_ADMISSION_SOURCES = {'deploy/run_postclose_finalization.sh': '3c8e94c94f259dc0717a649ff31bb51d56f2f00a59561ecff783b75875cd0267', 'deploy/run_error_detection.sh': '6a950c2e19d4848edb4f92d949c38d053d41f50f5701bb6d40257fba009d0c42'}
+REVIEWED_FINALIZATION_ADMISSION_ORIGINS = {'deploy/run_postclose_finalization.sh': 'f0256308c44cad1f30d3f1f2bea43192f797c72aa93c3970d9ec65ef8c712fe9', 'deploy/run_error_detection.sh': 'b73d9508340b90ed47578dff314576cc1e68070071c674bb2316eb317577a5b8'}
+for _name, _sha in REVIEWED_FINALIZATION_ADMISSION_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _prior = {v for pair in _history for v in pair} | {REVIEWED_FINALIZATION_ADMISSION_ORIGINS[_name]}
+    _history.update((old, _sha) for old in _prior)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

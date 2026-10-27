@@ -3185,3 +3185,13 @@ def test_holding_quote_preparation_requires_exact_pair(relative, damage):
     if damage == "unreviewed": current = "0" * 64
     elif damage == "wrong_origin": old = "0" * 64
     assert C.reviewed_preparation_pair(relative, old, current) is (damage is None)
+
+
+@pytest.mark.parametrize("relative", list(C.REVIEWED_FINALIZATION_ADMISSION_SOURCES))
+@pytest.mark.parametrize("damage", [None, "unreviewed", "wrong_origin"])
+def test_finalization_admission_preparation_requires_exact_pair(relative, damage):
+    old = C.REVIEWED_FINALIZATION_ADMISSION_ORIGINS[relative]
+    current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+    if damage == "unreviewed": current = "0" * 64
+    elif damage == "wrong_origin": old = "0" * 64
+    assert C.reviewed_preparation_pair(relative, old, current) is (damage is None)

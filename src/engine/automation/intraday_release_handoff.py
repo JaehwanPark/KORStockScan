@@ -11487,6 +11487,36 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Reviewed holding quote source and automatic custody release; exact complete generation.
+REVIEWED_FINALIZATION_ADMISSION_ORIGINS = {'deploy/run_postclose_finalization.sh': 'f0256308c44cad1f30d3f1f2bea43192f797c72aa93c3970d9ec65ef8c712fe9', 'deploy/run_error_detection.sh': 'b73d9508340b90ed47578dff314576cc1e68070071c674bb2316eb317577a5b8', 'src/engine/infrastructure/startup_validation_code_context.py': '6594bc0b88c27131b8e44f2e74179c7f9f4983eeac5da6dd74abe1602497a45a'}
+REVIEWED_FINALIZATION_ADMISSION_HASHES = {'deploy/run_postclose_finalization.sh': '3c8e94c94f259dc0717a649ff31bb51d56f2f00a59561ecff783b75875cd0267', 'deploy/run_error_detection.sh': '6a950c2e19d4848edb4f92d949c38d053d41f50f5701bb6d40257fba009d0c42', 'src/engine/infrastructure/startup_validation_code_context.py': '4d8020b118e9a83c0faa372ced6c30df4b725643740710cce469a449adba7830'}
+REVIEWED_FINALIZATION_ADMISSION_PROFILE = {
+    **REVIEWED_HOLDING_QUOTE_PROFILE, **REVIEWED_FINALIZATION_ADMISSION_HASHES
+}
+REVIEWED_FINALIZATION_ADMISSION_VARIANTS = {
+    (key[0], REVIEWED_FINALIZATION_ADMISSION_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_FINALIZATION_ADMISSION_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_FINALIZATION_ADMISSION_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_FINALIZATION_ADMISSION_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_HOLDING_QUOTE_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+                    for value in pair} | {REVIEWED_HOLDING_QUOTE_PROFILE.get(name, REVIEWED_FINALIZATION_ADMISSION_ORIGINS[name])}
+    )
+    for name, current in REVIEWED_FINALIZATION_ADMISSION_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -12177,6 +12207,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_HOLDING_QUOTE_PROFILE
         prepared_variants = REVIEWED_HOLDING_QUOTE_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/infrastructure/startup_validation_code_context.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_FINALIZATION_ADMISSION_HASHES["src/engine/infrastructure/startup_validation_code_context.py"]
+    ):
+        prepared_hashes = REVIEWED_FINALIZATION_ADMISSION_PROFILE
+        prepared_variants = REVIEWED_FINALIZATION_ADMISSION_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present
