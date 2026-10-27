@@ -732,12 +732,10 @@ def prepare(
     recover_failed_preopen: bool = False,
 ) -> dict[str, Any]:
     selected_root, _ = selected_release(DATA_DIR.parent)
-    selection, _, _ = _selected_release(require_selected_cwd=False)
+    _selected_release(require_selected_cwd=False)
     if (
         Path(__file__).resolve().parents[3] != selected_root
-        and selection.get("main_start_authorized") is False
-        and selection.get("approval_scope")
-        == "after_postclose_deploy_for_next_regular_start"
+        and Path.cwd().resolve() == Path(__file__).resolve().parents[3]
     ):
         from src.engine.automation import intraday_release_handoff as H
 
@@ -756,7 +754,6 @@ def prepare(
         now=now,
         recover_failed_preopen=recover_failed_preopen,
     )
-
 
 def _prepare(
     source_date: str,

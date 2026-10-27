@@ -730,7 +730,7 @@ def predecessor_review_matches(review, day, root, commit, code_root):
 
 @contextmanager
 def stopped_postclose_review(target_date):
-    """A clean workflow revalidates a native cold selection, without a PID.
+    """A clean workflow revalidates a verified stopped predecessor, without a PID.
 
     Both selected and successor active-parent receipts must already validate.
     This scope permits the repaired reader only; it does not substitute the
@@ -760,27 +760,58 @@ def stopped_postclose_review(target_date):
         ),
     )
     day = datetime.now(KST).date().isoformat()
-    source = selection.get("source_date")
+    # A selector's deployment source is not the consumed session date.
+    ordered = (
+        selection.get("approval_scope") == "ordered_intraday_deploy_and_restart"
+        and selection.get("actual_pid_consumed") is True
+    )
+    closed = closed_consumption_observation() if ordered else None
+    source = closed["target_date"] if ordered else selection.get("source_date")
+    if ordered and (
+        closed.get("schema") != "intraday_closed_consumption_observation_v1"
+        or closed.get("basis") is not None
+        or closed.get("release_commit") != commit
+        or closed.get("selection_sha256") != T.sha(selected_raw)
+        or any(
+            closed.get(key) is not False
+            for key in (
+                "runtime_effect",
+                "current_observation_verified",
+                "new_pid_consumption_claimed",
+            )
+        )
+    ):
+        raise ValueError("postclose_review_ordered_closure_invalid")
     if (
         root == candidate
         or selection.get("approved_by") != "user"
-        or selection.get("approval_scope")
-        != "after_postclose_deploy_for_next_regular_start"
-        or selection.get("actual_pid_consumed") is not False
         or selection.get("main_start_authorized") is not False
-        or selection.get("actual_pid_receipt")
-        or selection.get("deployment_transition")
-        or selection.get("next_operating_date") != target_date
+        or (
+            not ordered
+            and (
+                selection.get("approval_scope")
+                != "after_postclose_deploy_for_next_regular_start"
+                or selection.get("actual_pid_consumed") is not False
+                or selection.get("actual_pid_receipt")
+                or selection.get("deployment_transition")
+                or selection.get("next_operating_date") != target_date
+            )
+        )
         or not isinstance(source, str)
         or not source <= day <= target_date
     ):
         raise ValueError("postclose_review_cold_selection_required")
     if target_after_postclose(source) != target_date:
-        from src.engine.automation.next_preopen_readiness import require_failed_preopen_recovery
+        from src.engine.automation.next_preopen_readiness import (
+            require_failed_preopen_recovery,
+        )
         from src.utils.market_day import next_krx_trading_date
 
         require_failed_preopen_recovery(data, target_date)
-        if next_krx_trading_date(datetime.fromisoformat(source).date()).isoformat() != target_date:
+        if (
+            next_krx_trading_date(datetime.fromisoformat(source).date()).isoformat()
+            != target_date
+        ):
             raise ValueError("postclose_review_recovery_source_target_invalid")
     protected = (
         data / "runtime/operator_startup_hold.json",
@@ -795,73 +826,88 @@ def stopped_postclose_review(target_date):
             or selector.read_bytes() != selected_raw
             or R.selected_release(workspace) != (root, commit)
             or datetime.now(KST).date().isoformat() != day
+            or (ordered and closed_consumption_observation() != closed)
         ):
             raise ValueError("postclose_review_stopped_generation_changed")
 
     stopped()
-    backup = Path(selection.get("previous_selection_backup", ""))
-    directory = backup.parent
-    if (
-        not backup.is_absolute()
-        or directory.parent != data / "runtime/research_release_transition"
-        or directory.resolve() != directory
-        or backup.is_symlink()
-    ):
-        raise ValueError("postclose_review_transition_path_invalid")
-    transition_path = directory / "transition.json"
-    transition, transition_raw = (
-        T._record(transition_path),
-        D._owned_metadata(transition_path)[1],
-    )
-    entries = transition.get("entries") or []
-    if (
-        transition.get("state") != "verified"
-        or transition.get("transition_id") != directory.name
-        or len(entries) != 1
-        or transition.get("written") != [str(selector)]
-    ):
-        raise ValueError("postclose_review_verified_transition_required")
-    entry = entries[0]
-    prior, prior_raw, _ = D._owned_metadata(backup)
-    after = directory / str(entry.get("after_snapshot", ""))
-    if (
-        entry.get("path") != str(selector)
-        or entry.get("before_snapshot") != backup.name
-        or entry.get("before_sha256") != T.sha(prior_raw)
-        or T.sha(prior_raw) != selection.get("predecessor_selection_sha256")
-        or entry.get("after_sha256") != T.sha(selected_raw)
-        or set(
-            entry.get("accepted_sha256")
-            or [entry.get("before_sha256"), entry.get("after_sha256")]
+    if not ordered:
+        backup = Path(selection.get("previous_selection_backup", ""))
+        directory = backup.parent
+        if (
+            not backup.is_absolute()
+            or directory.parent != data / "runtime/research_release_transition"
+            or directory.resolve() != directory
+            or backup.is_symlink()
+        ):
+            raise ValueError("postclose_review_transition_path_invalid")
+        transition_path = directory / "transition.json"
+        transition, transition_raw = (
+            T._record(transition_path),
+            D._owned_metadata(transition_path)[1],
         )
-        != {T.sha(prior_raw), T.sha(selected_raw)}
-        or after.parent != directory
-        or after.name != "after-" + T.sha(selected_raw) + ".bytes"
-        or D._owned_metadata(after)[1] != selected_raw
-        or transition_path.read_bytes() != transition_raw
-        or prior.get("git_commit") != selection.get("previous_git_commit")
-        or prior.get("release_root") != selection.get("previous_release_root")
-    ):
-        raise ValueError("postclose_review_transition_binding_invalid")
-    R.validate_release(workspace, prior)
-    p5_path = Path(selection.get("candidate_p5_path", ""))
-    D.verify_candidate_p5(
-        workspace,
-        target_date,
-        root,
-        commit,
-        p5_path,
-        selection.get("candidate_p5_sha256"),
-        prior,
-    )
+        entries = transition.get("entries") or []
+        if (
+            transition.get("state") != "verified"
+            or transition.get("transition_id") != directory.name
+            or len(entries) != 1
+            or transition.get("written") != [str(selector)]
+        ):
+            raise ValueError("postclose_review_verified_transition_required")
+        entry = entries[0]
+        prior, prior_raw, _ = D._owned_metadata(backup)
+        after = directory / str(entry.get("after_snapshot", ""))
+        if (
+            entry.get("path") != str(selector)
+            or entry.get("before_snapshot") != backup.name
+            or entry.get("before_sha256") != T.sha(prior_raw)
+            or T.sha(prior_raw) != selection.get("predecessor_selection_sha256")
+            or entry.get("after_sha256") != T.sha(selected_raw)
+            or set(
+                entry.get("accepted_sha256")
+                or [entry.get("before_sha256"), entry.get("after_sha256")]
+            )
+            != {T.sha(prior_raw), T.sha(selected_raw)}
+            or after.parent != directory
+            or after.name != "after-" + T.sha(selected_raw) + ".bytes"
+            or D._owned_metadata(after)[1] != selected_raw
+            or transition_path.read_bytes() != transition_raw
+            or prior.get("git_commit") != selection.get("previous_git_commit")
+            or prior.get("release_root") != selection.get("previous_release_root")
+        ):
+            raise ValueError("postclose_review_transition_binding_invalid")
+        R.validate_release(workspace, prior)
+        p5_path = Path(selection.get("candidate_p5_path", ""))
+        D.verify_candidate_p5(
+            workspace,
+            target_date,
+            root,
+            commit,
+            p5_path,
+            selection.get("candidate_p5_sha256"),
+            prior,
+        )
     pointer = N.root(data) / "current.json"
     ptr, pointer_raw, _ = D._owned_metadata(pointer)
     if ptr.get("effective_date") != source:
         raise ValueError("postclose_review_active_source_changed")
-    sources = {
-        str(p): _sha(p)
-        for p in (selector, backup, after, transition_path, p5_path, pointer)
-    }
+    if ordered:
+        active = N._read(
+            N.root(data) / "generations" / (ptr["bundle_sha256"] + ".json")
+        )
+        N.validate(active, target_date=source)
+        if active.get("bundle_sha256") != ptr["bundle_sha256"]:
+            raise ValueError("postclose_review_active_parent_changed")
+        sources = {
+            str(selector): T.sha(selected_raw),
+            str(pointer): T.sha(pointer_raw),
+            **closed["source_hashes"],
+        }
+    else:
+        sources = {
+            str(p): _sha(p)
+            for p in (selector, backup, after, transition_path, p5_path, pointer)
+        }
     origin_receipt_day = day
     for code_root, code_commit in ((root, commit), (candidate, candidate_commit)):
         proof = A._validated_origin_receipt(
@@ -875,7 +921,11 @@ def stopped_postclose_review(target_date):
             if issued.tzinfo is None or not source <= issued_day < day <= target_date:
                 raise ValueError("postclose_review_origin_issue_date_invalid")
             proof = A._validated_origin_receipt(
-                data, issued_day, code_root, code_commit, ptr["bundle_sha256"],
+                data,
+                issued_day,
+                code_root,
+                code_commit,
+                ptr["bundle_sha256"],
                 T.sha(pointer_raw),
             )
             origin_receipt_day = issued_day
@@ -892,10 +942,22 @@ def stopped_postclose_review(target_date):
         or successor.get("origin_selection_sha256") != T.sha(selected_raw)
         or successor.get("code_hashes") != A.code_hashes()
         or successor.get("actual_pid_consumed") is not False
-        or (origin_receipt_day != day and (
-            successor.get("activation_date") != target_date
-            or successor.get("source_trading_date") != source
-        ))
+        or (
+            ordered
+            and (
+                successor.get("activation_date") != day
+                or successor.get("parent_effective_date") != source
+                or successor.get("source_trading_date") != active.get("source_date")
+            )
+        )
+        or (
+            not ordered
+            and origin_receipt_day != day
+            and (
+                successor.get("activation_date") != target_date
+                or successor.get("source_trading_date") != source
+            )
+        )
     ):
         raise ValueError("postclose_review_successor_parent_unbound")
     proof = dict(
@@ -907,6 +969,15 @@ def stopped_postclose_review(target_date):
         runtime_effect=False,
         actual_pid_consumed=False,
         allowed_runtime_apply=False,
+        **(
+            {
+                "basis": "ordered_closed_consumption",
+                "active_parent_source_date": active["source_date"],
+                "active_parent_effective_date": source,
+            }
+            if ordered
+            else {}
+        ),
     )
     review = dict(
         day=day,
@@ -927,7 +998,6 @@ def stopped_postclose_review(target_date):
             raise ValueError("postclose_review_source_changed")
     finally:
         _PREDECESSOR_REVIEW.reset(token)
-
 
 @contextmanager
 def stopped_preparation_review(day):
@@ -12414,6 +12484,30 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Exact stopped-session preparation profile; preserve every issued predecessor.
+REVIEWED_STOPPED_PREPARATION_HASHES = {'src/engine/automation/next_preopen_readiness.py': '626f7849ae5fa39bf41f667b6c1cfae6b0ca765714e357fce049c523c0eaeeb9', 'src/engine/automation/main_startup_validation.py': '680d244ea1d468af3fee125fa1b18b558e584bc79bb8aeb29073c4572b13e481', 'src/engine/infrastructure/startup_validation_code_context.py': '0be485e750c0e62599036912c0cb0bfb8171bc8f045d3d104b5d2a17a26da183'}
+REVIEWED_STOPPED_PREPARATION_ORIGINS = {'src/engine/automation/next_preopen_readiness.py': 'b21095ca45f5844d1b2f6cf0cf0f312f44736e42cdf1a519eb65e7d39c0821f2', 'src/engine/automation/main_startup_validation.py': 'e35cfba631fa0409b87cbe35c87ea2a55464a4479ff1c975156a033e363fa604', 'src/engine/infrastructure/startup_validation_code_context.py': 'c0f08c127f88c3df5e5e0e59e8937f400b89986f6e1cbb9e4bfcee83380a4c41'}
+REVIEWED_STOPPED_PREPARATION_PROFILE = {**REVIEWED_QUANTITY_SOURCE_PROFILE, **REVIEWED_STOPPED_PREPARATION_HASHES}
+REVIEWED_STOPPED_PREPARATION_VARIANTS = {
+    (key[0], REVIEWED_STOPPED_PREPARATION_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/automation/next_preopen_readiness.py",
+        "selector_sha256": REVIEWED_STOPPED_PREPARATION_HASHES["src/engine/automation/next_preopen_readiness.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_STOPPED_PREPARATION_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_STOPPED_PREPARATION_HASHES.get(os.path.normpath(name), sha) for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_QUANTITY_SOURCE_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current) for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_STOPPED_PREPARATION_ORIGINS[name]})
+    for name, current in REVIEWED_STOPPED_PREPARATION_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -13235,6 +13329,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_QUANTITY_SOURCE_PROFILE
         prepared_variants = REVIEWED_QUANTITY_SOURCE_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/automation/next_preopen_readiness.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_STOPPED_PREPARATION_HASHES["src/engine/automation/next_preopen_readiness.py"]
+    ):
+        prepared_hashes = REVIEWED_STOPPED_PREPARATION_PROFILE
+        prepared_variants = REVIEWED_STOPPED_PREPARATION_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

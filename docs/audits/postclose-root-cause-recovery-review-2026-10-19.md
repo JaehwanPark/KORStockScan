@@ -4418,3 +4418,64 @@ profile; no new module, validator or execution entrypoint was added. Compilation
 whitespace and print-only document parsing pass; today's missing checklist is
 explicit until the native final handoff resumes. This gate closes source review,
 not deployment, selected preparation, PID consumption or unassisted acceptance.
+
+
+### Ordered closed-session preparation reader repair -- 2026-10-28
+
+The scoped native final-handoff recovery5b4dbdacac6c4d45aa0ea6e0fec4fd61
+completed with both whole strict seals; tuning completed03:01:12. Calculations,
+EOD, completion prefix and holding suffix were reused; the selector remained10f
+and Main stayed stopped. Today's native checklist now has one parsed
+`DirectFamilyPreopenPolicyHandoff` and retains the existing source/economic OPEN
+owners. Its strict-bound bytes remain unedited pending native preparation and
+its original-checklist preservation owner.
+
+Original selected-reader preflight found two genuine phase mismatches: its
+committed-stop interpretation was invalid and its delay reader demanded the live
+28 bootstrap. The new native source readers already validate those reports.
+Reinterpreting the data or manufacturing live bootstrap evidence is not recovery.
+The normal consumed-session proof independently verifies source27, while the
+selector's original deployment source is26 and the active policy was calculated
+on26 for effective27. Preparation target is28. These dates have distinct owners.
+
+The existing stopped predecessor-review context now accepts this additional
+normal ordered-closed state, using the existing native closed-consumption proof
+and original issue reader. Its cold transaction path is retained. Both selected
+and successor active-parent proofs, exact source hashes, normal terminal/EOD,
+absent PID/supervisor, no start authority/hold/restart and calendar checks remain
+required and are rechecked through scope exit. Interrupted/drained/unknown
+closures are not admitted as this normal state. The active parent's calculation
+date is checked separately from the actual consumed session; no original receipt
+field is rewritten. The preparation dispatcher only delegates a foreign clean
+workflow invoked from its own root; invalid cwd keeps the original strict gate.
+The isolated startup dispatcher repeats the same native stopped-source scope for
+a next-session target while preserving live and same-session closed paths.
+
+This extends existing H/N/startup owners, adds no module, publisher, schedule,
+policy/provider/quantity/order change or clock override. Existing exact code
+profiles remain available; current startup/preparation bytes have a new exact
+profile and independent reader pairs. Native active-parent handoff for fef43a8c5
+was separately issued through the original selected policy reader with1,984
+source members, source/effective lineage intact and actual PID consumption false.
+That proof does not deploy or start the subsequent repair candidate.
+
+The regression ran against preserved original fef source and produced4 failures
+and23 guard passes. Repaired focused routing/authority regressions pass27 cases,
+including distinct26/27/28 roles, dirty/missing/changed code/source, live actor,
+start authority, target/date rollover, original/successor custody and unwind.
+Full final preparation/startup, independent context and current/historical
+profile validation are recorded beside the original failures in
+`handoff-root-review/ordered-closed-source-review/`. Original source/code/stage
+and failed wrapper evidence remain preserved. Native actual stopped-scope,
+preparation, candidate/selected P5, code publication and next actual Main/PID
+acceptance remain pending; no unchanged calculation rerun is authorized by a
+missing phase proof.
+
+Final reviewed validation passes: preparation/startup221, independent-context914,
+current/historical whole-profile48, plus prior handoff122 and original-vs-repaired
+focused27. All original failure evidence is retained. Relative to f352917f8,
+non-test source+204/-80, tests+351/-9, documents+69/-0. Most H churn retains the
+existing cold transaction under its state-specific branch; the new behavior
+extends its normal ordered-closed case and exact code profile. No owner, module,
+entrypoint or old historical reader was displaced. Compilation, diff whitespace,
+link/authority review and current-checklist print-only parsing pass.

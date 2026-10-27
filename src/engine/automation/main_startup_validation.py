@@ -277,6 +277,22 @@ def _native_preparation_check(
                 with H.stopped_postclose_review(target_date) as proof:
                     postclose_review = proof
                 execution_root = ROOT
+            elif (
+                selected.get("release_root") == str(selected_root)
+                and selected.get("approval_scope")
+                == "ordered_intraday_deploy_and_restart"
+                and selected.get("actual_pid_consumed") is True
+            ):
+                try:
+                    closed_source = H.closed_consumption_observation()
+                except (OSError, ValueError, TypeError, KeyError):
+                    closed_source = None
+                if closed_source is not None:
+                    # The stopped source session can precede the prepared day.
+                    # The native scope still authenticates every original pin.
+                    with H.stopped_postclose_review(target_date) as proof:
+                        postclose_review = proof
+                    execution_root = ROOT
         if not closed and stopped_preparation is None and postclose_review is None:
             try:
                 selection = H._read(
@@ -736,7 +752,6 @@ finally:
         "native_validation_io": diagnostics,
         "native_process_lifecycle": result.native_process_lifecycle,
     }
-
 
 def _intake(workspace, target_date, run_id=None):
     from src.engine.infrastructure.runtime_release_router import selected_release

@@ -1371,3 +1371,62 @@ def test_stopped_rebind_preserves_historical_and_isolated_prepared_bootstrap(
     assert all(
         path.read_bytes() == b"preserved independent artifact" for path in protected
     )
+
+
+@pytest.mark.parametrize("admitted", [True, False])
+def test_prepare_foreign_ordered_release_requires_native_stopped_scope(
+    tmp_path, monkeypatch, admitted
+):
+    from contextlib import contextmanager
+    from src.engine.automation import intraday_release_handoff as H
+
+    selected = tmp_path / "selected"
+    monkeypatch.chdir(Path(readiness.__file__).resolve().parents[3])
+    monkeypatch.setattr(
+        readiness, "selected_release", lambda data: (selected, "a" * 40)
+    )
+    monkeypatch.setattr(
+        readiness,
+        "_selected_release",
+        lambda **kw: (
+            {
+                "approval_scope": "ordered_intraday_deploy_and_restart",
+                "actual_pid_consumed": True,
+            },
+            tmp_path / "selector",
+            "a" * 40,
+        ),
+    )
+    active = []
+
+    @contextmanager
+    def scope(target):
+        assert target == "2026-10-28"
+        if not admitted:
+            raise ValueError("native_ordered_closed_custody_invalid")
+        active.append(True)
+        try:
+            yield {"actual_pid_consumed": False}
+        finally:
+            active.pop()
+
+    monkeypatch.setattr(H, "stopped_postclose_review", scope)
+    calls = []
+
+    def prepare(source, **kw):
+        assert active
+        calls.append(source)
+        return {"status": "prepared_verified"}
+
+    monkeypatch.setattr(readiness, "_prepare", prepare)
+    if admitted:
+        assert (
+            readiness.prepare("2026-10-27", target_date="2026-10-28")["status"]
+            == "prepared_verified"
+        )
+        assert calls == ["2026-10-27"]
+    else:
+        with pytest.raises(ValueError, match="native_ordered_closed_custody_invalid"):
+            readiness.prepare("2026-10-27", target_date="2026-10-28")
+        assert not calls
+    assert not active

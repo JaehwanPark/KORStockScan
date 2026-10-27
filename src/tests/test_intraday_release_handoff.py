@@ -5370,6 +5370,7 @@ def test_pre_submit_handoff_rejects_unreviewed_dependency(tmp_path, family, depe
     "generation",
     [
         "current",
+        "quantity_source",
         "prior_execution",
         "native_cost_intake",
         "consumed_invalidation_cadence",
@@ -5417,7 +5418,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_QUANTITY_SOURCE_PROFILE,
+        "current": handoff.REVIEWED_STOPPED_PREPARATION_PROFILE,
+        "quantity_source": handoff.REVIEWED_QUANTITY_SOURCE_PROFILE,
         "prior_execution": handoff.REVIEWED_PRIOR_EXECUTION_PROFILE,
         "native_cost_intake": handoff.REVIEWED_NATIVE_COST_INTAKE_PROFILE,
         "machine_path": handoff.REVIEWED_MACHINE_PATH_PROFILE,
@@ -5504,6 +5506,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     str(canonical),
                     "show",
                     {
+                        "quantity_source": "fef43a8c5",
                         "prior_execution": "e93608c94",
                         "native_cost_intake": "0ee65ee7f",
                         "machine_path": "5dceaf032",
@@ -6703,3 +6706,213 @@ def test_native_cost_intake_profile_rejects_unreviewed_sibling_change(
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, "committed_change", "current", dependency
     )
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "main",
+        "supervisor",
+        "hold",
+        "restart",
+        "scope",
+        "start_authority",
+        "unconsumed",
+        "missing_closure",
+        "interrupted",
+        "wrong_source",
+        "new_pid",
+        "closure_selector",
+        "origin_missing",
+        "successor_missing",
+        "successor_selection",
+        "policy_source",
+        "activation",
+        "source_during",
+        "selector_during",
+        "closure_during",
+        "midnight_during",
+        "target",
+        "dirty",
+    ],
+)
+def test_ordered_closed_postclose_scope_keeps_distinct_source_roles(
+    tmp_path, monkeypatch, fault
+):
+    from src.engine.infrastructure import runtime_release_router as R
+    from src.engine.automation import ordered_intraday_deploy as D
+    from src.engine.scalping import reversal_code_handoff as A
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.infrastructure.research_release_transition import sha
+
+    data = tmp_path / "data"
+    root = tmp_path / "selected"
+    root.mkdir()
+    candidate = Path(handoff.__file__).resolve().parents[3]
+    clock = [datetime(2026, 10, 28, 1, tzinfo=handoff.KST)]
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock[0].astimezone(tz) if tz else clock[0].replace(tzinfo=None)
+
+    monkeypatch.setattr(handoff, "datetime", Clock)
+    monkeypatch.setattr(handoff, "DATA_DIR", data)
+    monkeypatch.setattr(R, "selected_release", lambda w: (root, OLD))
+    monkeypatch.setattr(R, "git", lambda path, *args: NEW if path == candidate else OLD)
+
+    def release(*args):
+        if fault == "dirty":
+            raise ValueError("dirty_candidate")
+        return candidate, NEW
+
+    monkeypatch.setattr(R, "validate_release", release)
+    monkeypatch.setattr(D, "_main_pids", lambda: [123] if fault == "main" else [])
+    monkeypatch.setattr(D, "_session_absent", lambda: fault != "supervisor")
+    monkeypatch.setattr(
+        readiness, "target_after_postclose", lambda source: "2026-10-28"
+    )
+    monkeypatch.setattr(
+        N,
+        "source_receipt_matches",
+        lambda ref, **kw: handoff._sha(ref["path"]) == ref["sha256"],
+    )
+    write = lambda path, body: (
+        path.parent.mkdir(parents=True, exist_ok=True),
+        path.write_text(json.dumps(body)),
+    )
+    selector = data / "runtime/runtime_release_selection.json"
+    write(
+        selector,
+        dict(
+            approved_by="user",
+            approval_scope=(
+                "other" if fault == "scope" else "ordered_intraday_deploy_and_restart"
+            ),
+            actual_pid_consumed=fault != "unconsumed",
+            actual_pid_receipt={"pid": 123},
+            source_date="2026-10-26",
+            selected_at_kst="2026-10-27T22:00:00+09:00",
+            main_start_authorized=fault == "start_authority",
+            release_root=str(root),
+            git_commit=OLD,
+            deployment_transition=str(
+                data / "runtime/release_transitions/native/status.json"
+            ),
+        ),
+    )
+    raw = selector.read_bytes()
+    source = data / "frozen.json"
+    write(source, {"frozen": True})
+    for key, relative in (
+        ("hold", "data/runtime/operator_startup_hold.json"),
+        ("restart", "restart.flag"),
+    ):
+        if fault == key:
+            write(tmp_path / relative, {})
+    pointer = N.root(data) / "current.json"
+    write(pointer, dict(effective_date="2026-10-27", bundle_sha256="e" * 64))
+    active = dict(
+        target_date="2026-10-27", source_date="2026-10-26", bundle_sha256="e" * 64
+    )
+    write(N.root(data) / "generations" / ("e" * 64 + ".json"), active)
+    monkeypatch.setattr(
+        N,
+        "validate",
+        lambda bundle, **kw: (
+            None
+            if bundle == active and kw["target_date"] == "2026-10-27"
+            else (_ for _ in ()).throw(ValueError("active_invalid"))
+        ),
+    )
+    hashes = {str(source): handoff._sha(source)}
+    closed = dict(
+        schema="intraday_closed_consumption_observation_v1",
+        target_date="2026-10-26" if fault == "wrong_source" else "2026-10-27",
+        release_commit=OLD,
+        selection_sha256="0" * 64 if fault == "closure_selector" else sha(raw),
+        source_hashes=hashes,
+        runtime_effect=False,
+        current_observation_verified=False,
+        new_pid_consumption_claimed=fault == "new_pid",
+    )
+    if fault == "interrupted":
+        closed["basis"] = "interrupted_closed"
+
+    def closure(day=None):
+        if fault == "missing_closure":
+            raise ValueError("native_closure_missing")
+        return json.loads(json.dumps(closed))
+
+    monkeypatch.setattr(handoff, "closed_consumption_observation", closure)
+    codes = {str(candidate / "code.py"): "f" * 64}
+    monkeypatch.setattr(A, "code_hashes", lambda: codes)
+
+    def origin(data, day, path, commit, *args):
+        if path == root and day == "2026-10-28":
+            return None
+        if (
+            path == root
+            and fault == "origin_missing"
+            or path == candidate
+            and fault == "successor_missing"
+        ):
+            return None
+        return {"source_hashes": hashes}
+
+    monkeypatch.setattr(A, "_validated_origin_receipt", origin)
+    write(
+        A.path(data, "2026-10-28", NEW, "e" * 64),
+        dict(
+            origin_root=str(root),
+            origin_commit=OLD,
+            origin_selection_sha256=(
+                "0" * 64 if fault == "successor_selection" else sha(raw)
+            ),
+            code_hashes=codes,
+            actual_pid_consumed=False,
+            activation_date="2026-10-27" if fault == "activation" else "2026-10-28",
+            parent_effective_date="2026-10-27",
+            source_trading_date=(
+                "2026-10-27" if fault == "policy_source" else "2026-10-26"
+            ),
+        ),
+    )
+
+    def run():
+        with handoff.stopped_postclose_review(
+            "2026-10-29" if fault == "target" else "2026-10-28"
+        ) as proof:
+            assert proof["basis"] == "ordered_closed_consumption"
+            assert (
+                proof["source_date"]
+                == proof["active_parent_effective_date"]
+                == "2026-10-27"
+            )
+            assert proof["active_parent_source_date"] == "2026-10-26"
+            assert proof["prepared_target_date"] == "2026-10-28"
+            assert all(
+                proof[k] is False
+                for k in (
+                    "actual_pid_consumed",
+                    "runtime_effect",
+                    "allowed_runtime_apply",
+                )
+            )
+            if fault == "source_during":
+                source.write_text("{}")
+            elif fault == "selector_during":
+                selector.write_text("{}")
+            elif fault == "closure_during":
+                closed["terminal_at"] = "changed"
+            elif fault == "midnight_during":
+                clock[0] += timedelta(days=1)
+
+    if fault:
+        with pytest.raises(ValueError):
+            run()
+    else:
+        run()
+        assert selector.read_bytes() == raw
+    assert handoff._PREDECESSOR_REVIEW.get() is None

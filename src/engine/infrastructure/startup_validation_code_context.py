@@ -3032,6 +3032,18 @@ for _name, _sha in REVIEWED_QUANTITY_SOURCE_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# Native stopped-source preparation dispatch; original source roles stay bound.
+REVIEWED_STOPPED_PREPARATION_SOURCES = {'src/engine/automation/next_preopen_readiness.py': '626f7849ae5fa39bf41f667b6c1cfae6b0ca765714e357fce049c523c0eaeeb9', 'src/engine/automation/main_startup_validation.py': '680d244ea1d468af3fee125fa1b18b558e584bc79bb8aeb29073c4572b13e481'}
+REVIEWED_STOPPED_PREPARATION_ORIGINS = {'src/engine/automation/next_preopen_readiness.py': 'b21095ca45f5844d1b2f6cf0cf0f312f44736e42cdf1a519eb65e7d39c0821f2', 'src/engine/automation/main_startup_validation.py': 'e35cfba631fa0409b87cbe35c87ea2a55464a4479ff1c975156a033e363fa604'}
+for _name, _sha in REVIEWED_STOPPED_PREPARATION_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_STOPPED_PREPARATION_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

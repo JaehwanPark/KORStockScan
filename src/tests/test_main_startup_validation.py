@@ -1638,3 +1638,57 @@ def test_stopped_preparation_native_reader_binds_original_analysis_only_proof(
         assert result["stopped_" + kind + "_observation"] == proof
         assert result["actual_pid_consumed"] is False
         assert result["native_process_lifecycle"]["child_terminated"] is True
+
+
+def test_next_session_native_check_uses_closed_source_postclose_scope(
+    native_preparation_cli, monkeypatch
+):
+    from contextlib import contextmanager
+    from src.engine.automation import intraday_release_handoff as H
+
+    code, data = native_preparation_cli
+    selected = code.parent / "ordered-selected"
+    monkeypatch.setattr(validation, "ROOT", code)
+    monkeypatch.setattr(validation, "_git", lambda *args: "a" * 40)
+    monkeypatch.setattr(
+        H,
+        "_read",
+        lambda path: dict(
+            release_root=str(selected),
+            approval_scope="ordered_intraday_deploy_and_restart",
+            actual_pid_consumed=True,
+        ),
+    )
+
+    def closed(day=None):
+        if day is not None:
+            raise ValueError("consumed_session_is_previous_day")
+        return dict(
+            schema="intraday_closed_consumption_observation_v1",
+            target_date="2026-10-16",
+        )
+
+    monkeypatch.setattr(H, "closed_consumption_observation", closed)
+    visits = []
+    proof = dict(
+        source_date="2026-10-16",
+        prepared_target_date=DAY,
+        actual_pid_consumed=False,
+        runtime_effect=False,
+        allowed_runtime_apply=False,
+    )
+
+    @contextmanager
+    def scope(day):
+        visits.append(day)
+        yield proof
+
+    monkeypatch.setattr(H, "stopped_postclose_review", scope)
+    (code / "src/engine/automation/intraday_release_handoff.py").write_text(
+        "from contextlib import contextmanager\n@contextmanager\ndef stopped_postclose_review(day):\n"
+        f"    assert day=={DAY!r}\n    yield {proof!r}\n"
+    )
+    result = validation._native_preparation_check(selected, DAY, "2026-10-16")
+    assert result["status"] == "pass" and result["actual_pid_consumed"] is False
+    assert visits == [DAY]
+    assert result["native_process_lifecycle"]["descendants_drained"] is True

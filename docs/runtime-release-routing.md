@@ -831,3 +831,20 @@ and policy proofs through successor attestation; a new collector epoch must not
 be mistaken for a changed policy generation. Running failed-hold adoption after
 this preserved drain failure requires fresh current PID/native validation and
 unchanged original consumed-policy ancestry before the existing CAS transfer.
+
+The same predecessor-review owner admits a clean preparation reader for a
+normally closed, consumed ordered release. Derive the consumed source session
+from its native closed-consumption proof, separately from the selector's earlier
+deployment source and the active parent's calculation date. Require the exact
+absent PID/start/cwd, normal zero-unresolved terminal, EOD/isolation and unchanged
+source receipts, clean managed reader, no hold/restart, native next-session
+calendar and both original-issuer and successor active-parent code proofs. The
+successor proof must preserve the active parent's original source/effective
+roles. Recheck selection, sources and stopped state across the scope; unknown,
+interrupted, changed or live actors fail closed. Preparation and isolated P5 use
+this same owner, preserving existing cold-selection and live-predecessor paths.
+These are preparation/code-custody receipts, with no activation, policy
+reselection, current observation or new PID-consumption claim. The existing
+`native_cold_review_sha256` workflow field is retained for compatibility and
+binds the exact native stopped review, including its explicit ordered-closed
+basis; its name grants no additional authority.
