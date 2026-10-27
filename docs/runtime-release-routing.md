@@ -765,3 +765,10 @@ selector, captured prior PID consumption and newly verified closed receipts. It
 preserves the failed attempt, transfers its hold by CAS and requires a new clean
 candidate/P5 followed by selected P5 and actual PID verification. No manual hold
 removal, fabricated consumption, EOD proof or research promotion is permitted.
+
+Stopped-recovery collector `latest.json` is a pre-start source: verify its exact
+identity through the final start check. Preserve immutable closed epoch receipts
+and policy proofs through successor attestation; a new collector epoch must not
+be mistaken for a changed policy generation. Running failed-hold adoption after
+this preserved drain failure requires fresh current PID/native validation and
+unchanged original consumed-policy ancestry before the existing CAS transfer.

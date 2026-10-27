@@ -1506,7 +1506,10 @@ class Deployment:
             or failed.get("status") != "fail"
             or failed.get("phase") != "failed"
             or failed.get("failed_phase") != "starting"
-            or failed.get("error") != "deployment_pid_attestation_timeout"
+            or failed.get("error") not in {
+                "deployment_pid_attestation_timeout",
+                "deployment_original_policy_generation_changed",
+            }
             or not isinstance(old_identity, dict)
             or old_identity != failed.get("predecessor_identity")
             or type(old_identity.get("pid")) is not int
@@ -1543,6 +1546,20 @@ class Deployment:
             or _main_pids() != [self.identity["pid"]]
         ):
             raise ValueError("deployment_failed_hold_current_pid_unverified")
+        if failed["error"] == "deployment_original_policy_generation_changed":
+            # A stopped-recovery latest pointer advances when the successor
+            # collects. Accept this old failure only with the original consumed
+            # policy bytes still valid, in addition to fresh current PID proof.
+            parent = failed.get("failed_hold_adoption") or {}
+            if parent.get("source_failure") != "deployment_collector_closed_epoch_invalid":
+                raise ValueError("deployment_failed_collector_custody_unverified")
+            native = _stopped_intraday_predecessor(
+                self.day, Path(failed["previous_root"]), failed["previous_commit"],
+                old_identity, expected_transition,
+            )
+            if native["sha256"] != parent.get("intraday_predecessor_proof_sha256"):
+                raise ValueError("deployment_failed_collector_custody_changed")
+            self.frozen.update(native["frozen_files"])
         self.failed_hold_adoption = dict(
             raw=raw,
             signature=signature,
@@ -1565,7 +1582,7 @@ class Deployment:
             failed_transition_sha256=_digest(failed_raw),
             failed_original_selection_path=str(prior_path),
             failed_original_selection_sha256=_digest(prior_raw),
-            source_failure="deployment_pid_attestation_timeout",
+            source_failure=failed["error"],
             previous_hold_identity=old_identity,
             verified_current_pid_identity=self.identity,
             original_selection_sha256=_digest(self.before),
@@ -1667,7 +1684,9 @@ class Deployment:
             != self.candidate_p5
         ):
             raise ValueError("deployment_candidate_p5_changed")
-        if any(H._sha(path) != sha for path, sha in self.frozen.items()):
+        if any(H._sha(path) != sha for path, sha in {
+            **self.frozen, **getattr(self, "stopped_collector_source", {})
+        }.items()):
             raise ValueError("deployment_predecessor_generation_changed")
 
     def acquire_hold(self):
@@ -1922,6 +1941,9 @@ class Deployment:
             or _main_pids()
         ):
             raise ValueError("deployment_start_generation_changed")
+        if any(H._sha(path) != sha for path, sha in
+               getattr(self, "stopped_collector_source", {}).items()):
+            raise ValueError("deployment_stopped_collector_changed_before_start")
         # The native router rejects every startup hold, including ours. The
         # release-set lock still serializes launch; execute() restores this
         # exact owned hold on any planning/launch failure before attestation.
@@ -2218,6 +2240,7 @@ class StoppedDeploymentRecovery(Deployment):
         self.launcher = failed["predecessor_launcher"]["pid"]
         self.assert_stopped()
         self.previous, self.previous_commit = R.validate_release(self.workspace, prior)
+        collector_source = {}
         if preselection:
             pin = failed.get("collector_shutdown_pin") or {}
             if (pin.get("pid") != identity["pid"]
@@ -2228,10 +2251,11 @@ class StoppedDeploymentRecovery(Deployment):
             native = _stopped_intraday_predecessor(
                 self.day, self.previous, self.previous_commit, identity, failed_path)
             preparation_sources.update(native["frozen_files"])
-            preparation_sources[pin["path"]] = H._sha(pin["path"])
+            collector_source[pin["path"]] = H._sha(pin["path"])
             preparation_sources.update({r["path"]: r["sha256"] for r in closure["receipts"]})
         return dict(
             preselection=preselection,
+            collector_source=collector_source,
             selected=selected,
             failed_root=failed_root,
             failed_commit=failed_commit,
@@ -2268,6 +2292,7 @@ class StoppedDeploymentRecovery(Deployment):
         prior_sig = origin["prior_sig"]
         identity = origin["identity"]
         preparation_sources = origin["preparation_sources"]
+        self.stopped_collector_source = origin["collector_source"]
         commit = R.git(self.candidate, "rev-parse", "HEAD")
         self.candidate, self.commit = R.validate_release(
             self.workspace,

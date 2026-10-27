@@ -11429,6 +11429,34 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_DRAIN_CLOSURE_HASHES.items()
 }}
 
+# Reviewed lossless drain recovery; source research admission is unchanged.
+REVIEWED_DRAIN_POINTER_HASHES = {'src/engine/automation/ordered_intraday_deploy.py': 'c208f4ed8c369522c9554e87c4c03d57145f8ffac5f9a7175b05088b4c829bf1', 'src/engine/infrastructure/startup_validation_code_context.py': '34d46cd994c25509a92013fc2c55ee3095b3abe2e54dc8d912917c52a9599a1e'}
+REVIEWED_DRAIN_POINTER_PROFILE = {
+    **REVIEWED_DRAIN_CLOSURE_PROFILE, **REVIEWED_DRAIN_POINTER_HASHES
+}
+REVIEWED_DRAIN_POINTER_VARIANTS = {
+    (key[0], REVIEWED_DRAIN_POINTER_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_DRAIN_POINTER_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_DRAIN_POINTER_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_DRAIN_POINTER_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_DRAIN_CLOSURE_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+                    for value in pair} | {REVIEWED_DRAIN_CLOSURE_PROFILE[name]}
+    )
+    for name, current in REVIEWED_DRAIN_POINTER_HASHES.items()
+}}
+
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
@@ -12108,6 +12136,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_DRAIN_CLOSURE_PROFILE
         prepared_variants = REVIEWED_DRAIN_CLOSURE_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/infrastructure/startup_validation_code_context.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_DRAIN_POINTER_HASHES["src/engine/infrastructure/startup_validation_code_context.py"]
+    ):
+        prepared_hashes = REVIEWED_DRAIN_POINTER_PROFILE
+        prepared_variants = REVIEWED_DRAIN_POINTER_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

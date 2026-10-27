@@ -3787,7 +3787,7 @@ def test_drained_research_ineligible_epoch_preserves_semantic_rejection(tmp_path
     assert receipt.read_bytes() == before
 
 
-@pytest.mark.parametrize('damage', [None, 'selector', 'hold', 'collector', 'closure', 'source_after_preflight'])
+@pytest.mark.parametrize('damage', [None, 'selector', 'hold', 'collector', 'closure', 'source_after_preflight', 'prestart_current', 'poststart_current', 'poststart_closed'])
 def test_drained_preselection_recovery_keeps_original_selector_and_failed_evidence(stopped_recovery, monkeypatch, damage):
     d, status_path, policy = stopped_recovery
     prior_path = status_path.with_name('selection-before.json')
@@ -3799,6 +3799,7 @@ def test_drained_preselection_recovery_keeps_original_selector_and_failed_eviden
     failed = D.H._read(status_path)
     collector = d.workspace / 'data/runtime/scalp_micro_reversion_forward_collector/latest.json'
     collector.parent.mkdir(); collector.write_text('{}')
+    closed = collector.parent / 'closed.json'; closed.write_text('{"closed":true}')
     failed.update(failed_phase='draining', error='deployment_collector_closed_epoch_invalid',
                   original_selection_sha256=D._digest(prior_path.read_bytes()),
                   collector_shutdown_pin=dict(path=str(collector), pid=failed['predecessor_identity']['pid'],
@@ -3809,7 +3810,7 @@ def test_drained_preselection_recovery_keeps_original_selector_and_failed_eviden
         path=str(proof), sha256=D.H._sha(proof), frozen_files={str(policy):D.H._sha(policy)}))
     def closure(pin):
         if damage == 'closure': raise ValueError('native closure invalid')
-        return dict(status='verified', receipts=[dict(path=str(collector),sha256=D.H._sha(collector))])
+        return dict(status='verified', receipts=[dict(path=str(closed),sha256=D.H._sha(closed))])
     monkeypatch.setattr(D,'verify_collector_shutdown',closure)
     if damage == 'selector': d.selection.write_bytes(d.selection.read_bytes()+b' ')
     if damage == 'hold':
@@ -3817,7 +3818,7 @@ def test_drained_preselection_recovery_keeps_original_selector_and_failed_eviden
     if damage == 'collector':
         failed['collector_shutdown_pin']['pid']+=1;status_path.write_bytes(D._json_bytes(failed))
     original = {p:p.read_bytes() for p in (d.selection, d.hold, status_path, prior_path)}
-    if damage and damage != 'source_after_preflight':
+    if damage in {'selector', 'hold', 'collector', 'closure'}:
         with pytest.raises(ValueError):d.preflight()
         assert all(p.read_bytes()==raw for p,raw in original.items())
         return
@@ -3832,3 +3833,52 @@ def test_drained_preselection_recovery_keeps_original_selector_and_failed_eviden
     assert status_path.read_bytes()==original[status_path]
     assert prior_path.read_bytes()==original[prior_path]
     assert not hasattr(d,'native_path')
+    d.checkpoint('prepared')
+    if damage == 'prestart_current':
+        collector.write_text('{"unowned_writer":true}')
+        with pytest.raises(ValueError, match='stopped_collector_changed_before_start'):
+            d.start()
+        assert d.hold.exists()
+        return
+    identity = dict(pid=456, start_ticks='567', cwd=str(d.candidate / 'src'))
+    def launch(plan):
+        selected = D.H._read(d.selection)
+        selected.update(actual_pid_consumed=True, actual_pid_receipt={'pid':456})
+        d.selection.write_bytes(D._json_bytes(selected))
+        if damage == 'poststart_current': collector.write_text('{"new_epoch":true}')
+        if damage == 'poststart_closed': closed.write_text('{"tampered":true}')
+        monkeypatch.setattr(D, '_main_pids', lambda:[456])
+    monkeypatch.setattr(D.R, 'make_plan', lambda *a:dict(command=['/usr/bin/env python bot_main.py']))
+    monkeypatch.setattr(D, '_launch', launch)
+    monkeypatch.setattr(D.H, '_identity', lambda pid:identity)
+    monkeypatch.setattr(d, 'run_json', lambda *a:None)
+    d.start()
+    if damage == 'poststart_closed':
+        with pytest.raises(ValueError, match='original_policy_generation_changed'):d.attest()
+    else:
+        assert d.attest()['status']=='pass'
+    assert status_path.read_bytes()==original[status_path]
+
+
+@pytest.mark.parametrize('fault', [None, 'parent', 'old_proof', 'old_sources', 'current_pid'])
+def test_live_failed_collector_pointer_recovery_requires_both_consumed_generations(driver, monkeypatch, fault):
+    d=driver
+    _,failed,path,_=_failed_hold_fixture(d,monkeypatch)
+    failed.update(error='deployment_original_policy_generation_changed', failed_hold_adoption=dict(
+        source_failure='deployment_collector_closed_epoch_invalid',intraday_predecessor_proof_sha256='oldproof'))
+    policy=d.workspace/'old-policy.json';policy.write_text('unchanged')
+    if fault=='parent':failed['failed_hold_adoption']['source_failure']='unreviewed_failure'
+    path.write_bytes(D._json_bytes(failed))
+    def native(*args):
+        if fault=='old_sources':raise ValueError('old policy changed')
+        return dict(sha256='changed' if fault=='old_proof' else 'oldproof',frozen_files={str(policy):D.H._sha(policy)})
+    monkeypatch.setattr(D,'_stopped_intraday_predecessor',native)
+    if fault=='current_pid':monkeypatch.setattr(D,'_main_pids',lambda:[])
+    before=d.hold.read_bytes(),path.read_bytes()
+    if fault:
+        with pytest.raises(ValueError):d.capture_failed_hold_adoption()
+    else:
+        d.capture_failed_hold_adoption()
+        assert d.state['failed_hold_adoption']['source_failure']==failed['error']
+        assert d.frozen[str(policy)]==D.H._sha(policy)
+    assert (d.hold.read_bytes(),path.read_bytes())==before

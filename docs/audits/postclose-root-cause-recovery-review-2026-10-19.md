@@ -3979,3 +3979,27 @@ original rejection, while the reviewed reader verifies lossless closure and stil
 returns research eligible=false. Compile/diff/docs parser pass. Incremental delta
 before this note: {'source': [147, 7], 'tests': [104, 1], 'docs': [34, 0]}. Source growth stays within the existing drain,
 closed-custody and exact reviewed-profile owners; no new execution entrypoint.
+
+The e930a7c95 recovery selected and started Main4025821 (start ticks70580447),
+and native policy consumption passed, but its final attestation failed at09:35.
+The stopped-recovery producer incorrectly placed the old collector latest pointer
+in immutable policy sources. The successor's normal new epoch replaced it. The
+exact original regression fails with deployment_original_policy_generation_changed.
+The correction keeps this mutable pointer fixed through the last pre-start check,
+while immutable closed receipts and native policy sources remain fixed through
+attestation. A changed closure still fails. Existing running failed-hold adoption
+requires both current PID/native consumption and unchanged original consumed policy
+proof for this specific preserved drain failure; it never deletes a hold manually.
+
+Current source26 publication verified history IDs49013/49266/49362/49415 and null
+economics with current findings empty. The intermediate observer deferred under
+resource contention; current-generation observation remains to be verified after
+the final corrected transition. Original failed transition bytes are retained.
+
+Pointer lifetime review: original-code reproducer fails, corrected ordered suite457,
+profile/custody checks72 and exact predecessor profiles6 pass. Compile/diff and
+print-only document parsing pass. Native original policy proof retains14 exact
+files and its SHA; current PID4025821 consumed the same policies. Incremental
+source/test/doc delta before this note: {'source': [73, 4], 'tests': [64, 4], 'docs': [24, 0]}. Existing
+mutable-pointer retention is replaced, immutable closure checks retained; no
+new execution owner or wrapper. Full independent context regressions are pending.
