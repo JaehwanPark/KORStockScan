@@ -90,6 +90,120 @@ def _validated_origin_receipt(
     )
 
 
+def _validate_prepared_issuer(bundle, data_root, origin):
+    """Carry original validator byte custody into this invocation, not its verdict."""
+    import time
+    from src.engine.infrastructure import validation_digest_session as D
+    from src.engine.infrastructure.runtime_release_router import _release_identity
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+
+    session = D.ACTIVE.get()
+    if session is None or session.binding.get("role") != "postclose":
+        return N._validate_bundle_sources(
+            bundle, data_root, historical_code_root=origin
+        )
+    data_root, origin = Path(data_root).resolve(), Path(origin).resolve(strict=True)
+    commit = bundle["continuous_reversal"]["release_commit"]
+    if (
+        session.data_root.resolve() != data_root
+        or session.binding.get("day") != bundle["source_date"]
+        or session.binding.get("pid") != os.getpid()
+    ):
+        raise ValueError("prepared_issuer_digest_owner_invalid")
+    attested = _release_identity(
+        data_root.parent, str(origin / "src"), "operating_transition_parent", commit
+    )
+    if attested["source_integrity"] != "git_commit_and_clean_runtime_source":
+        raise ValueError("prepared_issuer_code_unattested")
+    # This is the same immutable issuer's full native source validation used
+    # by the historical reader. Its private stdout also returns the digests
+    # actually observed during that validation; no persistent cache is read.
+    script = r"""import json,os,sys
+from pathlib import Path
+from src.engine.infrastructure import validation_digest_session as D
+from src.engine.scalping import mechanistic_entry_runtime_policy as N
+bundle=json.load(sys.stdin)
+with D.postclose_session(Path(sys.argv[1]),bundle['source_date']) as session:
+    N._validate_bundle_sources(bundle,Path(sys.argv[1]))
+    entries={name:entry for name,entry in session.entries.items()
+        if entry['identity'][4]>=D.MIN_BYTES and Path(name).resolve().is_relative_to(Path(sys.argv[1]))}
+    body=dict(schema='native_prepared_issuer_bytes_v1',issuer_root=str(Path.cwd()),
+        issuer_commit=sys.argv[2],bundle_digest=N.digest(bundle),binding=session.binding,
+        uid=os.getuid(),entries=entries,semantic_verdict=False,runtime_effect=False)
+    raw=D._encode(dict(body=body,sha256=D._sha(body)))
+    if len(entries)>D.MAX_ENTRIES or len(raw)>D.MAX_BYTES:
+        raise ValueError('prepared_issuer_digest_budget_exceeded')
+    print(raw.decode())
+"""
+    with subprocess.Popen(
+        [str(origin / ".venv/bin/python"), "-B", "-c", script, str(data_root), commit],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=origin,
+        env={**os.environ, "PYTHONPATH": str(origin)},
+        text=True,
+    ) as child:
+        try:
+            stdout, stderr = child.communicate(json.dumps(bundle), timeout=120)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.communicate()
+            raise
+        if child.returncode:
+            raise subprocess.CalledProcessError(
+                child.returncode, child.args, stdout, stderr
+            )
+        issuer_pid = child.pid
+    if len(stdout.encode()) > D.MAX_BYTES:
+        raise ValueError("prepared_issuer_digest_budget_exceeded")
+    capsule = json.loads(stdout)
+    body = capsule["body"]
+    binding = body["binding"]
+    entries = body["entries"]
+    if (
+        capsule.get("sha256") != D._sha(body)
+        or body.get("schema") != "native_prepared_issuer_bytes_v1"
+        or body.get("issuer_root") != str(origin)
+        or body.get("issuer_commit") != commit
+        or body.get("bundle_digest") != N.digest(bundle)
+        or body.get("uid") != os.getuid()
+        or body.get("semantic_verdict") is not False
+        or body.get("runtime_effect") is not False
+        or binding.get("schema") != session.binding["schema"]
+        or binding.get("role") != "postclose"
+        or binding.get("day") != bundle["source_date"]
+        or binding.get("resolved_root") != str(data_root)
+        or binding.get("lexical_root") != str(data_root)
+        or binding.get("boot_id") != session.binding["boot_id"]
+        or binding.get("generation") != {}
+        or binding.get("pid") != issuer_pid
+        or not isinstance(entries, dict)
+        or len(entries) > D.MAX_ENTRIES
+    ):
+        raise ValueError("prepared_issuer_digest_capsule_unbound")
+    # Validate the entire transfer before admitting any digest. The native
+    # admission owner independently rechecks file/root/owner/stat identity.
+    for name, entry in entries.items():
+        if (
+            not Path(name).is_absolute()
+            or entry.get("identity") != D.identity(name)
+            or not 0 <= time.time() - entry["created"] <= session.ttl
+        ):
+            raise ValueError("prepared_issuer_digest_source_changed")
+    for name, entry in entries.items():
+        session.admit_native_generation(
+            name,
+            dict(
+                path=Path(name).name, size=entry["identity"][4], sha256=entry["digest"]
+            ),
+            entry["identity"][2:7],
+            proof_sha256=capsule["sha256"],
+        )
+    return bundle
+
+
+
 def validate(bundle, data_root, *, original_error):
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     from src.engine.infrastructure.runtime_release_router import selected_release
@@ -151,9 +265,7 @@ def validate(bundle, data_root, *, original_error):
                 family["contract_file_sha256"]
             ):
                 raise ValueError("prepared_main_code_membership_changed")
-            N._validate_bundle_sources(
-                bundle, data_root, historical_code_root=selected_root
-            )
+            _validate_prepared_issuer(bundle, data_root, selected_root)
             handoff._verify_entry_code_delta(
                 root,
                 commit,

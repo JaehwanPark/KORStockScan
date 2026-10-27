@@ -2018,6 +2018,170 @@ def test_stopped_future_main_reader_keeps_issuer_and_workflow_separate(
         I._PREDECESSOR_REVIEW.reset(token)
 
 
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "seal",
+        "commit",
+        "day",
+        "pid",
+        "bundle",
+        "epoch",
+        "hash",
+        "outside",
+        "owner",
+        "ttl",
+        "role",
+        "exit",
+    ],
+)
+def test_prepared_issuer_transfers_native_byte_custody(tmp_path, monkeypatch, damage):
+    import hashlib, json, os, subprocess, time
+    from pathlib import Path
+    from src.engine.scalping import reversal_code_handoff as A, mechanistic_entry_runtime_policy as N
+    from src.engine.infrastructure import validation_digest_session as D
+    from src.engine.infrastructure import runtime_release_router as R
+
+    data, origin = tmp_path / "data", tmp_path / "issuer"
+    data.mkdir()
+    origin.mkdir()
+    source = data / "bars.json"
+    source.write_bytes(b"x" * D.MIN_BYTES)
+    bundle = dict(
+        source_date="2026-10-27", continuous_reversal=dict(release_commit="a" * 40)
+    )
+    monkeypatch.setattr(
+        R,
+        "_release_identity",
+        lambda *a: dict(source_integrity="git_commit_and_clean_runtime_source"),
+    )
+
+    class Pipe:
+        pid = 12345
+        returncode = 1 if damage == "exit" else 0
+        args = []
+
+        def __init__(self, args, **kwargs):
+            assert "N._validate_bundle_sources(bundle" in args[3]
+            assert kwargs["cwd"] == origin
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def communicate(self, raw, **kwargs):
+            assert json.loads(raw) == bundle
+            session = D.ACTIVE.get()
+            binding = dict(session.binding, pid=self.pid)
+            entry = dict(
+                identity=D.identity(source),
+                digest=hashlib.sha256(source.read_bytes()).hexdigest(),
+                created=time.time(),
+            )
+            body = dict(
+                schema="native_prepared_issuer_bytes_v1",
+                issuer_root=str(origin),
+                issuer_commit="a" * 40,
+                bundle_digest=N.digest(bundle),
+                binding=binding,
+                uid=os.getuid(),
+                entries={str(source): entry},
+                semantic_verdict=False,
+                runtime_effect=False,
+            )
+            if damage == "commit":
+                body["issuer_commit"] = "b" * 40
+            if damage == "day":
+                binding["day"] = "2026-10-26"
+            if damage == "pid":
+                binding["pid"] += 1
+            if damage == "bundle":
+                body["bundle_digest"] = "b" * 64
+            if damage == "epoch":
+                entry["identity"][6] -= 1
+            if damage == "hash":
+                entry["digest"] = "unknown"
+            if damage == "outside":
+                other = tmp_path / "outside.json"
+                other.write_bytes(source.read_bytes())
+                entry["identity"] = D.identity(other)
+                body["entries"] = {str(other): entry}
+            if damage == "owner":
+                body["uid"] += 1
+            if damage == "ttl":
+                entry["created"] -= 601
+            if damage == "role":
+                binding["role"] = "observer"
+            capsule = dict(body=body, sha256=D._sha(body))
+            if damage == "seal":
+                capsule["sha256"] = "b" * 64
+            return json.dumps(capsule), "original native failure"
+
+    monkeypatch.setattr(A.subprocess, "Popen", Pipe)
+    with D.postclose_session(data, bundle["source_date"]) as session:
+        if damage:
+            with pytest.raises((ValueError, subprocess.CalledProcessError)):
+                A._validate_prepared_issuer(bundle, data, origin)
+            assert not session.entries
+        else:
+            assert A._validate_prepared_issuer(bundle, data, origin) is bundle
+            assert (
+                session.entries[str(source)]["digest"]
+                == hashlib.sha256(source.read_bytes()).hexdigest()
+            )
+            assert session.stats["admitted_native_bytes"] == source.stat().st_size
+            source.write_bytes(b"y" * D.MIN_BYTES)
+            with pytest.raises(D.ValidationDeferred, match="epoch_changed"):
+                session.digest(source)
+
+
+def test_prepared_issuer_real_native_subprocess_digest_handoff(tmp_path, monkeypatch):
+    import hashlib, os, shutil, sys
+    from pathlib import Path
+    from src.engine.scalping import reversal_code_handoff as A, mechanistic_entry_runtime_policy as N
+    from src.engine.infrastructure import validation_digest_session as D
+    from src.engine.infrastructure import runtime_release_router as R
+
+    data, origin = tmp_path / "data", tmp_path / "issuer"
+    data.mkdir()
+    infra = origin / "src/engine/infrastructure"
+    infra.mkdir(parents=True)
+    automation = origin / "src/engine/automation"
+    automation.mkdir()
+    scalping = origin / "src/engine/scalping"
+    scalping.mkdir()
+    shutil.copyfile(D.__file__, infra / "validation_digest_session.py")
+    (automation / "main_trailing_source_store.py").write_text(
+        "from contextlib import nullcontext\ndef read_session(data): return nullcontext()\n"
+    )
+    (scalping / "mechanistic_entry_runtime_policy.py").write_text(
+        "import hashlib,json\nfrom src.engine.infrastructure import validation_digest_session as D\ndef digest(v): return hashlib.sha256(json.dumps(v,sort_keys=True,separators=(',',':')).encode()).hexdigest()\ndef _validate_bundle_sources(b,data):\n assert D.reused_digest(data/'bars.json') == b['source_sha256'], 'native_source_changed'\n"
+    )
+    python = origin / ".venv/bin/python"
+    python.parent.mkdir(parents=True)
+    python.symlink_to(sys.executable)
+    source = data / "bars.json"
+    source.write_bytes(b"x" * D.MIN_BYTES)
+    bundle = dict(
+        source_date="2026-10-27",
+        source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+        continuous_reversal=dict(release_commit="a" * 40),
+    )
+    monkeypatch.setattr(
+        R,
+        "_release_identity",
+        lambda *a: dict(source_integrity="git_commit_and_clean_runtime_source"),
+    )
+    with D.postclose_session(data, bundle["source_date"]) as session:
+        assert A._validate_prepared_issuer(bundle, data, origin) is bundle
+        assert session.entries[str(source)]["digest"] == bundle["source_sha256"]
+        assert session.entries[str(source)]["native_generation_proof"]
+
+
+
 def test_cold_code_handoff_publishes_next_activation_date(tmp_path, monkeypatch):
     test_second_code_handoff_preserves_selector_provenance_without_freezing_transition(
         tmp_path, monkeypatch, None, False, cold_activation=True

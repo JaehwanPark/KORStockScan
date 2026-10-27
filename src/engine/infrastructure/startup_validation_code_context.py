@@ -3074,6 +3074,18 @@ for _name, _sha in REVIEWED_CLOSED_PARENT_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# Transfer original native byte custody without changing semantic validation.
+REVIEWED_ISSUER_BYTES_SOURCES = {'src/engine/scalping/reversal_code_handoff.py': '21760885de2a28bd7d5c5a021af3eb88c0fd0f31c890855b94be0e81f8b7b93c'}
+REVIEWED_ISSUER_BYTES_ORIGINS = {'src/engine/scalping/reversal_code_handoff.py': '2be83fd30237b4e83506462a4a5cc78dc8f4ad4ae85e23e8909864a41d9a7825'}
+for _name, _sha in REVIEWED_ISSUER_BYTES_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_ISSUER_BYTES_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

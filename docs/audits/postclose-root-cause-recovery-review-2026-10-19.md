@@ -4680,3 +4680,64 @@ non-test source+41/-1, tests+40/-25; docs recorded separately. The same origin
 resolver is extended; original/workflow/carry consumers remain retained and
 unknown origins fail. No owner or module is displaced and no new publisher or
 entrypoint is introduced. Final runtime preparation/selection/P5 remain OPEN.
+
+
+### Original prepared-validator byte custody -- 2026-10-28
+
+This session reloaded AGENTS, Plan Rebase sections1-8, checklist28 objectives and
+mandatory rules, native schedules, code registration, stage dispatch, original
+issuer, recovery reader, finalization/PREOPEN/Main and independent P5 consumers.
+Source date remains27 and next target28. Main is OFF; weakness remains paused.
+The12-role/7-stage census is retained and expanded by the actual cross-process
+byte-custody edge rather than treating an issuer success as parent custody.
+
+Candidatef98 native preparation passed05:15:27. P5 run
+5bbd492984144a5ab29ddf1353e2ebe5 passed the real isolated policy-load child,
+with0 forbidden attempts, but final parent source recheck failed
+startup_input_not_regular_bounded. Original request/child/result and all4
+prepared files are preserved. The parent correctly keeps its bounded generic
+reader. Nine large inherited frozen bars had native digest custody; three
+source27 bars (74,176,202 /73,937,956 /69,628,851 bytes) did not. The original
+immutable validator subprocess verified them but returned no byte observations.
+No source loss or invalid calculation was established.
+
+The existing A prepared-issuer owner now runs the original full native validator
+under its original invocation-only postclose digest session and transfers only
+that invocation's byte observations over its private captured pipe. It binds
+issuer/root/commit, input bundle, source date, childPID/boot/UID, seal, file epoch,
+resource bounds and freshness. The current native DigestSession admission owner
+rechecks local source/root/owner/stat; every semantic reader still executes.
+No persistent verdict/cache, larger size cap, warning suppression or fabricated
+source hash is introduced. Outside that postclose owner, the original historical
+validation path remains. Exact C/H registrations retain earlier issued profiles.
+
+The actual three missing source27 files passed original immutable10f native
+validation and admission at05:40:48:181 entries/1,965,110,331 observed bytes;
+all three exact content-addressed digests are now present with native proof.
+Selector and policy bytes were unchanged and no provider/order/Main was called.
+Evidence: /home/ubuntu/KORStockScan-storage-archives/postclose-monitor-20261027/
+handoff-root-review/ordered-closed-source-review/native-byte-custody-production-reproducer.log.
+
+Disposition: original full validator retained; its uncaptured subprocess edge
+consolidated into the existing prepared-issuer owner; existing native digest
+admission retained. No displaced module, publisher or runtime entrypoint.
+Reuse all verified calculation/EOD/cleanup prefixes. Read-only revalidate original
+parent/policies. Regenerate only affected handoff/strict/controller/preparation
+and finalization consumers under native owners. Candidate P5, native selection,
+selected final-generation P5 and actual28 Main/PID/observer/health remain OPEN.
+The05:35 original selected10f finalizer failed summary_handoff_refresh_failed;
+its strict/controller failure is preserved, never reused as PASS. Do not repeat
+that deterministic old-reader run. Historical six OPENs/null economics and the
+next scheduled unassisted28-to29 acceptance remain unchanged.
+
+Final byte-custody source review:414 owner/digest/policy tests,926 independent
+startup-context tests,45 current/inventory-origin/closed-parent complete profiles,
+and31 final origin/identity cases PASS. The real native subprocess fixture and
+actual production-shape reproducer both PASS. Earlier6 failures arose while the
+new source identity was not yet registered or old test expectations named its
+previous profile; those logs are preserved and final926 includes their corrected
+exact-current and rejected-unknown cases. Compilation, diff and isolated/canonical
+print-only document parsing PASS. Baselinef98d1aaef; non-test source+157/-3 extends
+one existing owner plus its existing reviewed registries. Tests and docs are
+reported separately by Git numstat; additions retain distinct custody/epoch/
+issuer/role/exit failure coverage. No runtime scope or policy values change.

@@ -12604,6 +12604,30 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Native issuer byte-custody profile; retain every previously issued reader.
+REVIEWED_ISSUER_BYTES_HASHES = {'src/engine/scalping/reversal_code_handoff.py': '21760885de2a28bd7d5c5a021af3eb88c0fd0f31c890855b94be0e81f8b7b93c', 'src/engine/infrastructure/startup_validation_code_context.py': '5ef16fce0b5ba3cea8c82d2bd58a6434effae4c1205115b8a3e08dc1c21d6d4f'}
+REVIEWED_ISSUER_BYTES_ORIGINS = {'src/engine/scalping/reversal_code_handoff.py': '2be83fd30237b4e83506462a4a5cc78dc8f4ad4ae85e23e8909864a41d9a7825', 'src/engine/infrastructure/startup_validation_code_context.py': 'f5b5c2a4a91e3d59da8dded68c1ffd8c8c89ab3182260a3e36f52caddf8fc94b'}
+REVIEWED_ISSUER_BYTES_PROFILE = {**REVIEWED_INVENTORY_ORIGIN_PROFILE, **REVIEWED_ISSUER_BYTES_HASHES}
+REVIEWED_ISSUER_BYTES_VARIANTS = {
+    (key[0], REVIEWED_ISSUER_BYTES_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/scalping/reversal_code_handoff.py",
+        "selector_sha256": REVIEWED_ISSUER_BYTES_HASHES["src/engine/scalping/reversal_code_handoff.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_ISSUER_BYTES_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_ISSUER_BYTES_HASHES.get(os.path.normpath(name), sha) for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_INVENTORY_ORIGIN_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current) for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_ISSUER_BYTES_ORIGINS[name]})
+    for name, current in REVIEWED_ISSUER_BYTES_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -13455,6 +13479,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_INVENTORY_ORIGIN_PROFILE
         prepared_variants = REVIEWED_INVENTORY_ORIGIN_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/scalping/reversal_code_handoff.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_ISSUER_BYTES_HASHES["src/engine/scalping/reversal_code_handoff.py"]
+    ):
+        prepared_hashes = REVIEWED_ISSUER_BYTES_PROFILE
+        prepared_variants = REVIEWED_ISSUER_BYTES_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present
