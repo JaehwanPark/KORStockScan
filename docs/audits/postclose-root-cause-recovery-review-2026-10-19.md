@@ -4639,3 +4639,44 @@ original readers and complete code review; normal runtime retains its strict
 path. Profile additions preserve all earlier issuers and complete dependencies.
 No module, publisher or executable entrypoint is added. Native candidate parity,
 preparation/P5, selection and final selected-generation acceptance remain OPEN.
+
+
+### Prepared Main inventory origin versus verification workflow -- 2026-10-28
+
+Immutable1b46805ce passed fresh native confirmation parity128 scopes/76,800 rows/
+569 signals, full original future-issuer source validation and complete38-module
+code delta. Its native active-parent issue used original27 receipt, source26,
+with no frozen future alias or coordinator. Native preparation passed04:54:33.
+P5 run94ad3dc09daf454cb064623fd96e07d6 passed full native preparation, then failed
+before the child with startup_main_inventory_git_origin_changed. Selection
+remained10f and Main OFF. Original1b preparation4 files and failed P5 are preserved.
+
+C._main_inventory_origin assumed every foreign stopped workflow computed the
+family, so it replaced declared original10f with verifier1b. The source policy
+was in fact still the original10f family, and only the A validation reader had
+changed. Actual source inventory already matches original10f Git; substituting
+1b is a verification-origin defect, not policy-source loss. The existing helper
+now retains the declared origin when all original selected module bytes match
+the policy inventory. The parent still verifies exact Git bytes; the isolated
+child repeats source/identity/scope and attestation checks. A newly computed
+workflow family retains its previous workflow path. If neither explicit origin matches, validation fails, and carried native parents keep their separately declared origins.
+
+The actual failing issuer/workflow shape is added to the existing two-generation
+Git fixture, retaining full source/scope/attestation tamper cases. Original code
+fails1 case; corrected nested cases pass5. Full independent suite926 and
+current/prior complete-profile30 cases pass. The final docstring-only identity
+update is followed by focused origin/current-profile revalidation. Only C and
+its H exact profile change; native Main38 code hashes, all calculation code and
+all policies are unchanged from1b. Its immutable parity evidence may be reused
+only after comparing all38 hashes to the next clean candidate. No raw/calculation
+rerun. No new module, publisher, validator or execution entrypoint is added.
+The next native preparation and candidate/selected P5 remain mandatory; code
+closure is not startup/PID or unassisted acceptance.
+
+Final inventory-origin gate:926 full independent tests,30 current/prior complete
+profiles, and final focused5/current-profile15 after the docstring-only identity
+update PASS. Compile/diff/link/authority/print-only checks pass. Against1b46805ce,
+non-test source+41/-1, tests+40/-25; docs recorded separately. The same origin
+resolver is extended; original/workflow/carry consumers remain retained and
+unknown origins fail. No owner or module is displaced and no new publisher or
+entrypoint is introduced. Final runtime preparation/selection/P5 remain OPEN.

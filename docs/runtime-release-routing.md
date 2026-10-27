@@ -887,3 +887,11 @@ This grants no ordinary runtime fallback or new receipt; candidate P5's isolated
 child repeats its independent Main code proof. After the native code selection,
 the identical-policy publisher must bind the future bundle to the final selected
 code before selected preparation/P5 and actual activation.
+
+Preparation's native verifier and the policy's code-inventory origin are
+separate identities. An authenticated workflow may read a family still pinned
+to its selected original issuer. Compare every declared module with that issuer;
+when all match, retain the declared origin and attest it in Git. A family actually
+computed with different workflow code retains the verified workflow origin.
+Parent and isolated child repeat the same choice; changed scope/source, unknown
+code in both explicit origins and altered attestations still fail.

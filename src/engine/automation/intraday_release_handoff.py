@@ -12580,6 +12580,30 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Keep exact-execution and earlier preparation profiles issued before this reader.
+REVIEWED_INVENTORY_ORIGIN_HASHES = {'src/engine/infrastructure/startup_validation_code_context.py': 'f5b5c2a4a91e3d59da8dded68c1ffd8c8c89ab3182260a3e36f52caddf8fc94b'}
+REVIEWED_INVENTORY_ORIGIN_ORIGINS = {'src/engine/infrastructure/startup_validation_code_context.py': '1e53562e6118640be92736d74f3703177f50d29f3ff0e1808f4465fd4701294a'}
+REVIEWED_INVENTORY_ORIGIN_PROFILE = {**REVIEWED_CLOSED_PARENT_PROFILE, **REVIEWED_INVENTORY_ORIGIN_HASHES}
+REVIEWED_INVENTORY_ORIGIN_VARIANTS = {
+    (key[0], REVIEWED_INVENTORY_ORIGIN_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_INVENTORY_ORIGIN_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_INVENTORY_ORIGIN_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_INVENTORY_ORIGIN_HASHES.get(os.path.normpath(name), sha) for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_CLOSED_PARENT_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current) for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_INVENTORY_ORIGIN_ORIGINS[name]})
+    for name, current in REVIEWED_INVENTORY_ORIGIN_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -13425,6 +13449,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_CLOSED_PARENT_PROFILE
         prepared_variants = REVIEWED_CLOSED_PARENT_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/infrastructure/startup_validation_code_context.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_INVENTORY_ORIGIN_HASHES["src/engine/infrastructure/startup_validation_code_context.py"]
+    ):
+        prepared_hashes = REVIEWED_INVENTORY_ORIGIN_PROFILE
+        prepared_variants = REVIEWED_INVENTORY_ORIGIN_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

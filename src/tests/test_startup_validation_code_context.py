@@ -273,7 +273,7 @@ def test_handoff_coordination_preparation_pair_is_exact(fault):
     old = C.REVIEWED_HANDOFF_COORDINATION_ORIGINS[name]
     current = C._sha(ROOT / name)
     assert current == C.REVIEWED_CLOSED_PARENT_SOURCES[name]
-    assert current == H.REVIEWED_CLOSED_PARENT_PROFILE[name]
+    assert current == H.REVIEWED_INVENTORY_ORIGIN_PROFILE[name]
     if fault == "old":
         old = "0" * 64
     elif fault == "current":
@@ -1392,7 +1392,8 @@ def _cold_workflow_preparation(data, proof, native, root, commit, source):
 
 
 @pytest.mark.parametrize(
-    "reader_generation", ["original", "reviewed", "unreviewed", "workflow"]
+    "reader_generation",
+    ["original", "reviewed", "unreviewed", "workflow", "issuer_workflow"],
 )
 def test_nested_native_inventories_keep_distinct_git_origins(
     tmp_path, tmp_path_factory, monkeypatch, reader_generation
@@ -1421,9 +1422,15 @@ def test_nested_native_inventories_keep_distinct_git_origins(
             schema="continuous_reversal_policy_v6",
             family_sha256="e" * 64,
             release_commit=(
-                r["original_commit"] if reader_generation == "workflow" else commit
+                r["original_commit"]
+                if reader_generation in {"workflow", "issuer_workflow"}
+                else commit
             ),
-            contract_file_sha256={"reversal_path_runtime.py": new},
+            contract_file_sha256={
+                "reversal_path_runtime.py": (
+                    old if reader_generation == "issuer_workflow" else new
+                )
+            },
             native_parent_bundle=parent,
         ),
     )
@@ -1439,7 +1446,11 @@ def test_nested_native_inventories_keep_distinct_git_origins(
         }
     )
     if reader_generation != "original":
-        reader_hash = new if reader_generation in {"reviewed", "workflow"} else "f" * 64
+        reader_hash = (
+            new
+            if reader_generation in {"reviewed", "workflow", "issuer_workflow"}
+            else "f" * 64
+        )
         manifest = P.seal(
             {**manifest, "reader_code_hashes": {Path(owner).name: reader_hash}}
         )
@@ -1455,7 +1466,7 @@ def test_nested_native_inventories_keep_distinct_git_origins(
         target_date=DAY, family_sha256="e" * 64
     )
     native = {**proof["native_verification"], "native_machine_closure": closure}
-    if reader_generation == "workflow":
+    if reader_generation in {"workflow", "issuer_workflow"}:
         from src.engine.scalping import mechanistic_entry_runtime_policy as N
 
         observed["dependencies"].append(
@@ -1490,7 +1501,9 @@ def test_nested_native_inventories_keep_distinct_git_origins(
     if reader_generation == "reviewed":
         assert manifest["reader_code_hashes"][Path(owner).name] == new
         assert result["original_code_hashes"][owner] == old
-    assert result["inventories"][0]["expected"]["reversal_path_runtime.py"] == new
+    assert result["inventories"][0]["expected"]["reversal_path_runtime.py"] == (
+        old if reader_generation == "issuer_workflow" else new
+    )
     assert result["inventories"][1]["expected"]["reversal_path_runtime.py"] == old
     request = dict(
         f["request"],
@@ -1506,13 +1519,12 @@ def test_nested_native_inventories_keep_distinct_git_origins(
     from src.engine.automation import main_startup_validation as V
 
     V._recheck(result["source_hashes"])
-    if reader_generation == "workflow":
+    if reader_generation in {"workflow", "issuer_workflow"}:
         assert result["inventories"][0]["origin_commit"] == r["original_commit"]
-        assert (
-            result["inventory_git_attestations"][bundle["bundle_sha256"]][
-                "origin_commit"
-            ]
-            == commit
+        assert result["inventory_git_attestations"][bundle["bundle_sha256"]][
+            "origin_commit"
+        ] == (
+            r["original_commit"] if reader_generation == "issuer_workflow" else commit
         )
         assert result["source_hashes"][str(source)] == new
         assert result["native_reader_code_sources"] == {owner: new}
@@ -1544,7 +1556,7 @@ def test_nested_native_inventories_keep_distinct_git_origins(
         damaged = copy.deepcopy(result)
         damaged["inventory_git_attestations"][bundle["bundle_sha256"]][
             "origin_commit"
-        ] = r["original_commit"]
+        ] = (commit if reader_generation == "issuer_workflow" else r["original_commit"])
         with pytest.raises(ValueError, match="inventory_git_attestation_changed"):
             C._main_proof(damaged, request)
     assert (
@@ -1584,7 +1596,7 @@ def test_nested_native_inventories_keep_distinct_git_origins(
         C.bind_main_preparation(
             r["root"], commit, Path(f["request"]["data_root"]), intake
         )
-    if reader_generation == "workflow":
+    if reader_generation in {"workflow", "issuer_workflow"}:
         with cold_raw.open("r+b") as stream:
             stream.write(b"x")
         with pytest.raises(ValueError, match="code_context_source_changed"):
@@ -2818,7 +2830,7 @@ def test_main_preparation_uses_reviewed_stopped_origin_code(name):
     review = json.loads((ROOT / H._FORMATTING_REVIEW_PATH).read_text())
     predecessor = review["sources"][name]["before_sha256"]
     if review["sources"][name]["after_sha256"] != current:
-        assert H.REVIEWED_CLOSED_PARENT_PROFILE[name] == current
+        assert H.REVIEWED_INVENTORY_ORIGIN_PROFILE[name] == current
         C._pairs({name: review["sources"][name]["after_sha256"]}, {name: current})
     origins = {old for old, new in pairs if new in {predecessor, current}}
     origins.add(predecessor)
@@ -3084,7 +3096,7 @@ def test_main_preparation_independently_reviews_closed_scanner(origin, damage):
 )
 def test_migration_configuration_has_independent_exact_source_pairs(name):
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-    assert H.REVIEWED_CLOSED_PARENT_PROFILE[name] == current
+    assert H.REVIEWED_INVENTORY_ORIGIN_PROFILE[name] == current
     for old in H.REVIEWED_MIGRATION_ORIGINS[name]:
         C._pairs({name: old}, {name: H.REVIEWED_CLOSED_LOADER_PROFILE[name]})
         C._pairs({name: old}, {name: current})
@@ -3292,7 +3304,7 @@ def test_entry_capability_independent_preparation_exact_pairs(relative, fault):
 def test_nonfixed_identifier_preparation_uses_independent_exact_sources(name,fault):
     old=H.REVIEWED_NONFIXED_IDENTITY_ORIGINS[name]
     current=hashlib.sha256((ROOT/name).read_bytes()).hexdigest()
-    assert H.REVIEWED_CLOSED_PARENT_PROFILE[name]==current
+    assert H.REVIEWED_INVENTORY_ORIGIN_PROFILE[name]==current
     if fault=='source':old='0'*64
     if fault=='target':current='0'*64
     if fault=='path':name='src/engine/unknown_identifier_owner.py'
@@ -3339,7 +3351,7 @@ def test_invalidation_cadence_independent_preparation_exact_pairs(relative, faul
 def test_delay_collection_independent_preparation_exact_pairs(relative, fault):
     old = C.REVIEWED_DELAY_COLLECTION_ORIGINS[relative]
     current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
-    assert H.REVIEWED_CLOSED_PARENT_PROFILE[relative] == current
+    assert H.REVIEWED_INVENTORY_ORIGIN_PROFILE[relative] == current
     if fault == "origin": old = "0" * 64
     if fault == "successor": current = "0" * 64
     if fault == "path": relative = "src/engine/unknown_collection_owner.py"
@@ -3355,7 +3367,7 @@ def test_submit_fresh_independent_preparation_exact_pairs(relative, fault, proje
         if projected else C.REVIEWED_SUBMIT_FRESH_ORIGINS[relative]
     )
     current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
-    assert current == H.REVIEWED_CLOSED_PARENT_PROFILE[relative]
+    assert current == H.REVIEWED_INVENTORY_ORIGIN_PROFILE[relative]
     if fault == "origin": old = "0" * 64
     if fault == "successor": current = "0" * 64
     if fault == "path": relative = "src/engine/unknown_submit_owner.py"
@@ -3384,7 +3396,7 @@ def test_report_census_preparation_keeps_exact_reviewed_sources(name, fault):
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
     assert current == C.REVIEWED_REPORT_CENSUS_SOURCES[name]
     assert current == H.REVIEWED_REPORT_CENSUS_HASHES[name]
-    assert current == H.REVIEWED_CLOSED_PARENT_PROFILE[name]
+    assert current == H.REVIEWED_INVENTORY_ORIGIN_PROFILE[name]
     if fault == "origin":
         old = "0" * 64
     if fault == "successor":
@@ -3454,7 +3466,7 @@ def test_prior_execution_independent_preparation_exact_current_source(name, faul
     old = C.REVIEWED_PRIOR_EXECUTION_ORIGINS[name]
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
     assert current == C.REVIEWED_PRIOR_EXECUTION_SOURCES[name]
-    assert current == H.REVIEWED_CLOSED_PARENT_PROFILE[name]
+    assert current == H.REVIEWED_INVENTORY_ORIGIN_PROFILE[name]
     if fault == "origin":
         old = "0" * 64
     elif fault == "successor":
@@ -3470,7 +3482,7 @@ def test_quantity_source_independent_preparation_keeps_exact_pair(name, fault):
     old = C.REVIEWED_QUANTITY_SOURCE_ORIGINS[name]
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
     assert current == C.REVIEWED_QUANTITY_SOURCE_SOURCES[name]
-    assert current == H.REVIEWED_CLOSED_PARENT_PROFILE[name]
+    assert current == H.REVIEWED_INVENTORY_ORIGIN_PROFILE[name]
     if fault == "origin":
         old = "0" * 64
     elif fault == "successor":
@@ -3486,7 +3498,7 @@ def test_stopped_preparation_independent_source_pair_is_exact(name, fault):
     old = C.REVIEWED_STOPPED_PREPARATION_ORIGINS[name]
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
     assert current == C.REVIEWED_EXECUTION_EXACT_SOURCES.get(name, C.REVIEWED_STOPPED_PREPARATION_SOURCES[name])
-    assert current == H.REVIEWED_CLOSED_PARENT_PROFILE[name]
+    assert current == H.REVIEWED_INVENTORY_ORIGIN_PROFILE[name]
     if fault == "origin":
         old = "0" * 64
     elif fault == "successor":

@@ -3801,7 +3801,7 @@ def _native_verifier_code(proof):
 
 
 def _main_inventory_origin(item, proof):
-    """A cold workflow computes the new family; carried parents keep their origin."""
+    """Resolve policy code origin independently of the verification workflow."""
     native = proof["native_verification"]
     observation = native.get("stopped_postclose_observation")
     if not observation or item["bundle_sha256"] != proof["policy_sha256"]:
@@ -3841,6 +3841,16 @@ def _main_inventory_origin(item, proof):
     ):
         raise ValueError("startup_main_workflow_origin_unbound")
     _check_sources(observation["source_hashes"])
+    # A reviewed workflow may only read the original issuer's family. Keep
+    # that declared code origin when every pinned module still matches the
+    # selected tree; the parent separately attests these bytes in Git. A
+    # family actually computed with workflow code retains that other origin.
+    selected = Path(proof["selected_release_root"])
+    if all(
+        _sha(selected / _code_path(name)) == expected
+        for name, expected in item["expected"].items()
+    ):
+        return item["origin_commit"]
     return commit
 
 
