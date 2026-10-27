@@ -473,6 +473,7 @@ def test_adapter_returns_known_local_no_call_and_does_not_mark_registry_ambiguou
     assert "ambiguous_reason" not in finalized[0]
 
 
+@pytest.mark.parametrize("order_type", ["0", "00", "3"])
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -493,7 +494,7 @@ def test_adapter_returns_known_local_no_call_and_does_not_mark_registry_ambiguou
     ],
 )
 def test_main_producer_rechecks_current_state_authority_and_policy_after_token_delay(
-    case, monkeypatch, mutation
+    case, monkeypatch, mutation, order_type
 ):
     from src.engine import sniper_state_handlers as main
     from src.engine.scalping import (
@@ -605,7 +606,7 @@ def test_main_producer_rechecks_current_state_authority_and_policy_after_token_d
             owner_context=case.owner,
             quantity=2,
             broker_route="SOR",
-            order_type="0",
+            order_type=order_type,
             broker_price=100,
             ai_authority={
                 "entry_ai_submit_authority_confirmed_at": 98.0,
@@ -613,11 +614,31 @@ def test_main_producer_rechecks_current_state_authority_and_policy_after_token_d
             },
         )
         monkeypatch.setattr(main.time, "time", lambda: case.clock.epoch)
+        case.payload.update(trde_tp=order_type, ord_uv="" if order_type == "3" else "100")
         assert context.ai_authority_expires_epoch == 101.0
         assert context.ai_authority_expires_perf == 11.0
         assert context.check(
             api_id="kt10000", owner_context=case.owner, payload=case.payload
         )["allowed"]
+        if order_type == "3":
+            with pytest.raises(guard.EntrySendGuardBlocked, match="order_payload_binding_changed"):
+                context.check(api_id="kt10000", owner_context=case.owner,
+                              payload={**case.payload, "ord_uv": "100"})
+        if mutation == "buy_qty" and order_type in {"0", "3"}:
+            # Exercise the real adapter and transport hook with a fake POST.
+            # No broker call, altered payload, or bypassed physical guard.
+            from datetime import datetime
+            posts = transport(case, monkeypatch, [{"return_code": "0", "ord_no": "offline"}])
+            monkeypatch.setattr(orders, "is_scalping_buy_window_blocked", lambda _: False)
+            monkeypatch.setattr(orders, "_reserve_owner_registry_intent", lambda **_: (None, None, None))
+            monkeypatch.setattr(orders, "_finish_owner_registry_intent", lambda *a, **kw: None)
+            result = orders.send_buy_order(
+                "005930", 2, 100, order_type, token="fake", dmst_stex_tp="SOR",
+                now=datetime(2026, 10, 27, 10, tzinfo=orders.KST),
+                owner_context=case.owner, entry_send_context=context,
+            )
+            assert result["return_code"] == "0" and len(posts) == 1
+            assert posts[0]["json"]["ord_uv"] == context.broker_price
         if mutation == "ai_clock_anchor":
             case.clock.perf = 11.1
         elif mutation == "ai_confirmation":

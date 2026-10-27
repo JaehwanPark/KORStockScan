@@ -12065,6 +12065,48 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Complete exact successor for source-only collection and market payload binding.
+REVIEWED_DELAY_COLLECTION_HASHES = {
+    "src/engine/kiwoom_websocket.py": "5f8a0027e517f385a34fe9683aa34a6d7626b2f09efce7ab697889be363e3352",
+    "src/engine/monitoring/ws_receive_expectation.py": "b1f73780582e4411d184fe25aacb8cafd27382099db33aa32595d495e8c3a233",
+    "src/engine/sniper_state_handlers.py": "16fc3202f724a2fb78d0da7e01989966560d39c7fa7439473b692a160308a2eb",
+    "src/engine/monitoring/policy_generation_code_handoff.py": "bdf9c47cb05206eea269ba3ead0ba0083ff79a51da390cb3862d96d7782db40d",
+    "src/engine/infrastructure/startup_validation_code_context.py": "b0797bfc54f32284df05b4828365f7cb2db5152989f0df8e5002e1d17a37e62e"
+}
+REVIEWED_DELAY_COLLECTION_ORIGINS = {
+    "src/engine/kiwoom_websocket.py": "701fe3127352e8c29300d43134ab4e3bdb59f6486491ae7a91a4ff574c3ca474",
+    "src/engine/monitoring/ws_receive_expectation.py": "2098bfda2c73f367f0bda84a5023063e5e37da92fe94608b0b7db3b2cd38dbc8",
+    "src/engine/sniper_state_handlers.py": "193cfb02eed0f45b553f26b3777fb921f1ecc2fa1be46c5dbdd7b2a50831b13d",
+    "src/engine/monitoring/policy_generation_code_handoff.py": "52830e315e7f9be90d774b080ca31e79aca76bf7f6fdaf9f0dc29da38fa434a4",
+    "src/engine/infrastructure/startup_validation_code_context.py": "5ef703be88c270bb08cf8a7ea54e164b8b8d98a1795c6af70275eaa52b957657"
+}
+REVIEWED_DELAY_COLLECTION_PROFILE = {
+    **REVIEWED_NONFIXED_FINAL_PROFILE, **REVIEWED_DELAY_COLLECTION_HASHES
+}
+REVIEWED_DELAY_COLLECTION_VARIANTS = {
+    (key[0], REVIEWED_DELAY_COLLECTION_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_DELAY_COLLECTION_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_DELAY_COLLECTION_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_DELAY_COLLECTION_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_NONFIXED_FINAL_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+                   | {REVIEWED_DELAY_COLLECTION_ORIGINS[name]}
+    )
+    for name, current in REVIEWED_DELAY_COLLECTION_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -12826,6 +12868,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_NONFIXED_FINAL_PROFILE
         prepared_variants = REVIEWED_NONFIXED_FINAL_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/infrastructure/startup_validation_code_context.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_DELAY_COLLECTION_HASHES["src/engine/infrastructure/startup_validation_code_context.py"]
+    ):
+        prepared_hashes = REVIEWED_DELAY_COLLECTION_PROFILE
+        prepared_variants = REVIEWED_DELAY_COLLECTION_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

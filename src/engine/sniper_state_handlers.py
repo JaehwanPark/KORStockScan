@@ -64633,7 +64633,13 @@ def _main_initial_physical_send_context(
         quantity=quantity,
         broker_route=broker_route,
         order_type=str(order_type),
-        broker_price=str(int(broker_price)) if broker_price else "",
+        # Bind the adapter's actual ord_uv, not the sizing/reference price
+        # retained by a market-order plan. Payload equality remains strict.
+        broker_price=(
+            str(int(broker_price))
+            if str(order_type) in {"0", "00"} and broker_price
+            else ""
+        ),
         evaluation_attempt_id=evaluation,
         ai_decision_trace_id=trace,
         decision_binding=expected_decision,
@@ -69889,8 +69895,13 @@ def _observe_pre_submit_delay_state_quote(
             quote_receipt["quote_route_sequence"] = (matched_depth or {}).get(
                 "route_sequence"
             )
-            quote_receipt["quote_collection_evidence"] = dict(
-                collection, depth_source_sha256=depth_source_sha256
+            # The pipeline logger stringifies fields. Encode this nested
+            # report-only receipt before either queued or fallback emission.
+            quote_receipt["quote_collection_evidence"] = json.dumps(
+                dict(collection, depth_source_sha256=depth_source_sha256),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
             )
         quote_receipt["quote_source_sha256"] = quote_source_sha256(quote_receipt)
         _log_pre_submit_delay_event(
