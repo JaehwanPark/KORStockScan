@@ -914,18 +914,31 @@ def verify_prepared(
                 and not H._paths(target_date, commit)[0].exists()
             )
             if native:
-                checked = H.verify_pid_consumption(target_date, pid=native_pid, now=now)
+                closed = (H._PREDECESSOR_REVIEW.get() or {}).get("closed_observation")
+                if closed is not None:
+                    checked = H.verify_closed_predecessor_consumption(target_date)
+                    if (
+                        closed.get("basis") != "native_preopen_closed"
+                        or checked.get("closed_observation") != closed
+                        or checked.get("historical_consumption_verified") is not True
+                        or checked.get("actual_pid_consumed") is not False
+                        or checked.get("runtime_effect") is not False
+                    ):
+                        raise ValueError("prepared_closed_native_consumption_unverified")
+                else:
+                    checked = H.verify_pid_consumption(target_date, pid=native_pid, now=now)
                 if (
                     checked.get("status") != "pass"
                     or checked.get("basis") != "native_preopen"
-                    or checked.get("actual_pid_consumed") is not True
+                    or (closed is None and checked.get("actual_pid_consumed") is not True)
                     or checked.get("selected_release_commit") != commit
                 ):
                     raise ValueError("prepared_native_consumption_unverified")
                 snapshot = H.preserve_checklist(target_date)
                 if snapshot["source_date"] != receipt["source_date"]:
                     raise ValueError("prepared_native_source_date_changed")
-                handoff_basis = "native_consumed_preopen_preserved_generation"
+                handoff_basis = ("native_closed_preopen_preserved_generation" if closed is not None
+                                 else "native_consumed_preopen_preserved_generation")
             else:
                 handoff = H.verify(target_date, commit, now=now)
                 preserved = handoff.get("handoff") or {}
@@ -1051,10 +1064,12 @@ def verify_prepared(
             raise ValueError(
                 "prepared_bootstrap_changed:" + ",".join(check.get("findings") or [])
             )
-        if handoff_basis == "native_consumed_preopen_preserved_generation":
+        if handoff_basis in {"native_consumed_preopen_preserved_generation", "native_closed_preopen_preserved_generation"}:
+            rechecked = (H.verify_closed_predecessor_consumption(target_date)
+                         if handoff_basis == "native_closed_preopen_preserved_generation"
+                         else H.verify_pid_consumption(target_date, pid=native_pid, now=now))
             if (
-                H.verify_pid_consumption(target_date, pid=native_pid, now=now)
-                != checked
+                rechecked != checked
                 or _read(selection_path) != selection
             ):
                 raise ValueError("prepared_native_consumption_changed")
@@ -1084,7 +1099,7 @@ def verify_prepared(
         "handoff_basis": handoff_basis,
         "native_predecessor_consumption": (
             checked
-            if handoff_basis == "native_consumed_preopen_preserved_generation"
+            if handoff_basis in {"native_consumed_preopen_preserved_generation", "native_closed_preopen_preserved_generation"}
             and not findings
             else None
         ),

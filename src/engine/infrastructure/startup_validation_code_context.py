@@ -3134,6 +3134,18 @@ for _name, _sha in REVIEWED_CAPABILITY_SCOPE_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# Read-only native PREOPEN closure after an explicitly held collector shutdown.
+REVIEWED_CLOSED_NATIVE_PREPARATION_SOURCES = {'src/engine/automation/next_preopen_readiness.py': 'bb2cd92fe684f55f292509b2fd7609c683e3d8d78746899b218e4da6ca11f8e1'}
+REVIEWED_CLOSED_NATIVE_PREPARATION_ORIGINS = {'src/engine/automation/next_preopen_readiness.py': '626f7849ae5fa39bf41f667b6c1cfae6b0ca765714e357fce049c523c0eaeeb9'}
+for _name, _sha in REVIEWED_CLOSED_NATIVE_PREPARATION_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_CLOSED_NATIVE_PREPARATION_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.
@@ -3967,6 +3979,33 @@ def _native_main_basis(native):
     if native.get("validation_scope") == "current_full_contract":
         return "same_invocation_selected_native_full_verification"
     consumed = native.get("native_predecessor_consumption") or {}
+    closed = consumed.get("closed_observation") or {}
+    if (
+        native.get("validation_scope") == "intraday_preserved_historical_generation"
+        and native.get("handoff_basis") == "native_closed_preopen_preserved_generation"
+        and consumed.get("schema") == "intraday_pid_consumption_verification_v1"
+        and consumed.get("status") == "pass" and not consumed.get("findings")
+        and consumed.get("basis") == "native_preopen"
+        and consumed.get("actual_pid_consumed") is False
+        and consumed.get("historical_consumption_verified") is True
+        and consumed.get("runtime_effect") is False
+        and consumed.get("target_date") == native.get("target_date")
+        and consumed.get("selected_release_commit") == native.get("preserved_preopen_commit")
+        and _hex(consumed.get("manifest_sha256"))
+        and closed.get("schema") == "intraday_closed_consumption_observation_v1"
+        and closed.get("basis") == "native_preopen_closed"
+        and closed.get("target_date") == native.get("target_date")
+        and closed.get("release_commit") == consumed.get("selected_release_commit")
+        and closed.get("pid_identity") == consumed.get("pid_identity")
+        and closed.get("manifest_sha256") == consumed.get("manifest_sha256")
+        and closed.get("historical_consumption_verified") is True
+        and closed.get("current_observation_verified") is False
+        and closed.get("new_pid_consumption_claimed") is False
+        and closed.get("runtime_effect") is False
+        and closed.get("source_hashes")
+        and (closed.get("collector_shutdown") or {}).get("status") == "verified"
+    ):
+        return "same_invocation_selected_closed_preopen_native_validation"
     if (
         native.get("validation_scope") == "intraday_preserved_historical_generation"
         and native.get("handoff_basis")
@@ -4015,6 +4054,9 @@ def _preserved_native_sources(proof):
         _native_main_basis(native)
         == "same_invocation_selected_consumed_preopen_native_validation"
     )
+    native_closed = (
+        _native_main_basis(native) == "same_invocation_selected_closed_preopen_native_validation"
+    )
     native_prepared = (
         _native_main_basis(native)
         == "same_invocation_selected_prepared_intraday_native_validation"
@@ -4027,6 +4069,7 @@ def _preserved_native_sources(proof):
     if (
         native.get("validation_scope") == "current_full_contract"
         or native_consumed
+        or native_closed
         or native_prepared
     ):
         if not isinstance(records, dict) or len(records) != 1:
@@ -4175,7 +4218,7 @@ def _preserved_native_sources(proof):
             refs[str(data / "runtime/runtime_release_selection.json")] = _sha(
                 data / "runtime/runtime_release_selection.json"
             )
-        if native_consumed:
+        if native_consumed or native_closed:
             consumed = native["native_predecessor_consumption"]
             selection = data / "runtime/runtime_release_selection.json"
             selected = _json(selection)
@@ -4206,6 +4249,12 @@ def _preserved_native_sources(proof):
             if _json(active).get("manifest_sha256") != consumed["manifest_sha256"]:
                 raise ValueError("startup_native_consumption_bootstrap_changed")
             refs.update({str(p): _sha(p) for p in (selection, active, env)})
+            if native_closed:
+                closed_sources = consumed["closed_observation"]["source_hashes"]
+                if any(closed_sources.get(str(p)) != refs[str(p)] for p in (selection, active, env)):
+                    raise ValueError("startup_closed_native_source_binding_invalid")
+                _check_sources(closed_sources)
+                refs.update(closed_sources)
         return refs
     if (
         native.get("validation_scope") != "intraday_preserved_historical_generation"

@@ -12836,6 +12836,29 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_CAPABILITY_SCOPE_HASHES.items()
 }}
 
+# Exact closed PREOPEN readiness over the complete capability profile.
+REVIEWED_CLOSED_NATIVE_PREPARATION_HASHES = {'src/engine/automation/next_preopen_readiness.py': 'bb2cd92fe684f55f292509b2fd7609c683e3d8d78746899b218e4da6ca11f8e1', 'src/engine/infrastructure/startup_validation_code_context.py': '9cb12a16dd2fa78ba4e99b9f19ae7036ed1016efed65f0bb436c3e74bd48065c'}
+REVIEWED_CLOSED_NATIVE_PREPARATION_ORIGINS = {'src/engine/automation/next_preopen_readiness.py': '626f7849ae5fa39bf41f667b6c1cfae6b0ca765714e357fce049c523c0eaeeb9', 'src/engine/infrastructure/startup_validation_code_context.py': '300908359a84bbbaa903495ebb0a27a30774ec18a3811cc00a2a02cef3dcd512'}
+REVIEWED_CLOSED_NATIVE_PREPARATION_PROFILE = {**REVIEWED_CAPABILITY_SCOPE_PROFILE, **REVIEWED_CLOSED_NATIVE_PREPARATION_HASHES}
+REVIEWED_CLOSED_NATIVE_PREPARATION_VARIANTS = {
+    (key[0], REVIEWED_CLOSED_NATIVE_PREPARATION_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/automation/next_preopen_readiness.py",
+        "selector_sha256": REVIEWED_CLOSED_NATIVE_PREPARATION_HASHES["src/engine/automation/next_preopen_readiness.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_CLOSED_NATIVE_PREPARATION_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_CLOSED_NATIVE_PREPARATION_HASHES.get(os.path.normpath(name), sha) for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_CAPABILITY_SCOPE_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current) for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_CLOSED_NATIVE_PREPARATION_ORIGINS[name]})
+    for name, current in REVIEWED_CLOSED_NATIVE_PREPARATION_HASHES.items()
+}}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -13717,6 +13740,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_CAPABILITY_SCOPE_PROFILE
         prepared_variants = REVIEWED_CAPABILITY_SCOPE_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/automation/next_preopen_readiness.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_CLOSED_NATIVE_PREPARATION_HASHES["src/engine/automation/next_preopen_readiness.py"]
+    ):
+        prepared_hashes = REVIEWED_CLOSED_NATIVE_PREPARATION_PROFILE
+        prepared_variants = REVIEWED_CLOSED_NATIVE_PREPARATION_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

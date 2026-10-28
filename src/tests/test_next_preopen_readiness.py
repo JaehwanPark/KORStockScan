@@ -673,6 +673,30 @@ def test_prepare_isolated_then_detects_source_and_release_drift(monkeypatch, tmp
 
         consumed.setattr(handoff, "verify_pid_consumption", changed)
         assert readiness.verify_prepared(target, now=midnight)["status"] == "fail"
+        for fault in (None, "basis", "historical", "current_pid", "commit", "closure", "recheck"):
+            closed = dict(basis="native_preopen_closed", pid_identity=proof["pid_identity"])
+            checked_closed = dict(proof, actual_pid_consumed=False, runtime_effect=False,
+                                  historical_consumption_verified=True, closed_observation=closed)
+            if fault == "basis": closed = dict(closed, basis="unknown")
+            if fault == "historical": checked_closed["historical_consumption_verified"] = False
+            if fault == "current_pid": checked_closed["actual_pid_consumed"] = True
+            if fault == "commit": checked_closed["selected_release_commit"] = "c" * 40
+            if fault == "closure": checked_closed["closed_observation"] = {}
+            calls_closed = []
+            def verify_closed(day):
+                calls_closed.append(day)
+                return dict(checked_closed, manifest_sha256=str(len(calls_closed))) if fault == "recheck" else checked_closed.copy()
+            consumed.setattr(handoff, "verify_closed_predecessor_consumption", verify_closed)
+            token = handoff._PREDECESSOR_REVIEW.set(dict(closed_observation=closed))
+            try:
+                checked_result = readiness.verify_prepared(target, now=midnight)
+                assert checked_result["status"] == ("fail" if fault else "pass"), checked_result
+                if fault is None:
+                    assert checked_result["handoff_basis"] == "native_closed_preopen_preserved_generation"
+                    assert checked_result["actual_pid_consumed"] is False
+                    assert checked_result["native_predecessor_consumption"]["actual_pid_consumed"] is False
+            finally:
+                handoff._PREDECESSOR_REVIEW.reset(token)
     selection.write_bytes(original_selection)
     # The consumed intraday handoff carries the exact strict bytes under its
     # launch-snapshot role, without a second historical_checklist field.
