@@ -2363,10 +2363,21 @@ def test_vote_tail_cannot_relax_consumed_source_or_incomplete_original(tmp_path)
 
 @pytest.mark.parametrize("kind", ["bytes", "scoped"])
 @pytest.mark.parametrize(
-    "damage", [None, "prefix", "past", "partial", "replace", "race", "unsealed"]
+    "archive_kind,damage",
+    [
+        (archive, damage)
+        for archive in ("none", "bytes", "indexed")
+        for damage in (None, "prefix", "past", "partial", "replace", "race", "unsealed")
+    ]
+    + [
+        (archive, damage)
+        for archive in ("bytes", "indexed")
+        for damage in ("archive_bytes", "archive_replaced")
+    ]
+    + [("indexed", "archive_index")],
 )
 def test_carried_stop_preserves_consumed_vote_prefix_before_future_tail(
-    tmp_path, monkeypatch, damage, kind
+    tmp_path, monkeypatch, damage, kind, archive_kind
 ):
     from src.engine.ai.holding_exit_vote import path_vote_store_path
 
@@ -2391,12 +2402,36 @@ def test_carried_stop_preserves_consumed_vote_prefix_before_future_tail(
     original = vote_bytes("2026-10-12")
     path.write_bytes(original)
 
+    archives = []
+    if archive_kind != "none":
+        import gzip
+        from src.engine.automation import main_trailing_source_store as store
+
+        for namespace in (
+            "ai_decision_payloads",
+            "ai_decision_prompts",
+            "ai_decision_requests",
+        ):
+            logical = tmp_path / namespace / (namespace + "_2026-10-08.jsonl")
+            logical.parent.mkdir()
+            physical = Path(str(logical) + ".gz")
+            physical.write_bytes(gzip.compress(b'{"source":1}\n'))
+            if archive_kind == "indexed":
+                store.migrate_frozen_source(tmp_path, logical)
+            archives.append(physical)
+
     # Exercise the native publisher with a consumed, hashed vote dependency.
     def consumed(root, directory, source, inventory):
         from src.engine.automation.main_trailing_source_assembler import (
             historical_vote_generation,
         )
 
+        for archived in archives:
+            inventory[str(archived)] = (
+                store.generation(tmp_path, archived)
+                if archive_kind == "indexed"
+                else post.byte_generation(archived)
+            )
         inventory[str(path)] = (
             historical_vote_generation(path, "2026-10-12")
             if kind == "scoped"
@@ -2466,6 +2501,14 @@ def test_carried_stop_preserves_consumed_vote_prefix_before_future_tail(
         monkeypatch.setattr(
             post, "verify_vote_watch_binding", append_after_verification
         )
+    if damage == "archive_bytes":
+        archives[0].write_bytes(gzip.compress(b'{"source":2}\n'))
+    elif damage == "archive_replaced":
+        replacement = archives[0].with_suffix(".replacement")
+        replacement.write_bytes(archives[0].read_bytes())
+        replacement.replace(archives[0])
+    elif damage == "archive_index":
+        store._location(tmp_path, archives[0])[2].unlink()
     if damage is None:
         loaded, saved, _, _ = post.read_committed(tmp_path, "2026-10-12")
         assert loaded == bundle and saved == report

@@ -1510,3 +1510,178 @@ def test_prepare_foreign_ordered_release_requires_native_stopped_scope(
             readiness.prepare("2026-10-27", target_date="2026-10-28")
         assert not calls
     assert not active
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "complete",
+        "failed",
+        "release_changed",
+        "no_owner",
+        "symlink",
+        "timeout",
+        "stale",
+        "future",
+        "missing",
+    ],
+)
+def test_completion_wait_requires_exact_live_preopen_and_keeps_terminal_guards(
+    tmp_path, monkeypatch, outcome
+):
+    import fcntl
+    import time as clock
+
+    data = tmp_path / "data"
+    monkeypatch.setattr(readiness, "DATA_DIR", data)
+    target, commit = "2026-10-29", "a" * 40
+    now = datetime.fromisoformat("2026-10-29T08:02:00+09:00")
+    status = (
+        data
+        / "report/threshold_cycle_preopen_status"
+        / f"threshold_cycle_preopen_{target}.status.json"
+    )
+    body = dict(
+        target_date=target,
+        status="running",
+        exit_code=0,
+        runtime_env_exists=False,
+        selected_release_commit=commit,
+        updated_at="2026-10-29T08:01:00+09:00",
+    )
+    if outcome == "stale":
+        body["updated_at"] = "2026-10-28T08:01:00+09:00"
+    elif outcome == "future":
+        body["updated_at"] = "2026-10-29T08:03:00+09:00"
+    _json(status, body)
+    if outcome == "missing":
+        status.unlink()
+    # Reproduce the real publication order: env exists, terminal still running.
+    _json(
+        data / "runtime/policy_bootstrap" / f"runtime_policy_bootstrap_{target}.env", {}
+    )
+    path = tmp_path / "logs/runtime_policy_preopen.lock"
+    path.parent.mkdir()
+    lock = path.open("a")
+    if outcome != "no_owner":
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    if outcome == "symlink":
+        moved = path.with_suffix(".owner")
+        path.rename(moved)
+        path.symlink_to(moved)
+    elapsed, sleeps = [0.0], []
+    monkeypatch.setattr(clock, "monotonic", lambda: elapsed[0])
+
+    def wait(seconds):
+        sleeps.append(seconds)
+        elapsed[0] += seconds
+        if outcome in {"complete", "failed", "release_changed"}:
+            body.update(
+                status="failed" if outcome == "failed" else "succeeded",
+                exit_code=1 if outcome == "failed" else 0,
+                runtime_env_exists=True,
+            )
+            if outcome == "release_changed":
+                body["selected_release_commit"] = "b" * 40
+                body["status"] = "running"
+            _json(status, body)
+
+    monkeypatch.setattr(clock, "sleep", wait)
+    try:
+        result = readiness.verify_preopen_completion(
+            target, commit, now=now, wait_timeout_sec=7
+        )
+    finally:
+        lock.close()
+    assert (result["status"] == "pass") is (outcome == "complete")
+    assert elapsed[0] <= 7
+    assert bool(sleeps) is (
+        outcome in {"complete", "failed", "release_changed", "timeout"}
+    )
+    if outcome == "timeout":
+        assert sleeps == [5, 2]
+        assert "exact_preopen_completion_wait_timeout" in result["findings"]
+    assert result["actual_pid_consumed"] is False
+
+
+def test_completion_wait_accepts_writer_finishing_between_status_and_lock_probe(
+    tmp_path, monkeypatch
+):
+    import fcntl
+
+    data = tmp_path / "data"
+    monkeypatch.setattr(readiness, "DATA_DIR", data)
+    target, commit = "2026-10-29", "a" * 40
+    now = datetime.fromisoformat("2026-10-29T08:02:00+09:00")
+    status = (
+        data
+        / "report/threshold_cycle_preopen_status"
+        / f"threshold_cycle_preopen_{target}.status.json"
+    )
+    body = dict(
+        target_date=target,
+        status="running",
+        exit_code=0,
+        runtime_env_exists=False,
+        selected_release_commit=commit,
+        updated_at="2026-10-29T08:01:00+09:00",
+    )
+    _json(status, body)
+    path = tmp_path / "logs/runtime_policy_preopen.lock"
+    path.parent.mkdir()
+    native = fcntl.flock
+    with path.open("a") as writer:
+        native(writer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        def finish(fd, operation):
+            if operation == fcntl.LOCK_SH | fcntl.LOCK_NB:
+                body.update(status="succeeded", runtime_env_exists=True)
+                _json(status, body)
+                native(writer, fcntl.LOCK_UN)
+            return native(fd, operation)
+
+        monkeypatch.setattr(fcntl, "flock", finish)
+        assert (
+            readiness.verify_preopen_completion(
+                target, commit, now=now, wait_timeout_sec=7
+            )["status"]
+            == "pass"
+        )
+
+
+@pytest.mark.parametrize("value", [-1, True, 1.5])
+def test_completion_wait_rejects_invalid_budget(value):
+    with pytest.raises(ValueError, match="exact_preopen_wait_timeout_invalid"):
+        readiness.verify_preopen_completion(
+            "2026-10-29", "a" * 40, wait_timeout_sec=value
+        )
+
+
+def test_completion_cli_passes_only_explicit_bounded_wait(monkeypatch, capsys):
+    seen = []
+
+    def verify(day, commit, *, wait_timeout_sec):
+        seen.append((day, commit, wait_timeout_sec))
+        return dict(status="pass", actual_pid_consumed=False)
+
+    monkeypatch.setattr(readiness, "verify_preopen_completion", verify)
+    assert (
+        readiness.main(
+            [
+                "--verify-completion",
+                "--target-date",
+                "2026-10-29",
+                "--selected-release-commit",
+                "a" * 40,
+                "--wait-timeout-sec",
+                "7",
+            ]
+        )
+        == 0
+    )
+    assert seen == [("2026-10-29", "a" * 40, 7)]
+    assert json.loads(capsys.readouterr().out)["actual_pid_consumed"] is False
+    with pytest.raises(SystemExit):
+        readiness.main(
+            ["--verify", "--target-date", "2026-10-29", "--wait-timeout-sec", "7"]
+        )

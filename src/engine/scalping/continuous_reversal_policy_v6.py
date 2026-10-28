@@ -817,20 +817,11 @@ def _attested_activation_parent(data_root, target_date, *, origin_root, origin_c
     script = r"""
 import sys
 from pathlib import Path
+from datetime import date
 from src.engine.scalping import mechanistic_entry_runtime_policy as N
+from src.engine.scalping import reversal_code_handoff as H
 data, day, commit = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-try:
-    b = N._load_current_uncached(data, day)
-except ValueError as exc:
-    # The intake release is immutable; a later selector or date cannot make
-    # its live-reader context current again. Revalidate its dated, originally
-    # issued strict-source attestation only for this explicit parent reader.
-    if not (str(exc) == 'active_policy_code_reader_root_changed' or
-            str(exc).startswith(('v4_contract_code_changed:',
-                'v5_contract_code_changed:', 'v6_contract_code_changed:'))):
-        raise
-    from src.engine.scalping import reversal_code_handoff as H
-    from datetime import date
+def dated_parent():
     pointer = N.root(data) / 'current.json'
     before = pointer.read_bytes()
     current = N._read(pointer)
@@ -859,6 +850,23 @@ except ValueError as exc:
             N._source_hash(str(receipt_path), N._signature(receipt_path)) != receipt_sha or
             any(N._signature(Path(name)) != sig for name, sig in signatures.items())):
         raise ValueError('v6_historical_parent_changed_during_validation')
+    return b
+# An explicit historical parent uses its issued, dated contract directly.
+# The original reader must not enter today's trading/recovery lease context.
+current = N._read(N.root(data) / 'current.json')
+source_day = current.get('effective_date')
+if (isinstance(source_day, str) and source_day < day and
+        H.path(data, source_day, commit, current['bundle_sha256']).is_file()):
+    b = dated_parent()
+else:
+    try:
+        b = N._load_current_uncached(data, day)
+    except ValueError as exc:
+        if not (str(exc) == 'active_policy_code_reader_root_changed' or
+                str(exc).startswith(('v4_contract_code_changed:',
+                    'v5_contract_code_changed:', 'v6_contract_code_changed:'))):
+            raise
+        b = dated_parent()
 print(b['bundle_sha256'] if b else 'none')
 """
     result = subprocess.run(

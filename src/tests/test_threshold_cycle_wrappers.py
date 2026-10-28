@@ -1077,7 +1077,8 @@ def test_postclose_prepares_isolated_preopen_and_start_requires_day_of_completio
         "record_threshold_runtime_env_pid_handoff"
     )
     assert (
-        'verify_exact_preopen_completion "$RUNTIME_TARGET_DATE" || exit 1' in launcher
+        'verify_exact_preopen_completion "$RUNTIME_TARGET_DATE" "$RUNTIME_PREOPEN_REMAINING_WAIT_SEC" || exit 1'
+        in launcher
     )
 
 
@@ -2152,3 +2153,50 @@ run_postclose_cmd() {
     )
     assert result.returncode == (0 if failed == "none" else 1), result.stderr
     assert ("suffix reached" in result.stdout) is (failed == "none")
+
+
+def test_launcher_passes_only_remaining_env_wait_budget_to_exact_preopen(tmp_path):
+    import os
+    import subprocess
+
+    script = _text("src/run_bot.sh")
+    functions = script[
+        script.index("wait_for_threshold_runtime_env() {") : script.index(
+            "record_threshold_runtime_env_pid_handoff() {"
+        )
+    ]
+    src = tmp_path / "src"
+    src.mkdir()
+    python = tmp_path / ".venv/bin/python"
+    python.parent.mkdir(parents=True)
+    python.write_text('#!/bin/bash\nprintf "%s\\n" "$@" > "$MARKER"\n')
+    python.chmod(0o755)
+    env_file, marker = tmp_path / "bootstrap.env", tmp_path / "args"
+    run = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "set -e\n" + functions + """
+SECONDS=0
+sleep() { SECONDS=$((SECONDS + $1)); touch "$ENV_FILE"; }
+wait_for_threshold_runtime_env "$ENV_FILE"
+verify_exact_preopen_completion 2026-10-29 "$RUNTIME_PREOPEN_REMAINING_WAIT_SEC"
+""",
+        ],
+        cwd=src,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "ENV_FILE": str(env_file),
+            "MARKER": str(marker),
+            "LAUNCHER_SOURCE_GIT_COMMIT": "a" * 40,
+            "THRESHOLD_RUNTIME_ENV_WAIT_SEC": "9",
+            "THRESHOLD_RUNTIME_ENV_REQUIRED": "true",
+            "THRESHOLD_RUNTIME_ENV_BOOTSTRAP": "false",
+        },
+    )
+    assert run.returncode == 0, run.stderr
+    args = marker.read_text().splitlines()
+    assert args[-2:] == ["--wait-timeout-sec", "4"]
+    assert "--verify-completion" in args and "--selected-release-commit" in args

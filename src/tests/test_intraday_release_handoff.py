@@ -5424,7 +5424,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_POSTCLOSE_INTEGRATED_PROFILE,
+        "current": handoff.REVIEWED_PREOPEN_VALIDATION_PROFILE,
+        "postclose_integrated": handoff.REVIEWED_POSTCLOSE_INTEGRATED_PROFILE,
         "held_sell": handoff.REVIEWED_HELD_SELL_PROFILE,
         "member_carry": handoff.REVIEWED_ENTRY_MEMBER_CARRY_PROFILE,
         "consumed_delivery_integration": handoff.REVIEWED_DELIVERY_INTEGRATED_PROFILE,
@@ -5527,6 +5528,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     str(canonical),
                     "show",
                     {
+                        "postclose_integrated": "8ad99e22a",
                         "member_carry": "c780d4679",
                         "held_sell": "ae4c180f3",
                         "consumed_delivery_integration": "f4cdac806",
@@ -7256,3 +7258,14 @@ def test_postclose_integration_requires_all_consumers(tmp_path, dependency, faul
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, "pre_submit_delay", fault, "current", dependency
     )
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+def test_preopen_validation_preserves_issued_postclose_predecessor(tmp_path, family):
+    test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, family, None, "postclose_integrated")
+
+
+@pytest.mark.parametrize("dependency", sorted(handoff.REVIEWED_PREOPEN_VALIDATION_HASHES))
+@pytest.mark.parametrize("fault", [None, "missing", "dirty", "committed_change", "parent_mix"])
+def test_preopen_validation_requires_complete_reviewed_generation(tmp_path, dependency, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, "pre_submit_delay", fault, "current", dependency)

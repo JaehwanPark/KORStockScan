@@ -37,6 +37,11 @@ unset KORSTOCKSCAN_VALIDATION_SESSION_ID
 
 wait_for_threshold_runtime_env() {
     local env_path="$1"
+    RUNTIME_PREOPEN_REMAINING_WAIT_SEC=0
+    [[ "$THRESHOLD_RUNTIME_ENV_WAIT_SEC" =~ ^[0-9]+$ ]] || return 1
+    local wait_budget=$((10#$THRESHOLD_RUNTIME_ENV_WAIT_SEC))
+    local started=$SECONDS
+    local deadline=$((SECONDS + wait_budget))
     local waited=0
     if [ "$THRESHOLD_RUNTIME_ENV_REQUIRED" != "true" ] && [ "$THRESHOLD_RUNTIME_ENV_REQUIRED" != "1" ]; then
         return 0
@@ -52,16 +57,21 @@ wait_for_threshold_runtime_env() {
         )
     fi
     while [ ! -f "$env_path" ]; do
-        if [ "$waited" -ge "$THRESHOLD_RUNTIME_ENV_WAIT_SEC" ]; then
+        waited=$((SECONDS - started))
+        local remaining=$((deadline - SECONDS))
+        if [ "$remaining" -le 0 ]; then
             echo "❌ threshold runtime env 미생성으로 봇 기동 중단: $env_path (waited=${waited}s)"
             return 1
         fi
         if [ "$waited" -eq 0 ]; then
             echo "⏳ threshold runtime env 대기: $env_path"
         fi
-        sleep 5
-        waited=$((waited + 5))
+        sleep "$((remaining < 5 ? remaining : 5))"
     done
+    RUNTIME_PREOPEN_REMAINING_WAIT_SEC=$((deadline - SECONDS))
+    if [ "$RUNTIME_PREOPEN_REMAINING_WAIT_SEC" -lt 0 ]; then
+        RUNTIME_PREOPEN_REMAINING_WAIT_SEC=0
+    fi
     return 0
 }
 
@@ -81,9 +91,11 @@ verify_threshold_runtime_env_handoff() {
 
 verify_exact_preopen_completion() {
     local target_date="$1"
+    local wait_budget="${2:-0}"
     PYTHONPATH=.. ../.venv/bin/python -m src.engine.automation.next_preopen_readiness \
         --verify-completion --target-date "$target_date" \
-        --selected-release-commit "$LAUNCHER_SOURCE_GIT_COMMIT"
+        --selected-release-commit "$LAUNCHER_SOURCE_GIT_COMMIT" \
+        --wait-timeout-sec "$wait_budget"
 }
 
 record_threshold_runtime_env_pid_handoff() {
@@ -147,7 +159,7 @@ while true; do
     THRESHOLD_RUNTIME_ENV="../data/runtime/policy_bootstrap/runtime_policy_bootstrap_${RUNTIME_TARGET_DATE}.env"
     wait_for_threshold_runtime_env "$THRESHOLD_RUNTIME_ENV" || exit 1
     if [ "$RUNTIME_TARGET_DATE" \> "2026-10-01" ]; then
-        verify_exact_preopen_completion "$RUNTIME_TARGET_DATE" || exit 1
+        verify_exact_preopen_completion "$RUNTIME_TARGET_DATE" "$RUNTIME_PREOPEN_REMAINING_WAIT_SEC" || exit 1
     fi
     apply_main_policy_handoff "$RUNTIME_TARGET_DATE" "$THRESHOLD_RUNTIME_ENV" || exit 1
     verify_threshold_runtime_env_handoff "$RUNTIME_TARGET_DATE" || exit 1

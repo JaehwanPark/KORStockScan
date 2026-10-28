@@ -333,17 +333,11 @@ def preserve_checklist(day, *, original_content=None):
         content = dest.read_bytes()
     if hashlib.sha256(content).hexdigest() != expected:
         raise ValueError("intraday_checklist_not_current_sealed_generation")
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.is_symlink():
-        raise ValueError("intraday_historical_checklist_snapshot_changed")
-    if dest.exists():
-        if dest.read_bytes() != content:
-            raise ValueError("intraday_historical_checklist_snapshot_changed")
-    else:
-        with dest.open("xb") as out:
-            out.write(content)
-            out.flush()
-            os.fsync(out.fileno())
+    from src.engine.verify_threshold_cycle_postclose_chain import (
+        preserve_checklist_bytes,
+    )
+
+    preserve_checklist_bytes(DATA_DIR, expected, content)
     return dict(
         path=str(dest),
         sha256=expected,
@@ -12766,7 +12760,6 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
-
 # Exact SELL reconciliation and operator-stop recovery over the complete current profile.
 REVIEWED_SELL_CANCEL_HASHES = {'src/engine/sniper_state_handlers.py': '739fa0bfc847af66436d59ce1ff15be2959dd5f9f4c69152bbd55b33600ae0ab', 'src/engine/sniper_execution_receipts.py': '7fc306ee8c5be3812ba8ccf02b45cd948c62600a654b7ddf331e19f685d54cee', 'src/engine/sniper_sync.py': 'a8788beb561139657e18c4342abfbf4273d7ca6317eea8985b57c34962bc3c69', 'src/engine/automation/ordered_intraday_deploy.py': '9cc092cb1f592b6399ee73a049e07e05cfe613525350fcfdfbb37546a6eabaac', 'src/engine/infrastructure/startup_validation_code_context.py': '17294725212fc8a597c22755cbf7c39d7cdcad62435ebad63c98035e2ab97e48'}
 REVIEWED_SELL_CANCEL_ORIGINS = {'src/engine/sniper_state_handlers.py': '8e070b77c3cd1a53454862bc18c7a7ddee09da158d862f4e93fdd56226287672', 'src/engine/sniper_execution_receipts.py': 'c16009021a52faa9486d76f4b820c42b8574ebf2775c77192e60f87e1e7dcf90', 'src/engine/sniper_sync.py': 'da6289ec42399a5b7eea141defe6e061d6f78bcf06db3fd5e9d04e137695f1a2', 'src/engine/automation/ordered_intraday_deploy.py': 'ddf0b36a3ed279c7ab89ad60e39f29d5d171c8137215e67c5b6eecc9d04baf2a', 'src/engine/infrastructure/startup_validation_code_context.py': '5ef16fce0b5ba3cea8c82d2bd58a6434effae4c1205115b8a3e08dc1c21d6d4f'}
@@ -13103,7 +13096,6 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
-
 # Retain the issued integration profile; add its strict P5 diagnostic reader.
 REVIEWED_P5_DIAGNOSTIC_HASHES = {'src/engine/automation/main_startup_validation.py': 'bfc7e9a9c425f7a0a13ede4f5333046e73f02589ab4f03a5e95065185561f929', 'src/engine/infrastructure/startup_validation_code_context.py': '7c512ea8a1497743b89c5854f59f187a3a72e082ae7a967475aa2610f5f11a00'}
 REVIEWED_P5_DIAGNOSTIC_ORIGINS = {'src/engine/automation/main_startup_validation.py': 'ffc3433a9b8ef4a79f46562cecb4de59ed8a8b2a09ace5bb50027bb99f545c8f', 'src/engine/infrastructure/startup_validation_code_context.py': '197fcd28a92381d05bcd677a7be02df8893b3af8e3fafef4625d261074f839e6'}
@@ -13190,7 +13182,6 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
-
 # One complete lifetime successor over the selected delivery profile. Keep every
 # issued predecessor; an observed new member selects the entire reviewed set.
 REVIEWED_ENTRY_LIFETIME_HASHES = {'src/engine/ai_engine_openai.py': '424a6ae8e6c904430b9fbb601a6fdf9d9eec6aa3ab8b2c68be2f4c6919291940', 'src/engine/monitoring/runtime_performance.py': '397c11bf4cc06f74b2d904afe187d765284e543c17d27ed1cf92f8bd5b86640a', 'src/engine/scalping/continuous_reversal_policy_v6.py': 'dba3674350cb2a0b3b563236da605c79076d1fc0f3679ce1d9792144d4eb7499', 'src/engine/scalping/entry_deadline.py': 'af15f4b414bf0536002e9541fa67935e13de805bd97b4a01369f21a296e19a7c', 'src/engine/scalping/entry_machine_source_recovery.py': 'f363242b4979cfc076b166a991d02ef7b8f54fa2d92672e48fd47ca72bdc714f', 'src/engine/scalping/reversal_auxiliary_intraday.py': 'be51fd48fe976e61f6ebeefa76f81ff480c8401470e0efdfe2360307fcbe85cc', 'src/engine/scalping/reversal_auxiliary_tuning.py': '620b24ab335edd62d0d21cd0d7523ee6fa386ea9bb97da48e0dc12a507ca2911', 'src/engine/scalping/reversal_cumulative_postclose.py': '8753cb068c06998dd1d54c382bd86527b85eea8284713503376c0d0be3b8a5b1', 'src/engine/scalping/reversal_evaluation_context.py': '97ea26a45aa2484d25234eca0c83432fd6365afb3fb1adb26dcb5f3e89a69533', 'src/engine/scalping/reversal_extended_registration.py': '639643acfa06a46ddd5602ccfae056fe84bf812f0a4a35fc070acec6c96911ab', 'src/engine/scalping/reversal_extended_runtime.py': 'e80703262e2013f7164ffbb728d554e437476d2c83be0e6a919868e2934d40d7', 'src/engine/scalping/reversal_extended_state.py': 'a99704651c9c54cdc7f9131ed07b957fa10f8bf3d9625e408114559cc24ec21e', 'src/engine/scalping/reversal_joint_registration.py': '53665208e48d459ad3a5e16d8492b7a01ffe0dd2fedd4994ad64452543d7ccb4', 'src/engine/scalping/reversal_path_runtime.py': 'a1ea25c96870f2d478f12f3e5de81bcab64f4eaeb3c02cedcc977e16b697b340', 'src/engine/scalping/reversal_registered_runtime.py': 'a6ed5c230affa6f6fb0637a36c60f1629429466fa62fc198b7a7c38ed60d15b5', 'src/engine/scalping/reversal_source_diagnostics.py': '53391b706f363982b56ac4039d9770ff75efc01026ef96257148c8fd9ea52e33', 'src/engine/scalping/zero_base_probe.py': '834e020db2e2a14e6daa08153b688867d77d9de07814d5c07189beaa78be2af3', 'src/engine/infrastructure/startup_validation_code_context.py': 'b803eb812e49e20918beb00511258fbf1bb0c83e8280cc245b946224a34738c5'}
@@ -13215,7 +13206,6 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
         } | {REVIEWED_ENTRY_LIFETIME_ORIGINS[name]}
     ) for name, current in REVIEWED_ENTRY_LIFETIME_HASHES.items()
 }}
-
 
 
 # Exact validation-only successor for an already extended native member. Keep
@@ -13298,6 +13288,49 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
             value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair
         } | {REVIEWED_POSTCLOSE_INTEGRATED_ORIGINS[name]}
     ) for name, current in REVIEWED_POSTCLOSE_INTEGRATED_HASHES.items()
+}}
+
+
+# Reviewed orchestration and original compressed-source custody successor.
+# Policy values, source generations, hard guards and all issued profiles remain.
+REVIEWED_PREOPEN_VALIDATION_HASHES = {
+    "src/engine/automation/main_stop_postclose.py": "866997e7d0a376f6cb2b8cdcba0d8324ce9ffd5af19eafa080335364f9ecbf0d",
+    "src/engine/automation/next_preopen_readiness.py": "c89c5869690c7a17c2f3b631a5a6cb2ca0319b11e4a04b426b09e4a5bd128895",
+    "src/engine/automation/postclose_done_controller.py": "58df8d4a53c042b20bce02fe0408ca40a0429ee350389f1c9507f0c3947fef18",
+    "src/engine/scalping/continuous_reversal_policy_v6.py": "78c2e8a00ab0b87df3a42a0f35318598a3960e441bdbac0e090a0cb2e59a1b8b",
+    "src/engine/verify_threshold_cycle_postclose_chain.py": "1a03cda3865c6c9fc3ed43a28827da848c480c0d47bd23d2677fcde1ce54aab2",
+    "src/run_bot.sh": "0c1f6378db03d3cc71bd65f9d8c884ee02479ef1af0326d2b061bde3c1c381a6"
+}
+REVIEWED_PREOPEN_VALIDATION_ORIGINS = {
+    "src/engine/automation/main_stop_postclose.py": "a2ea988c1bc93962f021d3f23dab2adbc67521e5fa0bfe41dc6fd1a5e9c5946e",
+    "src/engine/automation/next_preopen_readiness.py": "ba72842e94099ffbf36fe7b04f41ffb823bf6690d047a6364858d5ac7a308bcc",
+    "src/engine/automation/postclose_done_controller.py": "659a031cb296e8e23c614f4fb1f496a25500ff2fc05aacf74c9348885be059d1",
+    "src/engine/scalping/continuous_reversal_policy_v6.py": "dba3674350cb2a0b3b563236da605c79076d1fc0f3679ce1d9792144d4eb7499",
+    "src/engine/verify_threshold_cycle_postclose_chain.py": "da729cdbbd5cc34c7ce48910055788c6886c77dc37ee15d4e6aa3b1323f78c1f",
+    "src/run_bot.sh": "e32584ab0ceea9b0a7a08428204d437f5abd022014c091d1771e6ee3f6d63d5e"
+}
+REVIEWED_PREOPEN_VALIDATION_PROFILE = {
+    **REVIEWED_POSTCLOSE_INTEGRATED_PROFILE, **REVIEWED_PREOPEN_VALIDATION_HASHES,
+}
+REVIEWED_PREOPEN_VALIDATION_VARIANTS = {
+    (key[0], REVIEWED_PREOPEN_VALIDATION_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_sha256": REVIEWED_PREOPEN_VALIDATION_HASHES.get(value["selector_path"], value["selector_sha256"]),
+        "dependencies": {**value["dependencies"], **REVIEWED_PREOPEN_VALIDATION_HASHES},
+        "contract_extensions": {
+            origin: {
+                name: REVIEWED_PREOPEN_VALIDATION_HASHES.get(os.path.normpath(name), sha)
+                for name, sha in members.items()
+            } for origin, members in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_POSTCLOSE_INTEGRATED_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (origin, current) for origin in {
+            value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair
+        } | {REVIEWED_PREOPEN_VALIDATION_ORIGINS[name]}
+    ) for name, current in REVIEWED_PREOPEN_VALIDATION_HASHES.items()
 }}
 
 
@@ -14290,6 +14323,14 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_POSTCLOSE_INTEGRATED_PROFILE
         prepared_variants = REVIEWED_POSTCLOSE_INTEGRATED_VARIANTS
+    if any(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == sha
+        for name, sha in REVIEWED_PREOPEN_VALIDATION_HASHES.items()
+        if sha != REVIEWED_POSTCLOSE_INTEGRATED_PROFILE.get(name)
+    ):
+        prepared_hashes = REVIEWED_PREOPEN_VALIDATION_PROFILE
+        prepared_variants = REVIEWED_PREOPEN_VALIDATION_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

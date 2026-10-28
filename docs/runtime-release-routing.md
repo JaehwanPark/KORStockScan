@@ -989,3 +989,54 @@ The held-position smart SELL successor carries the verified HOLDING fact through
 ### Prepared source checks after working checklist updates
 
 Next-session preparation can outlive edits to the operating checklist. When the native controller reports only checklist-generation drift, the existing readiness source reader authenticates the strict-bound original through `strict_bound_checklist_for_observer` and rechecks the sealed controller and every source generation against that exact document. Missing, changed or untrusted originals and all other controller/strict defects still fail. This preserves the original completed computation; it issues no new whole-chain PASS. Prepared receipt, selector, policies, activation candidate, auxiliary reader and full bootstrap checks retain their existing owners and requirements. Do not restore the working document or rerun calculations to satisfy a checksum of later task notes.
+
+
+### Validation ownership and late PREOPEN recovery
+
+The public controller and PREOPEN preparation APIs own their native source-day
+`postclose_session`, including direct recovery callers. An enclosing invocation
+with the same data root/date shares that byte identity cache; a new invocation
+revalidates sources and semantic decisions. Missing, changed or invalid inputs
+and failed validators still fail. Child processes do not inherit ContextVar
+custody: an explicit historical activation-parent reader selects its exact
+original dated handoff, rechecking its code/source hashes and pointer, rather
+than entering the current live trading/recovery context to discover its role.
+Missing or altered original evidence cannot use that route.
+
+The whole-chain strict receipt writer atomically preserves its bound checklist
+bytes before publishing PASS. The document-preservation entrypoint reuses that
+same byte publisher; concurrent identical writes are safe, and conflicting,
+symlinked or oversized originals reject publication. This stores evidence only:
+readers must still validate all strict/controller/source and actual PID bindings.
+
+The Main launcher's existing environment-wait budget covers both bootstrap
+publication and the exact PREOPEN terminal. An env file alone does not end the
+handoff wait. The existing completion reader may wait only for the same-day,
+same-release RUNNING producer while its native exclusive lock is actually held;
+failed, absent, foreign, stale or unowned states fail. Use only the remaining
+original budget, then require ordinary PREOPEN/bootstrap/policy/PID checks.
+
+Before cold selector publication, check the strict/current closure and time
+window required by the subsequent native policy-code rebind and preparation,
+not just candidate P5. Complete the active-parent handoff and any independently
+reviewed workflow preparation before candidate P5; distinguish the original
+policy issuer from the workflow verifier. A later required phase outside its
+native window preserves the incumbent. Execute each actual transition through
+its existing owner, with all phases and failure unwind validated offline.
+
+A late finalization suffix uses current detector obligations. If that detector
+already requires target-day PREOPEN/Main, complete their existing native gates
+before resuming the final detector suffix. Preserve the failed suffix anchor,
+original cleanup and full strict evidence. This does not change the ordinary
+scheduled finalization order, extend its deadline, suppress current failures or
+claim unassisted acceptance. Recheck the exact selected code root for analysis
+and execution; a mutable source checkout is not the running validator.
+
+For Main stop watch custody, canonical watch keys remain logical `.jsonl`
+identities. A source that was already compressed at publication retains its
+physical `.jsonl.gz` dependency and native generation seal. Verify that exact
+original generation and stable physical identity; do not require a decoded
+plain-to-gzip transition seal that its original publisher never issued. Only
+verified carried policies without selected cells may partition complete later
+observations. Changed originals, unknown provenance, missing indexes, partial
+or historical tails and full research/selected policy validation remain strict.

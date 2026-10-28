@@ -848,3 +848,75 @@ def test_deferred_preserves_incident_and_notification_age(status, attach, key):
     getattr(M, attach)(result, dict(status="review_required", issues={"x": 1}))
     assert result["incidents"][key]["first_seen"] == old["first_seen"]
     assert result["incidents"][key]["status"] == "active"
+
+
+@pytest.mark.parametrize("api", ["controller", "preopen"])
+@pytest.mark.parametrize("damage", ["unchanged", "changed", "missing", "semantic"])
+@pytest.mark.parametrize("parent_role", ["absent", "postclose", "observer"])
+def test_public_postclose_api_owns_invocation_bytes_and_preserves_rejection(
+    tmp_path, monkeypatch, api, damage, parent_role
+):
+    from contextlib import nullcontext
+    from src.engine.automation import next_preopen_readiness as Q
+    from src.engine.automation import postclose_done_controller as C
+
+    day = "2026-10-28"
+    source = tmp_path / "source.json"
+    source.write_bytes(b"a" * (D.MIN_BYTES + 1))
+    observed = []
+    parent = (
+        nullcontext(None)
+        if parent_role == "absent"
+        else (
+            D.postclose_session(tmp_path, day)
+            if parent_role == "postclose"
+            else D.DigestSession(
+                tmp_path, day, role="observer", generation={}
+            ).activate()
+        )
+    )
+
+    def consumer(*args, **kwargs):
+        invocation = D.ACTIVE.get()
+        assert invocation is not None and invocation.binding["role"] == "postclose"
+        assert invocation.binding["day"] == day
+        observed.append(invocation)
+        first = D.reused_digest(source)
+        if damage == "missing":
+            source.unlink()
+        elif damage == "changed":
+            source.write_bytes(b"b" * (D.MIN_BYTES + 1))
+        second = D.reused_digest(source)
+        assert (first != second) is (damage == "changed")
+        # The public owner must neither swallow nor cache a semantic verdict.
+        raise ValueError("native_semantics_rejected")
+
+    if api == "controller":
+        monkeypatch.setattr(C, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(C, "_load", lambda *a: {"status": "succeeded"})
+        monkeypatch.setattr(C, "build_runtime_approval_summary", consumer)
+        invoke = lambda: C.build_postclose_done_controller(day)
+    else:
+        monkeypatch.setattr(Q, "DATA_DIR", tmp_path)
+        monkeypatch.setattr(
+            Q,
+            "selected_release",
+            lambda *a: (Q.Path(Q.__file__).resolve().parents[3], "a" * 40),
+        )
+        monkeypatch.setattr(Q, "_selected_release", lambda **k: ({}, source, "a" * 40))
+        monkeypatch.setattr(Q, "_prepare", consumer)
+        invoke = lambda: Q.prepare(day, target_date="2026-10-29")
+    with parent as outer:
+        with pytest.raises(FileNotFoundError if damage == "missing" else ValueError):
+            invoke()
+        assert D.ACTIVE.get() is outer
+        assert len(observed) == 1
+        if parent_role == "postclose":
+            assert observed[0] is outer
+        else:
+            assert observed[0] is not outer
+        stats = observed[0].stats
+        assert stats["full_reads"] == (2 if damage == "changed" else 1)
+        assert stats["reused_reads"] == (0 if damage in {"changed", "missing"} else 1)
+    assert D.ACTIVE.get() is None
+    assert observed[0].entries == {} and not observed[0].directory.exists()

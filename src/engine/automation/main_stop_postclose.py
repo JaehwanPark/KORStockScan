@@ -842,18 +842,40 @@ def read_committed(root, day, *, pointer=None, verify_full=False):
         # A carried policy may still have read historical votes. Preserve every
         # consumed byte: only a publisher-sealed exact prefix can admit a later
         # native observation tail. Full research and selected cells stay strict.
-        sealed_sources = all(
-            (ref := binding.get(name, {})).get("path") == name
-            and ref.get("stat") == report["dependency_stats"].get(name)
-            and (
-                bool(ref.get("decoded_sha256"))
-                and type(ref.get("decoded_bytes")) is int
-                if _indexed_vote_generation(source)
-                else ref.get("decoded_sha256") == source.get("sha256")
-                and ref.get("decoded_bytes") == source.get("size")
-            )
-            for name, source in vote_sources.items()
-        )
+        sealed_sources = True
+        for name, source in vote_sources.items():
+            logical = name[:-3] if name.endswith(".jsonl.gz") else name
+            ref = binding.get(logical, {})
+            if ref.get("path") != name or ref.get("stat") != report[
+                "dependency_stats"
+            ].get(name):
+                sealed_sources = False
+                break
+            if name.endswith(".jsonl.gz"):
+                # An originally compressed input has an exact physical/native
+                # generation seal, not the plain-to-gzip decoded prefix seal.
+                # The watch key is logical; the consumed source stays physical.
+                physical = Path(name)
+                valid = (
+                    not physical.is_symlink()
+                    and list(source_stat(physical.stat())) == ref["stat"]
+                    and _dependency_generation_matches(
+                        physical, source, root=root, day=day
+                    )
+                    and list(source_stat(physical.stat())) == ref["stat"]
+                )
+            elif _indexed_vote_generation(source):
+                valid = (
+                    bool(ref.get("decoded_sha256"))
+                    and type(ref.get("decoded_bytes")) is int
+                )
+            else:
+                valid = ref.get("decoded_sha256") == source.get("sha256") and ref.get(
+                    "decoded_bytes"
+                ) == source.get("size")
+            if not valid:
+                sealed_sources = False
+                break
         observed_votes = verify_vote_watch_binding(
             root,
             day,

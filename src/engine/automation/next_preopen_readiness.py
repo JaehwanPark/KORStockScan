@@ -755,29 +755,33 @@ def prepare(
     now: datetime | None = None,
     recover_failed_preopen: bool = False,
 ) -> dict[str, Any]:
-    selected_root, _ = selected_release(DATA_DIR.parent)
-    _selected_release(require_selected_cwd=False)
-    if (
-        Path(__file__).resolve().parents[3] != selected_root
-        and Path.cwd().resolve() == Path(__file__).resolve().parents[3]
-    ):
-        from src.engine.automation import intraday_release_handoff as H
+    from src.engine.infrastructure.validation_digest_session import postclose_session
 
-        with H.stopped_postclose_review(
-            target_date or target_after_postclose(source_date)
+    with postclose_session(DATA_DIR, source_date):
+        selected_root, _ = selected_release(DATA_DIR.parent)
+        _selected_release(require_selected_cwd=False)
+        if (
+            Path(__file__).resolve().parents[3] != selected_root
+            and Path.cwd().resolve() == Path(__file__).resolve().parents[3]
         ):
-            return _prepare(
-                source_date,
-                target_date=target_date,
-                now=now,
-                recover_failed_preopen=recover_failed_preopen,
-            )
-    return _prepare(
-        source_date,
-        target_date=target_date,
-        now=now,
-        recover_failed_preopen=recover_failed_preopen,
-    )
+            from src.engine.automation import intraday_release_handoff as H
+
+            with H.stopped_postclose_review(
+                target_date or target_after_postclose(source_date)
+            ):
+                return _prepare(
+                    source_date,
+                    target_date=target_date,
+                    now=now,
+                    recover_failed_preopen=recover_failed_preopen,
+                )
+        return _prepare(
+            source_date,
+            target_date=target_date,
+            now=now,
+            recover_failed_preopen=recover_failed_preopen,
+        )
+
 
 def _prepare(
     source_date: str,
@@ -1142,36 +1146,81 @@ def verify_preopen_completion(
     selected_release_commit: str,
     *,
     now: datetime | None = None,
+    wait_timeout_sec: int = 0,
 ) -> dict[str, Any]:
+    import time as clock
+
+    if type(wait_timeout_sec) is not int or wait_timeout_sec < 0:
+        raise ValueError("exact_preopen_wait_timeout_invalid")
     path = (
         DATA_DIR
         / "report"
         / "threshold_cycle_preopen_status"
         / f"threshold_cycle_preopen_{target_date}.status.json"
     )
-    findings = []
-    current = (now or datetime.now(KST)).astimezone(KST)
-    try:
-        receipt = _read(path)
-        updated = datetime.fromisoformat(str(receipt.get("updated_at") or ""))
-        if (
-            receipt.get("target_date") != target_date
-            or receipt.get("status") != "succeeded"
-            or receipt.get("exit_code") != 0
-            or receipt.get("runtime_env_exists") is not True
-            or updated.tzinfo is None
-            or updated.astimezone(KST).date().isoformat() != target_date
-            or current.date().isoformat() != target_date
-        ):
-            findings.append("exact_preopen_status_not_succeeded_on_selected_release")
-        elif receipt.get("selected_release_commit") != selected_release_commit:
-            from src.engine.automation.intraday_release_handoff import (
-                verify as verify_intraday,
+    deadline = clock.monotonic() + wait_timeout_sec
+    while True:
+        findings = []
+        current = (now or datetime.now(KST)).astimezone(KST)
+        try:
+            receipt = _read(path)
+            updated = datetime.fromisoformat(str(receipt.get("updated_at") or ""))
+            dated = (
+                receipt.get("target_date") == target_date
+                and type(receipt.get("exit_code")) is int
+                and receipt.get("exit_code") == 0
+                and updated.tzinfo is not None
+                and updated.astimezone(KST).date().isoformat() == target_date
+                and updated <= current
+                and current.date().isoformat() == target_date
             )
+            if (
+                dated
+                and receipt.get("status") == "running"
+                and receipt.get("selected_release_commit") == selected_release_commit
+                and wait_timeout_sec
+            ):
+                # The bootstrap is published before the PREOPEN terminal. Only
+                # its actual exclusive writer permits bounded waiting, never a
+                # stale status or a replacement for the final success check.
+                lock_path = DATA_DIR.parent / "logs/runtime_policy_preopen.lock"
+                owner = False
+                if not lock_path.is_symlink():
+                    with lock_path.open("rb") as lock:
+                        if stat.S_ISREG(os.fstat(lock.fileno()).st_mode):
+                            try:
+                                fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                            except BlockingIOError:
+                                owner = True
+                            else:
+                                fcntl.flock(lock, fcntl.LOCK_UN)
+                remaining = deadline - clock.monotonic()
+                if remaining <= 0:
+                    findings.append("exact_preopen_completion_wait_timeout")
+                elif owner:
+                    clock.sleep(min(5, remaining))
+                    continue
+                elif _read(path) != receipt:
+                    continue  # Writer completed between the status and lock reads.
+                else:
+                    findings.append("exact_preopen_running_owner_not_observed")
+            if (
+                not dated
+                or receipt.get("status") != "succeeded"
+                or receipt.get("runtime_env_exists") is not True
+            ):
+                findings.append(
+                    "exact_preopen_status_not_succeeded_on_selected_release"
+                )
+            elif receipt.get("selected_release_commit") != selected_release_commit:
+                from src.engine.automation.intraday_release_handoff import (
+                    verify as verify_intraday,
+                )
 
-            return verify_intraday(target_date, selected_release_commit, now=now)
-    except (OSError, ValueError, TypeError):
-        findings.append("exact_preopen_status_missing_or_invalid")
+                return verify_intraday(target_date, selected_release_commit, now=now)
+        except (OSError, ValueError, TypeError):
+            findings.append("exact_preopen_status_missing_or_invalid")
+        break
     return {
         "status": "pass" if not findings else "fail",
         "target_date": target_date,
@@ -1190,6 +1239,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target-date")
     parser.add_argument("--require-today", action="store_true")
     parser.add_argument("--selected-release-commit")
+    parser.add_argument("--wait-timeout-sec", type=int, default=0)
     args = parser.parse_args(argv)
     if args.prepare and not args.source_date:
         parser.error("--prepare requires --source-date")
@@ -1197,6 +1247,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("verification requires --target-date")
     if args.verify_completion and not args.selected_release_commit:
         parser.error("--verify-completion requires --selected-release-commit")
+    if args.wait_timeout_sec and not args.verify_completion:
+        parser.error("--wait-timeout-sec requires --verify-completion")
     try:
         if args.prepare or args.verify:
             from src.engine.infrastructure.validation_digest_session import (
@@ -1230,7 +1282,9 @@ def main(argv: list[str] | None = None) -> int:
             result = {**result, "validation_io": session.stats}
         else:
             result = verify_preopen_completion(
-                args.target_date, args.selected_release_commit
+                args.target_date,
+                args.selected_release_commit,
+                wait_timeout_sec=args.wait_timeout_sec,
             )
     except (
         OSError,

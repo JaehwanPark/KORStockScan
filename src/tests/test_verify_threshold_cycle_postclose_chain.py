@@ -788,3 +788,115 @@ def test_main_scope_conserves_original_and_structure_eligible_populations(
         "main_machine_refinement_contract_invalid"
         in mod._main_mechanistic_scope(target)["issues"]
     )
+
+
+@pytest.mark.parametrize(
+    "damage", [None, "changed_source", "archive", "symlink", "parent_alias"]
+)
+def test_whole_strict_writer_preserves_original_before_working_checklist_can_change(
+    tmp_path, monkeypatch, damage
+):
+    import hashlib
+    from src.engine.automation.postclose_finalization_generation import (
+        strict_bound_checklist_for_observer,
+    )
+
+    data = tmp_path / "data"
+    data.mkdir()
+    monkeypatch.setattr(mod, "DATA_DIR", data)
+    monkeypatch.setattr(
+        mod, "OUTPUT_DIR", data / "report/threshold_cycle_postclose_verification"
+    )
+    monkeypatch.setattr(mod, "_render", lambda *a: "fixture strict receipt\n")
+    day = "2026-10-28"
+    checklist = tmp_path / "docs/checklists/2026-10-29-stage2-todo-checklist.md"
+    checklist.parent.mkdir(parents=True)
+    raw = b"# Native strict-bound original\n"
+    checklist.write_bytes(raw)
+    expected = hashlib.sha256(raw).hexdigest()
+    archive = (
+        data / "runtime/policy_bootstrap/historical_checklists" / (expected + ".md")
+    )
+    report = dict(
+        date=day,
+        status="pass",
+        verification_scope="whole_native_chain",
+        whole_native_chain_done_claimed=True,
+        generation_binding=dict(checklist_sha256=expected),
+        checklist_handoff=dict(path=str(checklist)),
+    )
+    if damage == "changed_source":
+        checklist.write_text("later working instructions\n")
+    elif damage in {"archive", "symlink"}:
+        archive.parent.mkdir(parents=True)
+        if damage == "archive":
+            archive.write_text("conflicting original\n")
+        else:
+            archive.symlink_to(checklist)
+    elif damage == "parent_alias":
+        archive.parent.parent.mkdir(parents=True)
+        foreign = tmp_path / "foreign"
+        foreign.mkdir()
+        archive.parent.symlink_to(foreign, target_is_directory=True)
+    if damage:
+        with pytest.raises(ValueError, match="strict_checklist"):
+            mod._write_verification_receipts(day, report, invocation={})
+        assert not list(mod.OUTPUT_DIR.glob("attempts/*/*.json"))
+        assert not (
+            mod.OUTPUT_DIR / f"threshold_cycle_postclose_verification_{day}.json"
+        ).exists()
+    else:
+        mod._write_verification_receipts(day, report, invocation={})
+        assert archive.read_bytes() == raw
+        checklist.write_text("later working instructions\n")
+        proof = strict_bound_checklist_for_observer(tmp_path, day)
+        assert proof["sha256"] == expected and proof["path"] == str(archive)
+        assert proof["new_finalization_claimed"] is False
+        assert archive.read_bytes() == raw
+
+
+@pytest.mark.parametrize(
+    "status,scope,whole",
+    [
+        ("fail", "whole_native_chain", True),
+        ("pass", "main_terminal", False),
+        ("pass", "whole_native_chain", False),
+    ],
+)
+def test_nonwhole_or_failed_strict_does_not_publish_original_authority(
+    tmp_path, monkeypatch, status, scope, whole
+):
+    data = tmp_path / "data"
+    data.mkdir()
+    monkeypatch.setattr(mod, "DATA_DIR", data)
+    monkeypatch.setattr(
+        mod, "OUTPUT_DIR", data / "report/threshold_cycle_postclose_verification"
+    )
+    monkeypatch.setattr(mod, "_render", lambda *a: "fixture\n")
+    mod._write_verification_receipts(
+        "2026-10-28",
+        dict(
+            status=status,
+            verification_scope=scope,
+            whole_native_chain_done_claimed=whole,
+        ),
+        invocation={},
+    )
+    assert not (data / "runtime/policy_bootstrap/historical_checklists").exists()
+
+
+def test_native_checklist_preservation_is_atomic_for_identical_publishers(tmp_path):
+    import hashlib
+    from concurrent.futures import ThreadPoolExecutor
+
+    raw = b"original\n" * 1000
+    expected = hashlib.sha256(raw).hexdigest()
+    with ThreadPoolExecutor(max_workers=2) as writers:
+        paths = list(
+            writers.map(
+                lambda _: mod.preserve_checklist_bytes(tmp_path, expected, raw),
+                range(2),
+            )
+        )
+    assert paths[0] == paths[1] and paths[0].read_bytes() == raw
+    assert list(paths[0].parent.iterdir()) == [paths[0]]

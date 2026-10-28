@@ -834,6 +834,9 @@ def test_code_refresh_parent_uses_full_strict_old_release_validator(
         "seal",
         "next_session",
         "next_session_rollover",
+        "next_session_lease",
+        "next_session_source",
+        "next_session_no_receipt",
         "future_parent",
         "pointer_day",
         "bad_requested",
@@ -900,9 +903,9 @@ def test_attested_parent_revalidates_frozen_origin_handoff_after_selection_chang
         receipt = P.seal(dict(receipt, code_hashes={str(code) + ".other": "f" * 64}))
     if damage == "seal":
         receipt["artifact_content_sha256"] = "f" * 64
-    if damage != "missing_receipt":
+    if damage not in {"missing_receipt", "next_session_no_receipt"}:
         P.write(H.path(root, day, commit, ident), receipt)
-    if damage == "source":
+    if damage in {"source", "next_session_source"}:
         source.write_text('{"changed":true}')
     if damage == "code":
         code.write_text("# changed implementation\n")
@@ -922,8 +925,15 @@ def test_attested_parent_revalidates_frozen_origin_handoff_after_selection_chang
         )
     )
 
+    visits = []
+
     def unavailable(*a, **kw):
-        raise ValueError(reason)
+        visits.append("live_reader")
+        raise ValueError(
+            "failed_preopen_recovery_lease_invalid"
+            if damage in {"next_session_lease", "next_session_no_receipt"}
+            else reason
+        )
 
     monkeypatch.setattr(N, "_load_current_uncached", unavailable)
     monkeypatch.setattr(N, "validate", lambda *a, **kw: None)
@@ -953,7 +963,13 @@ def test_attested_parent_revalidates_frozen_origin_handoff_after_selection_chang
             else "2026-10-016" if damage == "bad_requested" else day
         )
     )
-    if damage in ("none", "rollover", "next_session", "next_session_rollover"):
+    if damage in (
+        "none",
+        "rollover",
+        "next_session",
+        "next_session_rollover",
+        "next_session_lease",
+    ):
         assert (
             V._attested_activation_parent(
                 root, requested, origin_root=origin, origin_commit=commit
@@ -965,6 +981,8 @@ def test_attested_parent_revalidates_frozen_origin_handoff_after_selection_chang
             V._attested_activation_parent(
                 root, requested, origin_root=origin, origin_commit=commit
             )
+    if damage == "next_session_lease":
+        assert visits == []
     assert before == {p: p.read_bytes() for p in before}
 
 

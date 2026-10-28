@@ -5678,3 +5678,124 @@ Historical resolution for49558 correctly refuses holding_current_collection_unpr
 The source28 finalizer completed at05:50:18 with execution_only and source/cost semantics incomplete. Its current controller4b47bf52 and prepared6a643d21 passed selected P5 `5de8983b42b24d4fa4076b443e7d8989` after06:17 retention and06:25 archive. The07:04 working checklist update then caused readiness to compare current task notes with the strict-bound original. The observer already authenticated the preserved original; readiness omitted that consumer path. Repair the existing `_source_receipts` owner only for proven checklist-only drift, authenticate the original native archive and recheck all sealed bindings; retain full prepared/activation/bootstrap verification. No policy, source, threshold, order or status is edited. The existing reader remains the owner; no replacement wrapper/module is added.
 
 The original reader fails the new consumer regression; the repaired readiness/finalization scope passes199 tests. Other controller/stage defects, absent or invalid original evidence and changed target policy remain rejected. Source additions24 lines, tests56 lines before final supplemental coverage; baseline4f5884505. Deployment/PREOPEN/actual Main consumption remain pending until native receipts verify. RFHIC49558 original BUY-generation gaps/nulls and the protected tmp capacity warning remain OPEN under their existing owners. The07:00 resource FAIL separately records a birth-bound Codex child large-read burst;07:05 native resource I/O wait recovered to0.67%, with exact job ownership still unconfirmed. Original failing reports and samples are retained outside runtime tmp.
+
+
+## Recovered Main startup and orchestration defects — 2026-10-29
+
+Source trading date remains2026-10-28; target2026-10-29. Selected runtime
+`ce358bce0f0bbea932f0a3591ec4b40fd60b2cda` includes e44d0ab0e and feddbcabf.
+Native PREOPEN succeeded08:02:35; native Main start then attested PID1366991,
+start_ticks87314610, cwd ending`preopen-checklist-20261029-ce358bce0/src`.
+`startup_consumption_state` is ready on the exact selected release and bootstrap
+manifest`cd599ce15c241913f167abf786c5c5f4b535c301ac483bacee2e68ac645f5038`.
+The current-PID observer completed08:04:05, before the first health sweep began
+08:04:06. Its coverage is partial, not full semantic validation. Process/thread
+health passed. Native finalization suffix completed after Main; current automatic
+health08:06:28 had FAIL0. Recovery, unassisted acceptance, source quality and
+economics remain separate.
+
+The07:35 PREOPEN failure and failed recovery attempts remain preserved. The
+operator-independent code defect was the preparation reader's failure to use an
+already preserved strict-bound original after the working checklist changed.
+Its ce358bce0 repair passed199 affected regressions and an original-code failure.
+Additional recovery delay came from our ordering/caller mistakes: missing
+active-parent issuance before the first candidate P5; absent workflow provenance
+before the second P5; selector publication before checking the full closure
+required by the following rebind; and confusing the workflow root with the old
+policy issuer. Native guards rejected those invalid calls. No live policy,
+status, hash, hold or receipt was edited to bypass them.
+
+The07:58 suffix detector correctly required today's bootstrap/Main, which were
+not yet complete. Its failed original report is preserved; after actual startup
+the same native suffix owner revalidated the retained prefix and completed.
+The late06:50 cutoff warning remains truthful. The first scheduled supervisor
+ended during late PREOPEN; its exact lost terminal is unavailable. The env-before-
+terminal race is therefore an offline-reproduced structural defect, not a proven
+reconstruction of that supervisor's terminal.
+
+RFHIC218410/record49558 retains exactly two original BUY-generation diagnostics,
+report SHA85d3d9a753ced6d74b8e6a2f779ff2495ee0097a62ae914f44d3e9bb9b66ffbf.
+No new two-symbol loss is implied. Missing original evidence and economics remain
+null/unavailable. No later healthy collection has yet proven native historical
+resolution. Overall source/cost/semantic completion remains incomplete.
+
+Follow-up repairs are source-only until reviewed, committed and deployed:
+
+- Existing controller and preparation APIs now establish their native invocation
+  context themselves. The direct API previously omitted the CLI's context;
+  observed recovery I/O exceeded104GB logical reads by06:31 elapsed. This is
+  measured work, not an estimated speedup. Eight original API regressions fail;
+  the native context suite verifies per-invocation byte reuse, changed/missing
+  source rejection, semantic failure unwind and nested/observer separation.
+- The existing PREOPEN completion reader waits only for an exactly bound live
+  RUNNING owner. Launcher env publication and completion share one original
+  budget. Failed/foreign/stale/unowned states and timeouts retain rejection.
+- Explicit historical activation-parent validation uses its dated original
+  contract before entering today's live reader. Exact code/source/pointer/date
+  evidence remains mandatory; no accepted-error list or lease authority grows.
+- At08:06:18 a new target-day vote exposed another carried-policy defect:
+  original10/26 compressed source keys were logical in the watch but physical in
+  consumed inventory, and their original indexed seals were mistaken for absent
+  decoded transition seals. The existing reader now distinguishes those roles
+  and verifies the original native generation. Two original indexed regression
+  cases fail;247 stop-policy cases pass, including compressed byte/index cases,
+  prefix/history/partial/selected guard cases, gzip replacement and index loss.
+
+Implementation -> self review -> supplemental fixes -> re-review -> targeted
+validation is in progress. Current orchestration regressions338 PASS; dated
+parent/family regressions258 PASS; counts overlap and are not a combined total.
+Exact complete successor code-profile checks preserve every issued predecessor.
+No new module, provider call, order, threshold or economic gate is introduced.
+Existing functions are retained and repaired; no displaced implementation or
+parallel recovery tracker is created.
+
+Original evidence and reproducible failures are under
+`/home/ubuntu/KORStockScan-storage-archives/postclose-monitor-20261028/`:
+`candidate/preopen-ce358bce0/`, `phase2-originals/`, `phase2-stop-originals/`, and
+`phase2-*-regressions.log`. Policy/report/committed and the three compressed
+original sources are copied with SHA manifests. The source fix does not rewrite
+them. Next closure: exact-profile review, native candidate/selected P5,
+approved ordered consumption and current observer/health; unassisted acceptance
+remains OPEN for source10/29 postclose ->10/30 PREOPEN/Main under the existing
+DirectFamilyPreopenPolicyHandoff owner. Holding source resolution remains under
+HoldingProfitExitSourceContractRepair with native later-collection proof.
+
+
+### Phase2 review and validation closure
+
+The strict writer now stores exact originals atomically before whole-chain PASS;
+H.preserve_checklist retains its original prepared/strict authentication and
+reuses that byte publisher. Its duplicated direct-file writer is consolidated,
+not retained as a parallel implementation. No module, worker or schedule is added.
+The new helper belongs to the existing strict-receipt owner and has both native
+strict publication and authorized document preservation as actual consumers.
+Before updating the working checklist, the selected native owner preserved and
+revalidated originalb0cde98439dcc5d45d37d0c903d34e04f8c4dbd654da218ea515b31b43c1ea7d.
+The same parsed handoff owner now carries10/29postclose ->10/30PREOPEN/Main with
+original acceptance/history; current Main startup is complete, natural full-run
+acceptance remains OPEN.
+
+Original-code reproducers also fail on the lost-lease historical parent(1),
+missing writer-side original(1), and lost remaining launcher budget(1). They run
+in isolated pytest plugin processes; no selected source is changed. New native
+writer/controller/readiness158 PASS, complete current/issued-code-profile92 PASS,
+and ordered transition/startup/finalization consumers708 PASS. Other targeted
+338/247/258 counts above overlap; none is summed into a full-suite claim. One
+accidentally broad parameter selection was interrupted after1742 passed,
+1916deselected in24.92s to bound resource work; its partial log remains evidence,
+not a full PASS. The subsequent exact selections passed. Review collected node
+counts before large parameterized runs; keep diagnostic output to exact keys and
+paths. Do not mistake a setup/caller failure for damaged production data.
+
+Bounded native API I/O replay uses a synthetic2MiB input through the real
+byte_generation consumer: six verifications previously reopened12MiB; the fixed
+entrypoint reads2MiB once and reuses five byte digests, with identical hashes.
+The tiny warm-cache elapsed times are0.0083s/0.0158s, so this proves read reduction,
+not production latency improvement. Measure actual bytes/elapsed on the next
+scheduled job; no unchanged full production rerun was used as a benchmark.
+Native missing/changed-source and semantic validation remain independent of
+byte reuse. The exact successor profile binds all six affected code owners and
+preserves every issued predecessor; report capabilities use the existing full
+source-review/independent-fixture owner before runtime selection.
+
+Scope baseline`ce358bce0`: non-test source+466/-279, tests+489/-8, docs+170/-0 before this count note. Source growth is bounded waiting/original preservation/seal interpretation and its exact successor profile; the controller body is only indented under its owned invocation. No policy decision owner or execution worker is added. Old direct preservation code is consolidated; original readers and public controller/preparation interfaces remain required consumers. No removal is deferred. Self-review and re-review found no remaining in-scope code defect; deployment and natural acceptance are still separate.

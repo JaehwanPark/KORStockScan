@@ -655,6 +655,42 @@ def _atomic_write(path: Path, content: str) -> None:
     os.replace(temporary, path)
 
 
+def preserve_checklist_bytes(data_dir: Path, expected: str, content: bytes) -> Path:
+    """Keep strict-bound originals at their writer, never overwrite evidence."""
+    if (
+        not isinstance(content, bytes)
+        or not 0 < len(content) <= 2 * 1024 * 1024
+        or hashlib.sha256(content).hexdigest() != expected
+    ):
+        raise ValueError("strict_checklist_original_invalid")
+    data_root = Path(data_dir).resolve(strict=True)
+    dest = (
+        data_root
+        / "runtime/policy_bootstrap/historical_checklists"
+        / (expected + ".md")
+    )
+    if any(p.is_symlink() for p in dest.parents if p.is_relative_to(data_root)):
+        raise ValueError("strict_checklist_snapshot_changed")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.is_symlink():
+        raise ValueError("strict_checklist_snapshot_changed")
+    with tempfile.NamedTemporaryFile("wb", dir=dest.parent) as handle:
+        handle.write(content)
+        handle.flush()
+        os.fsync(handle.fileno())
+        try:
+            os.link(handle.name, dest)
+        except FileExistsError:
+            if (
+                dest.is_symlink()
+                or not dest.is_file()
+                or dest.stat().st_size != len(content)
+                or dest.read_bytes() != content
+            ):
+                raise ValueError("strict_checklist_snapshot_changed")
+    return dest
+
+
 def _write_verification_receipts(
     target_date: str, report: dict[str, Any], *, invocation: dict[str, Any]
 ) -> tuple[dict[str, Any], Path, Path, Path]:
@@ -664,6 +700,15 @@ def _write_verification_receipts(
     md_path = OUTPUT_DIR / f"threshold_cycle_postclose_verification_{target_date}.md"
     attempt_path = OUTPUT_DIR / "attempts" / target_date / f"{uuid.uuid4().hex}.json"
     report = dict(report)
+    if (
+        report.get("status") == "pass"
+        and report.get("verification_scope") == "whole_native_chain"
+        and report.get("whole_native_chain_done_claimed") is True
+    ):
+        expected = report["generation_binding"]["checklist_sha256"]
+        preserve_checklist_bytes(
+            DATA_DIR, expected, Path(report["checklist_handoff"]["path"]).read_bytes()
+        )
     report["verification_attempt"] = {
         "immutable": True,
         "path": str(attempt_path.resolve()),
