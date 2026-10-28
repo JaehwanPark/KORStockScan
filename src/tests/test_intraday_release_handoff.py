@@ -7117,3 +7117,19 @@ def test_partial_gap_complete_candidate_and_negatives(tmp_path, family, dependen
 @pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
 def test_partial_gap_keeps_consumed_buy_lineage(tmp_path, family):
     test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, family, None, "consumed_buy_lineage")
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("dependency", sorted(handoff.REVIEWED_ENTRY_EXPIRY_HASHES))
+@pytest.mark.parametrize("fault", [None, "missing", "dirty", "committed_change", "parent_mix"])
+def test_entry_expiry_complete_candidate_and_negatives(tmp_path, family, dependency, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "current", dependency
+    )
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+def test_entry_expiry_preserves_issued_buy_lineage(tmp_path, family):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, None, "consumed_buy_lineage"
+    )

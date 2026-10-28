@@ -3238,6 +3238,19 @@ for _name, _sha in REVIEWED_PARTIAL_GAP_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# Entry expiry classification and bounded preclaim rank evidence only.
+# Exact producer/trace/reader bytes require independent preparation intake.
+REVIEWED_ENTRY_EXPIRY_SOURCES = {'src/engine/ai_engine_openai.py': '5482e28106659d646d29b9abcf3428ea7dfe989f07a1f36f59e4a4aaf8f6d2f4', 'src/engine/scalping/ai_decision_trace.py': 'f1a072179283cba22d64cba81b435dee1becb4ed875666ec1911945ff5e7517a', 'src/scanners/zero_base_discovery_runtime.py': '06eb8c05864ab691c86e15b320ae99a19fb782a78899ac70ea79191c64040c9d'}
+REVIEWED_ENTRY_EXPIRY_ORIGINS = {'src/engine/ai_engine_openai.py': '4534fc7e63f3c9df0be4c82bc8c75af2bb4d02cc4f3673a31d64f54a79765429', 'src/engine/scalping/ai_decision_trace.py': 'b6e45faa04e0ae78a3ffe81a1b0a4d180f103401c9c8e1fadc5d8e76200fdd80', 'src/scanners/zero_base_discovery_runtime.py': '441f47be2b070d26f1210b81088a7e879c87060335e9f4bef6b2dc55851fafd4'}
+for _name, _sha in REVIEWED_ENTRY_EXPIRY_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_ENTRY_EXPIRY_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

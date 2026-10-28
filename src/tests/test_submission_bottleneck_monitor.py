@@ -4916,6 +4916,23 @@ def test_intraday_auxiliary_pending_detects_cross_source_binding_mismatch(tmp_pa
     assert result["issues"]["auxiliary_pending:trace_binding_mismatch"] == 1
 
 
+def test_preflight_expiry_trace_reaches_existing_source_gap_consumer(tmp_path):
+    now = START + timedelta(minutes=10)
+    row = _auxiliary_source_row(now)
+    row.update(
+        machine_evaluation_status="source_quality_blocked_before_assessment",
+        machine_source_gap_kind="entry_machine_input_deadline_expired",
+        entry_machine_input_error="entry_machine_input_deadline_expired",
+        entry_mechanistic_action="source_invalid", provider_called=False,
+        entry_ai_screen_required=False, actual_order_submitted=False,
+    )
+    _source_gap_files(tmp_path, now, traces=[row])
+    result = monitor.source_gap_semantics(tmp_path, now)
+    assert result["diagnostics"]["machine_trace:entry_machine_input_deadline_expired"] == 1
+    assert "machine_trace:source_quality_blocked_before_assessment" not in result["diagnostics"]
+    assert not monitor._entry_input_deadline_guard(row)  # Captured preflight is a distinct phase.
+
+
 def test_intraday_machine_trace_invalid_contract_preserves_sparse_vs_missing_cause(
     tmp_path,
 ):

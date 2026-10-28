@@ -13040,6 +13040,36 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_PARTIAL_GAP_HASHES.items()
 }}
 
+# Complete expiry/rank-evidence successor; carries the full issued RFHIC,
+# slot-return and completion generations without changing selection or guards.
+REVIEWED_ENTRY_EXPIRY_HASHES = {'src/engine/ai_engine_openai.py': '5482e28106659d646d29b9abcf3428ea7dfe989f07a1f36f59e4a4aaf8f6d2f4', 'src/engine/scalping/ai_decision_trace.py': 'f1a072179283cba22d64cba81b435dee1becb4ed875666ec1911945ff5e7517a', 'src/scanners/zero_base_discovery_runtime.py': '06eb8c05864ab691c86e15b320ae99a19fb782a78899ac70ea79191c64040c9d', 'src/engine/infrastructure/startup_validation_code_context.py': 'fe8a819ef3d1a848421e29d30982a89bfe6c39bf46ecfacfb9bfae1d78055434'}
+REVIEWED_ENTRY_EXPIRY_ORIGINS = {'src/engine/ai_engine_openai.py': '4534fc7e63f3c9df0be4c82bc8c75af2bb4d02cc4f3673a31d64f54a79765429', 'src/engine/scalping/ai_decision_trace.py': 'b6e45faa04e0ae78a3ffe81a1b0a4d180f103401c9c8e1fadc5d8e76200fdd80', 'src/scanners/zero_base_discovery_runtime.py': '441f47be2b070d26f1210b81088a7e879c87060335e9f4bef6b2dc55851fafd4', 'src/engine/infrastructure/startup_validation_code_context.py': '45534250126c5631c7a20ac8430603353309cc3337561f2a91dc86824762b0af'}
+REVIEWED_ENTRY_EXPIRY_PROFILE = {
+    **REVIEWED_BUY_LINEAGE_PROFILE, **REVIEWED_ENTRY_EXPIRY_HASHES
+}
+REVIEWED_ENTRY_EXPIRY_VARIANTS = {
+    (key[0], REVIEWED_ENTRY_EXPIRY_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/ai_engine_openai.py",
+        "selector_sha256": REVIEWED_ENTRY_EXPIRY_HASHES["src/engine/ai_engine_openai.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_ENTRY_EXPIRY_HASHES},
+        "contract_extensions": {
+            origin: {
+                name: REVIEWED_ENTRY_EXPIRY_HASHES.get(os.path.normpath(name), sha)
+                for name, sha in members.items()
+            } for origin, members in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_BUY_LINEAGE_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_ENTRY_EXPIRY_ORIGINS[name]}
+    ) for name, current in REVIEWED_ENTRY_EXPIRY_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -13969,6 +13999,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_PARTIAL_GAP_PROFILE
         prepared_variants = REVIEWED_PARTIAL_GAP_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/ai_engine_openai.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_ENTRY_EXPIRY_HASHES["src/engine/ai_engine_openai.py"]
+    ):
+        prepared_hashes = REVIEWED_ENTRY_EXPIRY_PROFILE
+        prepared_variants = REVIEWED_ENTRY_EXPIRY_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

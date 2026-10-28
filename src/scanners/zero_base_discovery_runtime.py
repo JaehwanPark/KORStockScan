@@ -358,6 +358,14 @@ class ZeroBaseDiscoveryRuntime:
         available_slots = (
             max(0, MAX_CONCURRENT_PROBES - active_claims) if consumer_ready else 0
         )
+        rank_before = {
+            key: (
+                row.market, row.source_kind, row.discovery_volume,
+                row.first_seen_epoch, row.last_claim_epoch,
+                row.next_due_epoch, row.claim_count,
+                row.long_residence_deferred_count,
+            ) for key, row in self.queue._candidates.items()
+        }
         claims = self.queue.claim(
             now_epoch=now_epoch,
             limit=min(MAX_CLAIMS_PER_CYCLE, available_slots),
@@ -431,6 +439,15 @@ class ZeroBaseDiscoveryRuntime:
         pending = {}
         for key, (reason, master_sha) in self.queue.admission_state.items():
             row = self.queue._candidates[key]
+            # Rank inputs belong to the admission boundary, before claim mutates
+            # last-claim/count and removes the observed eligible-wait clock.
+            rank = rank_before[key] + (
+                (
+                    before_admission._eligible_since.get(key, now_epoch)
+                    if reason == "claimed"
+                    else self.queue._eligible_since.get(key)
+                ),
+            )
             state = (
                 reason,
                 row.observed_epoch,
@@ -438,6 +455,7 @@ class ZeroBaseDiscoveryRuntime:
                 row.next_due_epoch,
                 row.claim_count,
                 master_sha,
+                rank,
             )
             if self._admission_emitted.get(key) != state:
                 pending[key] = state
@@ -462,6 +480,15 @@ class ZeroBaseDiscoveryRuntime:
                                         next_due_epoch=value[3],
                                         claim_count=value[4],
                                         master_sha256=value[5],
+                                        preclaim_rank=dict(zip(
+                                            (
+                                                "market", "source_kind", "discovery_volume",
+                                                "first_seen_epoch", "last_claim_epoch",
+                                                "next_due_epoch", "claim_count",
+                                                "long_residence_deferred_count", "eligible_since_epoch",
+                                            ),
+                                            value[6],
+                                        )),
                                     )
                                     for key, value in selected
                                 ],
@@ -479,6 +506,9 @@ class ZeroBaseDiscoveryRuntime:
                             "zero_base_admission_pending_count": len(pending)
                             - len(selected),
                             "zero_base_admission_coverage": "dispatch_samples_only",
+                            "zero_base_admission_rank_schema": "preclaim_rank_inputs_v1",
+                            "zero_base_admission_claim_sequence_before": before_admission._claim_sequence,
+                            "zero_base_admission_allocation_policy": "current",
                         },
                     )
                     if selected

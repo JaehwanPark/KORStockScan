@@ -4634,6 +4634,75 @@ def test_selected_machine_only_returns_assessment_without_provider(monkeypatch):
     assert result["actual_order_submitted"] is False
 
 
+@pytest.mark.parametrize(
+    "error",
+    ["entry_machine_input_deadline_expired", "entry_machine_quote_clock_conflict", "unknown_expired"],
+)
+@pytest.mark.parametrize("existing_blocker", [None, "quote_stale"])
+def test_machine_refresh_failure_preserves_exact_clock_cause(monkeypatch, tmp_path, error, existing_blocker):
+    from src.engine.scalping import ai_decision_trace as trace
+    from src.engine.scalping import mechanistic_entry_runtime_policy as policy
+    from src.engine.scalping.entry_setup_evidence import MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1
+    from src.tests.test_ai_decision_trace import _enable, _rows
+
+    _enable(monkeypatch, tmp_path)
+    engine = _build_engine()
+    live = dict(
+        enabled=True, status="active_bounded_nxt_canary",
+        selected_prompt_version=policy.AI_VERSION,
+        primary_decision_owner="mechanistic_entry_adjudicator",
+        ai_role="auxiliary_risk_screen_pass_veto_no_promotion",
+        scope_authority="operator_all_session_auto_promotion",
+        mechanistic_threshold_policy=MECHANISTIC_ENTRY_THRESHOLD_POLICY_V1,
+        machine_bundle_sha256="b" * 64,
+    )
+    monkeypatch.setattr(openai_module, "resolve_live_prompt_policy", lambda **kw: live)
+    monkeypatch.setattr(
+        openai_module, "ai_input_preflight",
+        lambda context: dict(allowed=True, source_allowed=True, feature_allowed=True,
+                             status="partial", blockers=[existing_blocker] if existing_blocker else [],
+                             source_blockers=[existing_blocker] if existing_blocker else []),
+    )
+    calls = []
+
+    def freeze(ws, ticks, context, **kw):
+        calls.append(error)
+        return ws, ticks, context, dict(
+            entry_machine_input_error=error,
+            entry_machine_input_budget_at_freeze_ms=37.656,
+            entry_machine_input_budget_after_freeze_ms=-122.544,
+            entry_machine_input_refresh_ms=160.198,
+        )
+
+    monkeypatch.setattr(openai_module, "_final_entry_machine_inputs", freeze)
+    monkeypatch.setattr(engine, "_call_openai_safe", lambda *a, **kw: pytest.fail("invalid input reached provider"))
+    context = _allowed_entry_candle_context()
+    result = engine.analyze_target(
+        "test", {**_sample_ws_data(), "stock_code": "005930"},
+        _sample_ticks(), _sample_candles(), strategy="SCALPING", prompt_profile="watching",
+        candle_context=context, entry_input_refresher=lambda *a: None,
+    )
+    assert calls == [error]
+    assert result["action"] == "DROP" and result["provider_called"] is False
+    assert result["entry_mechanistic_action"] == "source_invalid"
+    deadline = error == "entry_machine_input_deadline_expired"
+    assert result["entry_source_invalid_primary_blocker"] == (
+        error if deadline else "entry_machine_input_refresh_failed"
+    )
+    assert result["entry_source_invalid_primary_category"] == (
+        "freshness_or_timing" if deadline else "source_quality"
+    )
+    row = _rows(trace._trace_path(trace._date_text()))[-1]
+    assert row["entry_machine_input_error"] == error
+    if deadline:
+        assert row["machine_source_gap_kind"] == error
+    else:
+        assert row.get("machine_source_gap_kind") != "entry_machine_input_deadline_expired"
+    if existing_blocker:
+        assert existing_blocker in row["entry_source_invalid_source_blockers"]
+    assert row["provider_called"] is False and row["actual_order_submitted"] is False
+
+
 @pytest.mark.parametrize("feature_shortfall", [False, True])
 def test_machine_policy_preflight_block_preserves_source_invalid_receipt(
     monkeypatch, tmp_path, feature_shortfall

@@ -1225,7 +1225,43 @@ def test_admission_deltas_are_bounded_resume_and_reach_existing_census(
         summary["valid_claim_count"] == summary["confirmed_watch_admission_count"] == 0
     )
     assert index["123450"]["zero_base_admission"][0]["reason"] == "eligible_due"
+    rank = index["123450"]["zero_base_admission"][0]["preclaim_rank"]
+    assert rank["claim_count"] == 0 and rank["last_claim_epoch"] == 0
+    assert rank["first_seen_epoch"] == T0
+    assert rank["eligible_since_epoch"] == T0 + 1
+    assert emitted[0]["zero_base_admission_claim_sequence_before"] == 0
     assert not index["123450"].get("source_seen")
+
+
+def test_claimed_rank_receipt_preserves_preclaim_state_and_retries_changes(tmp_path):
+    import json
+
+    emitted = []
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=Bus(), session_date="2026-09-28", state_path=tmp_path / "q.json",
+        claim_receipt_emitter=lambda stage, **kw: (
+            emitted.append(kw["fields"]) or {"structured_append_succeeded": True}
+        ) if stage == "zero_base_probe_admission" else None,
+    )
+    runtime.queue.observe(
+        code="123450", route="krx_nxt_integrated", observed_epoch=T0,
+        received_epoch=T0, source_sha256="a" * 64, source_scope="observed_panel",
+        discovery_volume=42, source_kind="activity", market="KOSPI",
+    )
+    assert runtime.dispatch_due_probes(now_epoch=T0 + 1)["probe_requested_count"] == 1
+    row = json.loads(emitted[-1]["zero_base_admission_records"])[0]
+    assert row["reason"] == "claimed" and row["claim_count"] == 1
+    assert row["preclaim_rank"]["claim_count"] == 0
+    assert row["preclaim_rank"]["last_claim_epoch"] == 0
+    assert row["preclaim_rank"]["eligible_since_epoch"] == T0 + 1
+    assert row["preclaim_rank"]["discovery_volume"] == 42
+    runtime.dispatch_due_probes(now_epoch=T0 + 2)
+    assert json.loads(emitted[-1]["zero_base_admission_records"])[0]["preclaim_rank"]["eligible_since_epoch"] is None
+    count = len(emitted)
+    runtime.queue._candidates[("123450", "krx_nxt_integrated")].discovery_volume = 43
+    runtime.dispatch_due_probes(now_epoch=T0 + 3)
+    assert len(emitted) == count + 1
+    assert json.loads(emitted[-1]["zero_base_admission_records"])[0]["preclaim_rank"]["discovery_volume"] == 43
 
 
 def test_admission_emit_failure_preserves_claims_and_pending_diagnostic(tmp_path):

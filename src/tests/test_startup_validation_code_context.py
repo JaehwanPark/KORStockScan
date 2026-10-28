@@ -3662,3 +3662,16 @@ def test_partial_gap_independent_preparation_pair(relative):
     assert C.reviewed_preparation_pair(relative, old, current)
     assert not C.reviewed_preparation_pair(relative, "f" * 64, current)
     assert not C.reviewed_preparation_pair(relative, old, "f" * 64)
+
+
+@pytest.mark.parametrize("relative", sorted(C.REVIEWED_ENTRY_EXPIRY_SOURCES))
+@pytest.mark.parametrize("fault", [None, "origin", "successor", "path"])
+def test_entry_expiry_independent_preparation_exact_sources(relative, fault):
+    old = C.REVIEWED_ENTRY_EXPIRY_ORIGINS[relative]
+    current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+    assert current == C.REVIEWED_ENTRY_EXPIRY_SOURCES[relative]
+    assert current == H.REVIEWED_ENTRY_EXPIRY_PROFILE[relative]
+    if fault == "origin": old = "0" * 64
+    if fault == "successor": current = "0" * 64
+    if fault == "path": relative = "src/engine/unreviewed_expiry.py"
+    assert C.reviewed_preparation_pair(relative, old, current) is (fault is None)

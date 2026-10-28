@@ -10172,13 +10172,25 @@ class GPTSniperEngine:
         candle_preflight = ai_input_preflight(candle_context)
         if machine_input_fields.get("entry_machine_input_error"):
             candle_preflight = dict(candle_preflight)
-            reason = "entry_machine_input_refresh_failed"
+            deadline_expired = (
+                machine_input_fields["entry_machine_input_error"]
+                == "entry_machine_input_deadline_expired"
+            )
+            reason = (
+                "entry_machine_input_deadline_expired"
+                if deadline_expired
+                else "entry_machine_input_refresh_failed"
+            )
+            if deadline_expired:
+                machine_input_fields["machine_source_gap_kind"] = reason
             candle_preflight.update(
                 allowed=False,
                 source_allowed=False,
                 status="blocked",
                 primary_blocker=reason,
-                primary_blocker_category="source_quality",
+                primary_blocker_category=(
+                    "freshness_or_timing" if deadline_expired else "source_quality"
+                ),
             )
             candle_preflight["blockers"] = list(
                 candle_preflight.get("blockers") or []
