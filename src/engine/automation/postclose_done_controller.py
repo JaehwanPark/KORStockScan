@@ -277,6 +277,15 @@ def build_postclose_done_controller(
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "status": status,
+        "status_scope": "postclose_execution_chain_only",
+        "completion_assessment": {
+            "execution_status": "complete" if status == "done" else "incomplete",
+            "startup_status": "not_assessed",
+            "source_cost_semantic_status": "pending_final_detector",
+            "overall_status": "incomplete",
+            "overall_success": False,
+            "validation_owner": "error_detection.postclose_completion",
+        },
         "dry_run": dry_run,
         "summary_handoff_only": summary_handoff_only,
         "whole_native_chain_done_claimed": status == "done"
@@ -327,6 +336,7 @@ def build_postclose_done_controller(
         except (OSError, ValueError, BlockingIOError) as exc:
             report["status"] = "blocked_direct_evidence_gap"
             report["whole_native_chain_done_claimed"] = False
+            report["completion_assessment"]["execution_status"] = "incomplete"
             if isinstance(report.get("postclose_stage_status"), dict):
                 report["postclose_stage_status"][
                     "postclose_all_active_stages_complete"
@@ -345,7 +355,9 @@ def build_postclose_done_controller(
             [
                 f"# Postclose done controller - {target_date}",
                 "",
-                f"- status: `{status}`",
+                f"- execution status: `{status}`",
+                "- source/cost/semantic validation: `pending_final_detector`",
+                "- overall completion: `incomplete`; startup: `not_assessed`",
                 f"- verifier: `{verifier.get('status')}`",
                 "- recovery owner: direct family evidence and summary only",
                 "- common Daily/EV rerun: `retired`",

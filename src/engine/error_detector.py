@@ -413,6 +413,7 @@ class ErrorDetectionEngine:
     def write_report(
         self, report: dict, report_path: Path | None = None
     ) -> Path | None:
+        report["postclose_completion"] = postclose_completion_assessment(report)
         if self.dry_run:
             log_info(
                 f"[ERROR_DETECTION] dry-run, would write report with severity={report['summary_severity']}"
@@ -435,6 +436,186 @@ class ErrorDetectionEngine:
             tmp_path.unlink(missing_ok=True)
         log_info(f"[ERROR_DETECTION] Report written to {report_path}")
         return report_path
+
+
+def postclose_completion_assessment(
+    report: dict, source_date: str | None = None
+) -> dict:
+    """Project native evidence without changing health or startup admission.
+
+    Only the native readers classify historical exclusions. This projection
+    never infers resolution from age, a nonempty eligible subset or FAIL=0.
+    It consumes this sweep, after Main has attached its startup evidence.
+    """
+
+    def object_value(parent, key):
+        value = parent.get(key)
+        return value if isinstance(value, dict) else {}
+
+    rows = report.get("results")
+    rows = rows if isinstance(rows, list) else []
+    by_id = {
+        row["detector_id"]: row
+        for row in rows
+        if isinstance(row, dict) and isinstance(row.get("detector_id"), str)
+    }
+    artifact = by_id.get("artifact_freshness", {})
+    details = object_value(artifact, "details")
+    cron = object_value(by_id.get("cron_completion", {}), "details")
+    selected = object_value(details, "completed_semantic_source")
+    day = (
+        source_date
+        or cron.get("postclose_finalization_source_date")
+        or selected.get("source_date")
+    )
+    errors = validate_report_contract(
+        report,
+        expected_mode="full",
+        expected_run_id=report.get("run_id"),
+        expected_target_date=report.get("target_date"),
+    )
+    report_contract_valid = not errors
+    if not REQUIRED_DETECTOR_IDS.issubset(by_id):
+        errors.append("full_detector_coverage_missing")
+    alerts = details.get("semantic_alerts")
+    coverage = object_value(details, "functional_semantic_coverage")
+    observations = details.get("semantic_observations")
+    observations = observations if isinstance(observations, list) else []
+    handoffs = [
+        row.get("semantics", {})
+        for row in observations
+        if isinstance(row, dict)
+        and row.get("stage") == "postclose_handoff"
+        and isinstance(row.get("semantics"), dict)
+        and row["semantics"].get("source_date") == day
+    ]
+    handoff = handoffs[0] if len(handoffs) == 1 else {}
+    if (
+        not day
+        or selected.get("source_date") != day
+        or selected.get("status") != "receipt_selected"
+        or selected.get("findings") != []
+        or not selected.get("generation")
+        or handoff.get("report_sha256") != selected.get("generation")
+        or handoff.get("status") != "done"
+        or handoff.get("findings") != []
+    ):
+        errors.append("postclose_source_generation_unverified")
+    if (
+        coverage.get("status") != "pass"
+        or coverage.get("findings") != []
+        or not isinstance(alerts, list)
+        or not isinstance(details.get("semantic_source_bindings"), list)
+        or not details.get("semantic_source_bindings")
+    ):
+        errors.append("source_cost_semantic_coverage_unverified")
+    # Bind executed semantic observations, not only the static hook inventory.
+    # These native hooks own the selected postclose source. Future-day rows
+    # must not stand in for that source (notably quantity after midnight).
+    source_observations = [
+        (row["stage"], row["semantics"])
+        for row in observations
+        if isinstance(row, dict)
+        and isinstance(row.get("stage"), str)
+        and isinstance(row.get("semantics"), dict)
+        and row["semantics"].get("source_date") == day
+    ]
+    source_stages = {name for name, _ in source_observations}
+    required = {
+        "postclose_handoff",
+        "initial_quantity",
+        "main_stop_confirmation",
+        "main_auxiliary_policy",
+    }
+    if not required.issubset(source_stages) or not (
+        {"main_machine_policy", "legacy_machine_report"} & source_stages
+    ):
+        errors.append("postclose_semantic_observation_missing")
+    from src.engine.error_detectors.artifact_freshness import _semantic_alert_candidates
+
+    for name, observation in source_observations:
+        if (
+            not isinstance(observation.get("findings"), list)
+            or not all(isinstance(reason, str) for reason in observation["findings"])
+            or not isinstance(observation.get("status"), str)
+            or not observation["status"]
+        ):
+            errors.append(name + ":semantic_observation_unverified")
+        elif _semantic_alert_candidates(name, observation, day):
+            # Do not rely on notification filtering/deduplication for closure.
+            errors.append(name + ":semantic_findings_unresolved")
+    validation = (
+        "incomplete"
+        if alerts
+        else (
+            "unverified"
+            if errors
+            else "incomplete" if artifact.get("severity") != "pass" else "complete"
+        )
+    )
+    execution = (
+        cron.get("postclose_finalization_status", "not_observed")
+        if cron.get("postclose_finalization_source_date") == day
+        else "not_observed"
+    )
+    execution = "complete" if execution == "pass" else execution
+    startup = object_value(report, "startup_consumption")
+    observer = object_value(report, "startup_observer")
+    provenance = object_value(report, "detector_code_provenance")
+    startup_complete = bool(
+        handoff.get("bound_target_date")
+        and startup.get("target_date") == handoff.get("bound_target_date")
+        and startup.get("target_date") == report.get("target_date")
+        and provenance.get("selected_release_consumed") is True
+        and provenance.get("selected_commit") == startup.get("git_commit")
+        and provenance.get("selected_root") == startup.get("release_root")
+        and startup.get("release_root")
+        and startup.get("status") == "ready"
+        and startup.get("reason") == "current_pid_consumption_complete"
+        and startup.get("manifest_sha256")
+        and startup.get("git_commit")
+        and startup.get("start_ticks")
+        and isinstance(startup.get("pid"), int)
+        and not isinstance(startup.get("pid"), bool)
+        and startup["pid"] > 0
+    )
+    # Publication alone does not establish the observer's decision coverage.
+    # Keep the full original receipt and require the native health sweep too.
+    startup_status = (
+        "complete" if startup_complete and report_contract_valid else "not_verified"
+    )
+    overall = (
+        "complete"
+        if execution == "complete"
+        and startup_status == "complete"
+        and validation == "complete"
+        and report.get("summary_severity") == "pass"
+        and observer.get("target_date") == startup.get("target_date")
+        and observer.get("pid") == startup.get("pid")
+        and observer.get("status") == "attempted"
+        and observer.get("producer_exit") == 0
+        and observer.get("observer_exit") == 0
+        else "incomplete"
+    )
+    return dict(
+        schema="postclose_completion_assessment_v1",
+        source_date=day,
+        target_date=handoff.get("bound_target_date"),
+        execution_status=execution,
+        startup_status=startup_status,
+        source_cost_semantic_status=validation,
+        overall_status=overall,
+        overall_success=overall == "complete",
+        health_severity=report.get("summary_severity"),
+        current_findings=alerts if isinstance(alerts, list) else [],
+        unverified_reasons=sorted(set(errors)),
+        evidence_run_id=report.get("run_id"),
+        evidence_timestamp=report.get("timestamp"),
+        natural_acceptance_status="not_assessed",
+        realized_economics_status="not_assessed",
+        runtime_effect=False,
+        allowed_runtime_apply=False,
+    )
 
 
 def validate_report_contract(

@@ -673,6 +673,8 @@ def test_attempts_never_overwrite_failure_and_preterminal_is_not_done(
         target, require_done_marker=False
     )
     assert report["completion_state"] == "preterminal_verified"
+    assert report["status_scope"] == "execution_contract_verification_only"
+    assert report["overall_success"] is False
     assert report["whole_native_chain_done_claimed"] is False
     failed = {**report, "status": "fail", "issues": ["first_failure"]}
     _, _, _, first = mod._write_verification_receipts(target, failed, invocation={})

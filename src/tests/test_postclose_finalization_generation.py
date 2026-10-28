@@ -638,6 +638,10 @@ def test_final_detector_receipt_requires_same_date_fresh_self_audit(tmp_path):
     )
     receipt = capture_final_detector_receipt(tmp_path, DAY, started_after_ns=0)
     assert receipt["run_id"] == "cron-20260929T071129-1014922"
+    assert receipt["postclose_completion"]["overall_success"] is False
+    assert (
+        receipt["postclose_completion"]["source_cost_semantic_status"] == "unverified"
+    )
     with pytest.raises(
         FinalizationGenerationError, match="final_detector_attempt_invalid"
     ):
@@ -1040,3 +1044,24 @@ def test_completed_rebind_resumes_failed_suffix_without_published_detector(
     assert receipt['cleanup_reexecuted'] is receipt['controller_reexecuted'] is False
     assert detector.read_bytes() == original
     assert receipt['generation'] == json.loads(Path(first['receipt_path']).read_bytes())['generation']
+
+
+def test_final_detector_generation_cannot_change_during_completion_read(
+    tmp_path, monkeypatch
+):
+    import src.engine.error_detector as detector
+
+    test_final_detector_receipt_requires_same_date_fresh_self_audit(tmp_path)
+    path = tmp_path / "data/report/error_detection" / f"error_detection_{DAY}.json"
+    original = path.read_bytes()
+    assess = detector.postclose_completion_assessment
+
+    def changed(report, day):
+        path.write_bytes(original + b"\n")
+        return assess(report, day)
+
+    monkeypatch.setattr(detector, "postclose_completion_assessment", changed)
+    with pytest.raises(
+        FinalizationGenerationError, match="final_detector_generation_changed"
+    ):
+        capture_final_detector_receipt(tmp_path, DAY, started_after_ns=0)

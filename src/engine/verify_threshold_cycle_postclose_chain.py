@@ -565,6 +565,9 @@ def build_threshold_cycle_postclose_verification(
     return {
         "schema_version": 3,
         "report_type": "threshold_cycle_postclose_verification",
+        "status_scope": "execution_contract_verification_only",
+        "overall_success": False,
+        "source_cost_semantic_status": "pending_final_detector",
         "verification_scope": (
             "main_precommit"
             if seal_main_run

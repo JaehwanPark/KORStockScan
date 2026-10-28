@@ -403,6 +403,7 @@ def capture_final_detector_receipt(
         / "data/report/error_detection"
         / f"error_detection_{target_date}.json"
     )
+    original_sha = _sha(path)
     report = _load(path, "final_detector_report_missing_or_invalid")
     try:
         fresh = path.stat().st_mtime_ns >= started_after_ns
@@ -454,10 +455,16 @@ def capture_final_detector_receipt(
         or not timestamp_valid
     ):
         raise FinalizationGenerationError("final_detector_attempt_invalid")
+    from src.engine.error_detector import postclose_completion_assessment
+
+    completion = postclose_completion_assessment(report, target_date)
+    if _sha(path) != original_sha:
+        raise FinalizationGenerationError("final_detector_generation_changed")
     return {
         "run_id": report["run_id"],
-        "report_sha256": _sha(path),
+        "report_sha256": original_sha,
         "timestamp": report["timestamp"],
+        "postclose_completion": completion,
     }
 
 
