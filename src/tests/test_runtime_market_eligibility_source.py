@@ -114,11 +114,16 @@ def test_runtime_only_explicit_eligibility_values(monkeypatch, value, expected):
     )
 
 
-def test_runtime_conflict_cannot_be_erased_by_later_duplicate(monkeypatch):
+@pytest.mark.parametrize("runtime_prepare", [False, True])
+def test_runtime_conflict_cannot_be_erased_by_later_duplicate(
+    monkeypatch, runtime_prepare
+):
     install_pages(
         monkeypatch, rows={"0": [item(nxt="Y"), item(nxt="N"), item(nxt="N")]}
     )
-    rows, _ = K.get_stock_eligibility_map_ka10099("fixture", None, runtime_prepare=True)
+    rows, _ = K.get_stock_eligibility_map_ka10099(
+        "fixture", None, runtime_prepare=runtime_prepare
+    )
     assert rows["005930"]["quality_state"] == "CONFLICT"
     assert "official_source_conflict" in rows["005930"]["blocked_reasons"]
 
@@ -251,34 +256,35 @@ def test_collector_to_timezone_preserving_db_main_adapter_and_nxt_preflight(
     ).allowed
 
 
+@pytest.mark.parametrize("code", ["005930", "0120G0"])
 def test_same_day_complete_refresh_invalidates_missing_old_row_and_recovers(
-    monkeypatch, db, tmp_path
+    monkeypatch, db, tmp_path, code
 ):
-    install_pages(monkeypatch)
+    install_pages(monkeypatch, rows={"0": [item(code)]})
     first = runtime(tmp_path / "first").tick(db)
     assert first["status"] == "pass"
-    original = db.get_security_market_eligibility("005930", "2026-10-14")
+    original = db.get_security_market_eligibility(code, "2026-10-14")
     install_pages(monkeypatch, rows={"0": [item("009540")]})
     missing = runtime(tmp_path / "restart").tick(db)
-    row = db.get_security_market_eligibility("005930", "2026-10-14")
+    row = db.get_security_market_eligibility(code, "2026-10-14")
     assert missing["status"] == "pass" and row["quality_state"] == "UNKNOWN"
     assert row["nxt_eligible"] is None and row["payload_sha256"] is None
     assert "official_source_row_missing" in row["blocked_reasons_json"]
     assert (
-        missing["superseded_missing_rows"]["005930"]["payload_sha256"]
+        missing["superseded_missing_rows"][code]["payload_sha256"]
         == original["payload_sha256"]
     )
     immutable = next((tmp_path / "restart/receipts/2026-10-14").glob("*-1.json"))
     assert (
-        json.loads(immutable.read_text())["superseded_missing_rows"]["005930"][
+        json.loads(immutable.read_text())["superseded_missing_rows"][code][
             "nxt_eligible"
         ]
         is True
     )
-    install_pages(monkeypatch)
+    install_pages(monkeypatch, rows={"0": [item(code)]})
     recovered = runtime(tmp_path / "another-restart").tick(db)
     assert recovered["status"] == "pass"
-    row = db.get_security_market_eligibility("005930", "2026-10-14")
+    row = db.get_security_market_eligibility(code, "2026-10-14")
     assert row["quality_state"] == "VALID" and row["nxt_eligible"] is True
     assert row["blocked_reasons_json"] == []
 
@@ -429,14 +435,14 @@ def test_current_krx_source_reaches_sor_consumer_without_nxt_inference(
 
 
 @pytest.mark.parametrize("partial", [False, True])
-def test_removed_master_symbols_are_raw_evidence_without_new_master_rows(
+def test_restored_master_symbols_persist_without_changing_source_quality(
     monkeypatch, db, tmp_path, partial
 ):
-    removed = source.REMOVED_MASTER_SYMBOLS
+    restored = {"179880", "266690", "468670", "486510"}
     install_pages(
         monkeypatch,
         rows={
-            "0": [item(c) for c in sorted(removed)] + [item("005930")],
+            "0": [item(c) for c in sorted(restored)] + [item("005930")],
             "10": [item("036930")],
         },
     )
@@ -453,14 +459,14 @@ def test_removed_master_symbols_are_raw_evidence_without_new_master_rows(
     owner = runtime(tmp_path)
     result = owner.tick(db)
     assert result["status"] == ("partial" if partial else "pass")
-    assert result["stored_count"] == 2
-    assert result["operator_removed_master_codes"] == sorted(removed)
-    assert set(result["source_rows"]) == removed | {"005930", "036930"}
+    assert result["stored_count"] == 6
+    assert "operator_removed_master_codes" not in result
+    assert set(result["source_rows"]) == restored | {"005930", "036930"}
     day = date.fromisoformat(result["target_date"])
-    for code in removed:
-        assert db.get_security_market_eligibility(code, day) is None
-        assert source.master_symbol_removed("A" + code + "_AL")
-    assert not source.master_symbol_removed("005930")
+    for code in restored:
+        assert db.get_security_market_eligibility(code, day)["quality_state"] == (
+            "UNKNOWN" if partial else "VALID"
+        )
     assert db.get_security_market_eligibility("005930", day)["quality_state"] == (
         "UNKNOWN" if partial else "VALID"
     )

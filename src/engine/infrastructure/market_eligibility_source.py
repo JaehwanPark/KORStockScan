@@ -22,17 +22,6 @@ KST = ZoneInfo("Asia/Seoul")
 MAX_DAILY_ATTEMPTS = 3
 RETRY_INTERVAL_SECONDS = 300.0
 
-# Operator removal from listing/collection masters on 2026-10-23. Preserve
-# dated source receipts; this does not reclassify broker data or custody.
-REMOVED_MASTER_SYMBOLS = frozenset({"179880", "266690", "468670", "486510"})
-
-
-def master_symbol_removed(code: object) -> bool:
-    return (
-        str(code or "").strip().upper().removeprefix("A").split("_", 1)[0]
-        in REMOVED_MASTER_SYMBOLS
-    )
-
 
 def store_market_eligibility_rows(
     session,
@@ -41,11 +30,7 @@ def store_market_eligibility_rows(
     source_rows: dict[str, dict],
 ) -> dict:
     quality_counts: dict[str, int] = {}
-    excluded = []
     for code, source_snapshot in sorted((source_rows or {}).items()):
-        if master_symbol_removed(code):
-            excluded.append(code)
-            continue
         resolved = resolve_symbol_venue_eligibility(
             code,
             trade_date,
@@ -77,7 +62,6 @@ def store_market_eligibility_rows(
     return {
         "stored_count": int(sum(quality_counts.values())),
         "quality_counts": quality_counts,
-        **({"operator_removed_master_codes": excluded} if excluded else {}),
     }
 
 
@@ -223,8 +207,7 @@ class RuntimeMarketEligibilitySource:
                         row
                         for row in prior
                         if row.stock_code not in rows
-                        and row.stock_code.isdigit()
-                        and len(row.stock_code) == 6
+                        and kiwoom_utils.is_canonical_stock_code(row.stock_code)
                     ]
                     superseded = {}
                     for row in missing:

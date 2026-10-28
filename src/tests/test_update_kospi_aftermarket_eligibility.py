@@ -449,15 +449,9 @@ def test_eod_source_census_distinguishes_empty_stale_and_partial(monkeypatch):
     empty = update_kospi.update_kospi_data()
     assert empty["status"] == "failed"
     assert empty["reason"] == "no_collected_rows"
-    assert empty["unreceived_codes"] == ["000660", "005930"]
-    assert empty["total_count"] == 2
-    assert empty["excluded_symbol_identities"] == [
-        {
-            "raw_code": "00088K",
-            "canonical_code": "00088K",
-            "reason": "unsupported_equity_namespace",
-        }
-    ]
+    assert empty["unreceived_codes"] == ["000660", "00088K", "005930"]
+    assert empty["total_count"] == 3
+    assert empty["excluded_symbol_identities"] == []
 
     observed_date = date(2026, 10, 1)
 
@@ -476,9 +470,9 @@ def test_eod_source_census_distinguishes_empty_stale_and_partial(monkeypatch):
     observed_date = date(2026, 10, 2)
     partial = update_kospi.update_kospi_data()
     assert partial["status"] == "completed_with_warnings"
-    assert partial["target_date_symbol_count"] == 1
+    assert partial["target_date_symbol_count"] == 2
     assert partial["missing_target_date_codes"] == ["000660"]
-    assert partial["inserted_rows"] == 1
+    assert partial["inserted_rows"] == 2
 
 
 def test_eod_normalization_never_collapses_instrument_namespaces():
@@ -488,22 +482,304 @@ def test_eod_normalization_never_collapses_instrument_namespaces():
     assert update_kospi._normalize_stock_code("1234567") == "1234567"
 
 
+def _observed_master_source():
+    import json
+    from pathlib import Path
+
+    return json.loads(
+        (
+            Path(__file__).parent / "fixtures/master_ingestion/observed_20261028.json"
+        ).read_text()
+    )
+
+
+@pytest.mark.parametrize("runtime_prepare", [False, True])
+def test_observed_alphanumeric_listing_rows_keep_native_eligibility(
+    monkeypatch, runtime_prepare
+):
+    observed = _observed_master_source()
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "fetch_kiwoom_api_continuous",
+        lambda **kw: (
+            [{"return_code": 0, "list": observed["official_listings"]}],
+            {"last_http_status_code": 200},
+        ),
+    )
+    rows, meta = kiwoom_utils.get_stock_eligibility_map_ka10099(
+        "fixture",
+        ["0120G0", "0009K0", "0126Z0", "1234567"],
+        mrkt_tps=("0",),
+        trade_date=date(2026, 10, 28),
+        observed_at_kst=datetime(2026, 10, 28, 20, 0, tzinfo=KST),
+        runtime_prepare=runtime_prepare,
+    )
+    assert meta["received_code_count"] == 2
+    assert meta["missing_codes"] == ["0126Z0"]
+    assert rows["0120G0"]["nxt_eligible"] is True
+    assert rows["0009K0"]["payload_sha256"]
+    assert rows["0126Z0"]["quality_state"] == "UNKNOWN"
+    assert rows["0126Z0"]["eligible_venues_json"] == []
+    assert "1234567" not in rows
+
+
+@pytest.mark.parametrize(
+    "bar_count,calculation_failure",
+    [
+        (10, False),
+        (19, False),
+        (20, False),
+        (20, True),
+        (20, "native"),
+        (20, "identity_changed"),
+    ],
+)
+def test_observed_short_history_survives_feature_boundary(
+    monkeypatch, tmp_path, bar_count, calculation_failure
+):
+    import pandas as pd
+    from sqlalchemy import select
+    from src.database.models import DailyStockQuote
+
+    observed = _observed_master_source()
+    frame = pd.DataFrame(observed["ohlcv"])
+    monkeypatch.setattr(update_kospi, "_today_str", lambda: observed["source_date"])
+    frame["Date"] = pd.to_datetime(frame["Date"])
+    if bar_count > len(frame):
+        extra = frame.iloc[: bar_count - len(frame)].copy()
+        extra["Date"] -= pd.Timedelta(days=40)
+        frame = pd.concat([extra, frame], ignore_index=True)
+    frame = frame.set_index("Date")
+    monkeypatch.setattr(update_kospi, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        kiwoom_utils, "get_daily_ohlcv_ka10081_df", lambda *a: frame.copy()
+    )
+    monkeypatch.setattr(
+        kiwoom_utils, "get_investor_daily_ka10059_df", lambda *a, **kw: pd.DataFrame()
+    )
+    monkeypatch.setattr(
+        kiwoom_utils, "get_margin_daily_ka10013_df", lambda *a, **kw: pd.DataFrame()
+    )
+    monkeypatch.setattr(
+        kiwoom_utils, "get_basic_info_ka10001", lambda *a: {"Name": "Melcon"}
+    )
+    calls = []
+    native_calculate = update_kospi.calculate_all_features
+
+    def calculate(data):
+        calls.append(len(data))
+        if calculation_failure == "native":
+            return native_calculate(data)
+        if calculation_failure == "identity_changed":
+            return data.assign(
+                quote_date=data.quote_date + pd.Timedelta(days=1), MA20=100.0
+            )
+        if calculation_failure is True:
+            raise ValueError("observed_feature_failure")
+        return data.assign(MA20=100.0)
+
+    monkeypatch.setattr(update_kospi, "calculate_all_features", calculate)
+    result = update_kospi.process_and_save_stock("179880", "fixture", None)
+    assert len(result) == bar_count
+    assert calls == ([bar_count] if bar_count >= 20 else [])
+    assert result.attrs["feature_status"] == (
+        "failed"
+        if calculation_failure is True or calculation_failure == "identity_changed"
+        else "insufficient_history" if bar_count < 20 else "calculated"
+    )
+    db = DBManager(f"sqlite:///{tmp_path / 'quotes.sqlite3'}")
+    Base.metadata.create_all(db.engine)
+    with db.engine.begin() as conn:
+        update_kospi._upsert_daily_quote_batch(conn, result)
+    with db.engine.connect() as conn:
+        rows = conn.execute(select(DailyStockQuote.__table__)).mappings().all()
+    assert len(rows) == bar_count
+    for index, row in enumerate(sorted(rows, key=lambda r: r["quote_date"])):
+        assert row["close_price"] > 0
+        assert row["foreign_net"] is None
+        assert row["marcap"] is None
+        if calculation_failure == "native":
+            assert row["ma20"] == pytest.approx(
+                frame.Close.mean() if index == 19 else 0.0
+            )
+        else:
+            assert row["ma20"] == (
+                100.0 if bar_count >= 20 and not calculation_failure else None
+            )
+    db.engine.dispose()
+
+
+def test_persisted_short_history_does_not_bypass_model_minimum(monkeypatch):
+    import pandas as pd
+    from src.model import dataset_builder_v2 as dataset
+
+    raw = pd.DataFrame(_observed_master_source()["ohlcv"])
+    raw = raw.rename(columns={"Date": "quote_date"}).assign(stock_code="179880")
+    monkeypatch.setattr(dataset, "fetch_raw_quotes", lambda *a: raw)
+
+    def forbidden(*a):
+        pytest.fail("short source history must not enter model calculation")
+
+    monkeypatch.setattr(dataset, "calculate_all_features", forbidden)
+    assert dataset.build_panel_dataset(["179880"], "2026-10-15", "2026-10-28").empty
+
+
+@pytest.mark.parametrize("source_changed", [False, True])
+def test_uncomputed_refresh_preserves_only_source_bound_indicators(
+    tmp_path, source_changed
+):
+    import pandas as pd
+    from sqlalchemy import select
+    from src.database.models import DailyStockQuote
+
+    db = DBManager(f"sqlite:///{tmp_path / 'quotes.sqlite3'}")
+    Base.metadata.create_all(db.engine)
+    day = date(2026, 10, 28)
+    with db.engine.begin() as conn:
+        conn.execute(
+            DailyStockQuote.__table__.insert(),
+            {
+                "quote_date": day,
+                "stock_code": "179880",
+                "close_price": 90.0 if source_changed else 100.0,
+                "ma20": 88.0,
+                "foreign_net": 12.0,
+            },
+        )
+        frame = pd.DataFrame(
+            [
+                dict(
+                    quote_date=day,
+                    stock_code=c,
+                    close_price=100.0,
+                    ma20=float("nan"),
+                    foreign_net=float("nan"),
+                )
+                for c in ["179880", "0120G0"]
+            ]
+        )
+        update_kospi._upsert_daily_quote_batch(conn, frame)
+        rows = {
+            r.stock_code: r for r in conn.execute(select(DailyStockQuote.__table__))
+        }
+    assert rows["179880"].close_price == 100.0
+    assert rows["179880"].ma20 == (None if source_changed else 88.0)
+    assert rows["179880"].foreign_net == 12.0
+    assert rows["0120G0"].ma20 is None and rows["0120G0"].foreign_net is None
+    db.engine.dispose()
+
+
+def test_raw_source_validation_does_not_need_indicators():
+    import pandas as pd
+    import numpy as np
+
+    valid = pd.DataFrame(_observed_master_source()["ohlcv"])
+    assert len(update_kospi._sanitize_daily_input(valid, "179880")) == 10
+    invalid = valid.astype({"Close": float, "Open": float})
+    invalid.loc[0, "Date"] = "invalid"
+    invalid.loc[1, "Close"] = np.inf
+    invalid.loc[2, "Volume"] = -1
+    invalid.loc[3, "High"] = 1
+    invalid.loc[4, "Low"] = 999999
+    invalid.loc[5, "Open"] = None
+    invalid.loc[6, "Volume"] = 0  # Valid observed no-volume bar.
+    sanitized = update_kospi._sanitize_daily_input(invalid, "179880")
+    assert len(sanitized) == 4 and sanitized.Volume.eq(0).any()
+
+
+@pytest.mark.parametrize("storage_failure", [False, True])
+def test_listing_commit_precedes_quote_work_and_survives_quote_storage_failure(
+    monkeypatch, tmp_path, storage_failure
+):
+    import pandas as pd
+    from src.database.models import SecurityMarketEligibilityDaily
+    from sqlalchemy import select
+    from types import SimpleNamespace
+
+    db = DBManager(f"sqlite:///{tmp_path / 'eod.sqlite3'}")
+    Base.metadata.create_all(db.engine)
+    monkeypatch.setattr(update_kospi, "DBManager", lambda: db)
+    monkeypatch.setattr(
+        update_kospi, "EventBus", lambda: SimpleNamespace(publish=lambda *a: None)
+    )
+    monkeypatch.setattr(kiwoom_utils, "is_trading_day", lambda: (True, "fixture"))
+    monkeypatch.setattr(kiwoom_utils, "get_kiwoom_token", lambda: "fixture")
+    monkeypatch.setattr(update_kospi, "_today_str", lambda: "2026-10-28")
+    listings = _observed_master_source()["listings"] + [
+        {"Market": "KONEX", "Code": "212310"},
+        {"Market": "ETF", "Code": "069500"},
+        {"Market": "KOSPI", "Code": "1234567"},
+    ]
+    expected = {"036930", "179880", "266690", "468670", "486510", "0120G0", "212310"}
+    monkeypatch.setattr(
+        update_kospi.fdr, "StockListing", lambda *a: pd.DataFrame(listings)
+    )
+    monkeypatch.setattr(update_kospi.time, "sleep", lambda *a: None)
+
+    def listing(db, session, **kwargs):
+        assert set(kwargs["stock_codes"]) == expected
+        session.add(
+            SecurityMarketEligibilityDaily(
+                trade_date=date(2026, 10, 28),
+                stock_code="0120G0",
+                quality_state="UNKNOWN",
+                eligible_venues_json=[],
+                blocked_reasons_json=["fixture"],
+            )
+        )
+        return {}, {"status": "partial", "stored_count": 1}
+
+    monkeypatch.setattr(update_kospi, "_collect_and_store_market_eligibility", listing)
+
+    def quote(code, *a, **kw):
+        # Independent reader proves listing commit before indicator processing.
+        assert (
+            db.get_security_market_eligibility("0120G0", "2026-10-28")["quality_state"]
+            == "UNKNOWN"
+        )
+        frame = pd.DataFrame(
+            [dict(quote_date=date(2026, 10, 28), stock_code=code, close_price=100.0)]
+        )
+        frame.attrs.update(
+            feature_status="failed" if code == "179880" else "insufficient_history",
+            feature_error="ValueError" if code == "179880" else None,
+        )
+        return frame
+
+    monkeypatch.setattr(update_kospi, "process_and_save_stock", quote)
+    if storage_failure:
+
+        def failed(*a):
+            raise RuntimeError("fixture_storage_failure")
+
+        monkeypatch.setattr(update_kospi, "_upsert_daily_quote_batch", failed)
+    result = update_kospi.update_kospi_data()
+    assert result["total_count"] == len(expected)
+    assert result["feature_failed_codes"] == ["179880"]
+    assert result["status"] == (
+        "failed" if storage_failure else "completed_with_warnings"
+    )
+    assert result["reason"] == (
+        "bulk_insert_failed" if storage_failure else "market_eligibility_partial"
+    )
+    with db.engine.connect() as conn:
+        assert conn.execute(
+            select(SecurityMarketEligibilityDaily.stock_code)
+        ).scalars().all() == ["0120G0"]
+    db.engine.dispose()
+
+
 @pytest.mark.parametrize("feed", ["fdr", "db"])
 @pytest.mark.parametrize("new_gap", [False, True])
-def test_operator_removed_master_symbols_never_reenter_eod_collection(
-    monkeypatch, feed, new_gap
-):
+def test_restored_master_symbols_reenter_both_eod_sources(monkeypatch, feed, new_gap):
     import pandas as pd
     from sqlalchemy import create_engine, text
     from types import SimpleNamespace
     from contextlib import nullcontext
-    from src.engine.infrastructure.market_eligibility_source import (
-        REMOVED_MASTER_SYMBOLS,
-    )
 
-    codes = (
-        sorted(REMOVED_MASTER_SYMBOLS) + ["005930"] + (["000660"] if new_gap else [])
-    )
+    restored = {"179880", "266690", "468670", "486510"}
+
+    codes = sorted(restored) + ["005930"] + (["000660"] if new_gap else [])
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
     with engine.begin() as conn:
@@ -537,7 +813,7 @@ def test_operator_removed_master_symbols_never_reenter_eod_collection(
         return pd.DataFrame([dict(Market="KOSDAQ", Code=c) for c in codes])
 
     monkeypatch.setattr(update_kospi.fdr, "StockListing", listings)
-    expected = sorted(set(codes) - REMOVED_MASTER_SYMBOLS)
+    expected = sorted(set(codes))
 
     def eligibility(db, session, *, token, stock_codes, **kwargs):
         assert stock_codes == expected
@@ -568,7 +844,7 @@ def test_operator_removed_master_symbols_never_reenter_eod_collection(
         r["canonical_code"]
         for r in result["excluded_symbol_identities"]
         if r["reason"] == "operator_removed_from_master"
-    } == REMOVED_MASTER_SYMBOLS
+    } == set()
     with engine.connect() as conn:
         rows = conn.execute(
             text(
