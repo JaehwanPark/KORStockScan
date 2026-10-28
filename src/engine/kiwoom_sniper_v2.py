@@ -12706,6 +12706,37 @@ def _restore_holding_runtime_state(targets):
 
         if strategy == "SCALPING":
             fill_restore = restore_buy_fill_receipt(stock, DATA_DIR)
+            # A validated partial SELL changes held inventory, never the
+            # original BUY generation. Reconcile the original quantity using
+            # the native same-cycle journal before invoking the strict reader.
+            state = stock.get("_sell_execution_receipt_state")
+            original_qty = state.get("position_qty") if isinstance(state, dict) else None
+            if (
+                fill_restore == "position_generation_mismatch"
+                and stock.get("sell_partial_exit_carry_active") is True
+                and type(original_qty) is int
+                and 0 < stock["buy_qty"] < original_qty
+            ):
+                from src.engine.sniper_execution_receipts import load_sell_receipt_recovery
+                from src.engine.ai.holding_exit_vote import _BUY_FILL_RECEIPT_KEYS
+
+                verified, reason = load_sell_receipt_recovery(
+                    target_id=stock.get("id"), code=code,
+                    position_qty=original_qty, broker_remaining_qty=stock["buy_qty"],
+                )
+                if (reason == "journal_exact_match" and isinstance(verified, dict)
+                        and verified.get("final") is False
+                        and verified.get("quantity_contract_complete") is True):
+                    original = dict(stock, buy_qty=original_qty)
+                    fill_restore = restore_buy_fill_receipt(original, DATA_DIR)
+                    if fill_restore in {"restored", "restored_from_path_vote"}:
+                        # Restore immutable BUY legs only. Current quantity,
+                        # SELL/cancel state and all trading interlocks stay owned
+                        # by their native recovery consumers.
+                        stock.update({key: original[key] for key in _BUY_FILL_RECEIPT_KEYS})
+                        if "buy_fill_identity_price_binding" in original:
+                            stock["buy_fill_identity_price_binding"] = original["buy_fill_identity_price_binding"]
+                        stock.pop("buy_fill_identity_store_gap", None)
             if fill_restore not in {"restored", "restored_from_path_vote"}:
                 stock["buy_fill_identity_store_gap"] = fill_restore
                 log_error(

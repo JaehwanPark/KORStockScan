@@ -789,6 +789,76 @@ def test_restore_holding_runtime_state_rehydrates_exact_buy_identity(
     assert stale["buy_fill_identity_store_gap"] == "position_generation_mismatch"
 
 
+@pytest.mark.parametrize('fault', [None, 'active', 'missing_journal', 'checksum', 'journal_id',
+    'journal_symbol', 'journal_quantity', 'journal_remaining', 'quantity_unproven',
+    'final', 'buy_time', 'buy_price', 'buy_identity', 'missing_carry', 'bool_quantity'])
+def test_partial_sell_boot_restores_original_buy_lineage_without_rewinding_inventory(monkeypatch, tmp_path, fault):
+    import copy
+    import json
+    from src.engine import sniper_execution_receipts as receipts
+    from src.engine.ai import holding_exit_vote as vote
+    monkeypatch.setattr(kiwoom_sniper_v2, 'DATA_DIR', tmp_path)
+    monkeypatch.setattr(kiwoom_sniper_v2, 'highest_prices', {})
+    monkeypatch.setattr(kiwoom_sniper_v2.POSITION_PEAK_LEDGER, 'restore_peak', lambda s:(0,'missing'))
+    monkeypatch.setattr(kiwoom_sniper_v2.sniper_state_handlers, '_main_stop_values', lambda *a: {})
+    monkeypatch.setattr(receipts, 'SELL_RECEIPT_RECOVERY_DIR', tmp_path/'sell')
+    original = dict(id=49558,code='218410',name='fixture',status='HOLDING',strategy='SCALPING',
+        position_tag='SCALP_BASE',buy_qty=5,buy_price=50600.,buy_time='2026-10-28T08:11:32',
+        entry_filled_qty=5,_entry_receipt_filled_by_order_no={'B1':5},
+        _entry_receipt_executions_by_order_no={'B1':{'E1':{'cumulative_qty':5}}})
+    expected = vote.persist_buy_fill_receipt(original, tmp_path)
+    state = dict(position_qty=5,expected_qty=0,cumulative_qty=0,carried_qty=1,
+        aggregate_cumulative_qty=1,remaining_qty=4,final=False,quantity_contract_complete=True,
+        order_no='',prior_orders={'S1':dict(cumulative_qty=1)})
+    if fault == 'active':state.update(expected_qty=5,cumulative_qty=1,carried_qty=0,order_no='S1')
+    assert receipts.persist_sell_receipt_recovery(dict(original,_sell_execution_receipt_state=state))
+    journal = receipts._sell_receipt_recovery_path(49558)
+    buy = tmp_path/'runtime/holding_buy_fill_receipts/49558.json'
+    if fault == 'missing_journal':journal.unlink()
+    if fault in ('checksum','journal_id','journal_symbol','journal_quantity','journal_remaining','quantity_unproven','final'):
+        value=json.loads(journal.read_text());payload=value['payload']
+        if fault == 'checksum':value['payload_sha256']='0'*64
+        else:
+            if fault == 'journal_id':payload['target_id']=49559
+            if fault == 'journal_symbol':payload['code']='053800'
+            if fault == 'journal_quantity':payload['position_qty']=6
+            if fault == 'journal_remaining':payload['receipt_state']['aggregate_cumulative_qty']=2
+            if fault == 'quantity_unproven':payload['receipt_state']['quantity_contract_complete']=False
+            if fault == 'final':payload['receipt_state']['final']=True
+            import hashlib
+            value['payload_sha256']=hashlib.sha256(json.dumps(payload,ensure_ascii=True,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        journal.write_text(json.dumps(value))
+    target={k:v for k,v in original.items() if k not in vote._BUY_FILL_RECEIPT_KEYS}
+    target.update(buy_qty=4,scale_in_locked=True,sell_partial_exit_carry_active=True,
+                  _sell_execution_receipt_state=copy.deepcopy(state))
+    if fault == 'buy_time':target['buy_time']='2026-10-28T08:12:32'
+    if fault == 'buy_price':target['buy_price']=50700.
+    if fault == 'buy_identity':
+        value=json.loads(buy.read_text());value['buy_fill_identity']='0'*64;buy.write_text(json.dumps(value))
+    if fault == 'missing_carry':target.pop('sell_partial_exit_carry_active')
+    if fault == 'bool_quantity':target['_sell_execution_receipt_state']['position_qty']=True
+    before_buy=buy.read_bytes();before_journal=journal.read_bytes() if journal.exists() else None
+    kiwoom_sniper_v2._restore_holding_runtime_state([target])
+    assert target['buy_qty']==4 and target['scale_in_locked'] is True
+    assert buy.read_bytes()==before_buy
+    assert (journal.read_bytes() if journal.exists() else None)==before_journal
+    if fault in (None,'active'):
+        assert vote.buy_fill_identity_from_runtime(target)==expected
+        assert sum(row['qty'] for row in vote.buy_fill_legs_from_runtime(target))==5
+        assert 'buy_fill_identity_store_gap' not in target
+        kiwoom_sniper_v2._restore_holding_runtime_state([target])
+        assert vote.buy_fill_identity_from_runtime(target)==expected and target['buy_qty']==4
+        assert buy.read_bytes()==before_buy and journal.read_bytes()==before_journal
+        # The downstream native SELL snapshot must bind the same original BUY.
+        target.update(last_exit_rule='scalp_trailing_take_profit',holding_path_latest_tp_signal=dict(
+            position_key='record:49558',buy_fill_identity=expected,signal_id='after-restart',signal_at=1.,policy_bundle_sha256='a'*64))
+        frozen=receipts._normalized_receipt_snapshot(receipts._receipt_snapshot(target,receipts._SELL_RECEIPT_SNAPSHOT_KEYS))
+        assert receipts._holding_path_terminal_lineage_fields(frozen,49558)['holding_path_terminal_signal_binding']=='same_position_buy_generation'
+    else:
+        assert vote.buy_fill_identity_from_runtime(target) is None
+        assert 'buy_fill_identity_store_gap' in target
+
+
 def test_scalping_scanner_promoted_target_attaches_active_watching(monkeypatch):
     emitted = []
     published = []
