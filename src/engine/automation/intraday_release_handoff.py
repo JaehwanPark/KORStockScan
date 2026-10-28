@@ -13190,6 +13190,33 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+
+# One complete lifetime successor over the selected delivery profile. Keep every
+# issued predecessor; an observed new member selects the entire reviewed set.
+REVIEWED_ENTRY_LIFETIME_HASHES = {'src/engine/ai_engine_openai.py': '424a6ae8e6c904430b9fbb601a6fdf9d9eec6aa3ab8b2c68be2f4c6919291940', 'src/engine/monitoring/runtime_performance.py': '397c11bf4cc06f74b2d904afe187d765284e543c17d27ed1cf92f8bd5b86640a', 'src/engine/scalping/continuous_reversal_policy_v6.py': 'dba3674350cb2a0b3b563236da605c79076d1fc0f3679ce1d9792144d4eb7499', 'src/engine/scalping/entry_deadline.py': 'af15f4b414bf0536002e9541fa67935e13de805bd97b4a01369f21a296e19a7c', 'src/engine/scalping/entry_machine_source_recovery.py': 'f363242b4979cfc076b166a991d02ef7b8f54fa2d92672e48fd47ca72bdc714f', 'src/engine/scalping/reversal_auxiliary_intraday.py': 'be51fd48fe976e61f6ebeefa76f81ff480c8401470e0efdfe2360307fcbe85cc', 'src/engine/scalping/reversal_auxiliary_tuning.py': '620b24ab335edd62d0d21cd0d7523ee6fa386ea9bb97da48e0dc12a507ca2911', 'src/engine/scalping/reversal_cumulative_postclose.py': '8753cb068c06998dd1d54c382bd86527b85eea8284713503376c0d0be3b8a5b1', 'src/engine/scalping/reversal_evaluation_context.py': '97ea26a45aa2484d25234eca0c83432fd6365afb3fb1adb26dcb5f3e89a69533', 'src/engine/scalping/reversal_extended_registration.py': '639643acfa06a46ddd5602ccfae056fe84bf812f0a4a35fc070acec6c96911ab', 'src/engine/scalping/reversal_extended_runtime.py': 'e80703262e2013f7164ffbb728d554e437476d2c83be0e6a919868e2934d40d7', 'src/engine/scalping/reversal_extended_state.py': 'a99704651c9c54cdc7f9131ed07b957fa10f8bf3d9625e408114559cc24ec21e', 'src/engine/scalping/reversal_joint_registration.py': '53665208e48d459ad3a5e16d8492b7a01ffe0dd2fedd4994ad64452543d7ccb4', 'src/engine/scalping/reversal_path_runtime.py': 'a1ea25c96870f2d478f12f3e5de81bcab64f4eaeb3c02cedcc977e16b697b340', 'src/engine/scalping/reversal_registered_runtime.py': 'a6ed5c230affa6f6fb0637a36c60f1629429466fa62fc198b7a7c38ed60d15b5', 'src/engine/scalping/reversal_source_diagnostics.py': '53391b706f363982b56ac4039d9770ff75efc01026ef96257148c8fd9ea52e33', 'src/engine/scalping/zero_base_probe.py': '834e020db2e2a14e6daa08153b688867d77d9de07814d5c07189beaa78be2af3', 'src/engine/infrastructure/startup_validation_code_context.py': '8ff89266dcb309b21753114df7618fa8ce822cbfc9102c5ff44e52b7f52edaf8'}
+REVIEWED_ENTRY_LIFETIME_ORIGINS = {'src/engine/ai_engine_openai.py': '376b3ce6f8ae75a5f629904c7d0a8b08670d69514b37fc4fb7db19a7e43d21de', 'src/engine/monitoring/runtime_performance.py': 'a38222e79f79e06e06331dc6057059e88191f4e1688b5fe0cf82e59cd2148cbd', 'src/engine/scalping/continuous_reversal_policy_v6.py': '8c0a0a8effebd618029a9414c88ec0abee585e9fda24ed8b25327ee5fe6228da', 'src/engine/scalping/entry_deadline.py': '624fa132d48afb2ea9bd54978ff0e1b47665ce88d957ea28c88c545bc6e71916', 'src/engine/scalping/entry_machine_source_recovery.py': '5d28bf1ea8644cdb88d5e725d1002ede4f32b1a3542994e22a77d4013adbc406', 'src/engine/scalping/reversal_auxiliary_intraday.py': '7349250cfd4d60228c9225bc92e1d7db785136b2b2f3d95d6784668a70d752f3', 'src/engine/scalping/reversal_auxiliary_tuning.py': '265a06e3b26c59f616e2819a58dbd27935a4190a7eeea95aaaba6e3e2b1c7992', 'src/engine/scalping/reversal_cumulative_postclose.py': '6bfcbdb2569a318942f227e63850a3bec9a4b0827a34202cc7f474c4aba1f511', 'src/engine/scalping/reversal_evaluation_context.py': 'e394bbf86455185ac7081d3b419f041141766b4f8566791dcd3309b75a2bf4c9', 'src/engine/scalping/reversal_extended_registration.py': 'cd23cb34d20a15ae2d96a1c69bbcf2d33fb0b393d1d32f6a6ca04e0211a50144', 'src/engine/scalping/reversal_extended_runtime.py': '6b07229c7df2169ce18c1772d7459c59675266eca0c750cc16f52edc43c81c0e', 'src/engine/scalping/reversal_extended_state.py': '0e0d28be1cbb78e30f3e092e57f8f1adb3274379286a7a5d254a7e446eba34a1', 'src/engine/scalping/reversal_joint_registration.py': '6794108ea423f4073fdaadee2fb12f6e4a697a36fb9bb807846e76ec55b2907c', 'src/engine/scalping/reversal_path_runtime.py': 'a9b85e85869199ce01b32881591f3f8a89ca59bcc3ad2b996defdf0350a0ba67', 'src/engine/scalping/reversal_registered_runtime.py': '69fee6b7519fa7335320e11ac668315266c317c286e5bfada04360d2db064b1c', 'src/engine/scalping/reversal_source_diagnostics.py': '997523f01e1583f1522328f2e16a15b8f25d7994bfe8e52f74fd14039fb44865', 'src/engine/scalping/zero_base_probe.py': '16f5e06e86943ef735fd2a20ca850a7215939e17adc734cd215762f117dacfbb', 'src/engine/infrastructure/startup_validation_code_context.py': '8219930a04f6a4c88c8c262d1f237e33cc22f2ddd026d2caeb7658eaecd2013d'}
+REVIEWED_ENTRY_LIFETIME_PROFILE = {**REVIEWED_DELIVERY_INTEGRATED_PROFILE, **REVIEWED_ENTRY_LIFETIME_HASHES}
+REVIEWED_ENTRY_LIFETIME_VARIANTS = {
+    (key[0], REVIEWED_ENTRY_LIFETIME_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/infrastructure/startup_validation_code_context.py",
+        "selector_sha256": REVIEWED_ENTRY_LIFETIME_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_ENTRY_LIFETIME_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_ENTRY_LIFETIME_HASHES.get(os.path.normpath(name), sha) for name, sha in members.items()}
+            for origin, members in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_DELIVERY_INTEGRATED_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (origin, current) for origin in {
+            value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + REVIEWED_AVG_DOWN_INPUT_SOURCES.get(name, ()) for value in pair
+        } | {REVIEWED_ENTRY_LIFETIME_ORIGINS[name]}
+    ) for name, current in REVIEWED_ENTRY_LIFETIME_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -14149,6 +14176,14 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_DELIVERY_INTEGRATED_PROFILE
         prepared_variants = REVIEWED_DELIVERY_INTEGRATED_VARIANTS
+    if any(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == sha
+        for name, sha in REVIEWED_ENTRY_LIFETIME_HASHES.items()
+        if sha != REVIEWED_ENTRY_LIFETIME_ORIGINS[name]
+    ):
+        prepared_hashes = REVIEWED_ENTRY_LIFETIME_PROFILE
+        prepared_variants = REVIEWED_ENTRY_LIFETIME_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

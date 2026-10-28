@@ -41,6 +41,7 @@ def contract_modules():
 
     return (
         *V5.contract_modules(),
+        __import__("src.engine.scalping.entry_deadline", fromlist=["*"]),
         C,
         A,
         R,
@@ -179,16 +180,32 @@ def detector_manifest(parent, *, effective_date, changes=None):
     return manifest
 
 
-def scope_hash(ids, auxiliary, backend, code):
-    return digest(
-        dict(
-            branches=[C.branch(b) for b in sorted(ids)],
-            auxiliary=auxiliary,
-            backend=backend,
-            code=code,
-            label_contract=C.LABEL,
-        )
+def scope_hash(ids, auxiliary, backend, code, lifetime_policy=None):
+    value = dict(
+        branches=[C.branch(b) for b in sorted(ids)],
+        auxiliary=auxiliary,
+        backend=backend,
+        code=code,
+        label_contract=C.LABEL,
     )
+    if lifetime_policy is not None:
+        from src.engine.scalping.entry_deadline import validate_lifetime_policy
+
+        value["signal_lifetime_policy"] = validate_lifetime_policy(lifetime_policy)
+    return digest(value)
+
+
+def carry_signal_lifetime(parent, key, route, cell):
+    """Carry the selected policy through native report/registration builders."""
+    from src.engine.scalping.entry_deadline import validate_lifetime_policy
+
+    previous = parent["continuous_reversal"]["machine_cells"][key]["routes"][route]
+    policy = previous.get("signal_lifetime_policy")
+    if policy is not None:
+        if cell["backend"] != "union_v6":
+            raise ValueError("v6_lifetime_policy_requires_explicit_transition")
+        cell["signal_lifetime_policy"] = validate_lifetime_policy(policy)
+    return cell.get("signal_lifetime_policy")
 
 
 def validate_family(f):
@@ -402,6 +419,8 @@ def validate_family(f):
                 if not approved or proof.get("comparison_result_required") is not False:
                     raise ValueError("v6_initial_registration_proof_invalid")
         elif backend == "registered_v4":
+            if cell.get("signal_lifetime_policy") is not None:
+                raise ValueError("v6_native_lifetime_policy_changed")
             if (
                 cell["payload"]
                 != native["machine_cells"][key]["routes"][route]["payload"]
@@ -416,7 +435,11 @@ def validate_family(f):
         ) != digest(aux["payload"]):
             raise ValueError("v6_payload_hash_invalid")
         if cell["scope_execution_hash"] != scope_hash(
-            actual, aux["payload"], backend, f["execution_code_sha256"]
+            actual,
+            aux["payload"],
+            backend,
+            f["execution_code_sha256"],
+            cell.get("signal_lifetime_policy"),
         ):
             raise ValueError("v6_scope_execution_hash_invalid")
     execution = {
@@ -695,6 +718,7 @@ def _write_refreshed_bundle(
                 f["auxiliary_cells"][key]["routes"][route]["payload"],
                 cell["backend"],
                 f["execution_code_sha256"],
+                cell.get("signal_lifetime_policy"),
             )
         f["execution_manifest_hash"] = digest(
             {

@@ -259,7 +259,11 @@ def machine_cells(parent, manifest, execution_code):
         ]["payload"]
         actual = [b["branch_id"] for b in cell["payload"]["branches"]]
         cell["scope_execution_hash"] = V.scope_hash(
-            actual, auxiliary, cell["backend"], execution_code
+            actual,
+            auxiliary,
+            cell["backend"],
+            execution_code,
+            V.carry_signal_lifetime(parent, key, route, cell),
         )
     return list(cells.values())
 
@@ -299,7 +303,8 @@ def build(data_root, day, publication, parent, *, source=None, publish_outputs=T
     for sid, ids in manifest["scopes"].items():
         configs[sid] = (
             dict(Q.variants(sid, batch), CURRENT_NATIVE=current[sid])
-            if sid in registered and not (
+            if sid in registered
+            and not (
                 scoring is not None
                 and scoring.get("unscored_scope_policy") == "carry_parent"
                 and sid not in scoring["scopes"]

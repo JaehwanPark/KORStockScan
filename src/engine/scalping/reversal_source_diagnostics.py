@@ -22,6 +22,11 @@ try:
 except (OSError, IndexError):
     _PROCESS_START_TICKS = None
 
+from src.engine.scalping.entry_deadline import (
+    signal_deadline_epoch,
+    signal_is_current,
+    LEGACY_SIGNAL_MAX_AGE_SEC,
+)
 from src.engine.scalping import continuous_reversal as K
 
 _CHANGE = threading.Condition()
@@ -631,7 +636,7 @@ def _observe_snapshot_locked(B, symbol, venue, session, now, item, family_sha256
                 if ready["claimed"]:
                     receipt["reason"] = "already_claimed"
                     continue
-                if not 0 <= now - e["epoch"] <= 5:
+                if not signal_is_current(e, now):
                     receipt["reason"] = "signal_expired"
                     continue
                 candidates.append((e["epoch"], e["native_sequence"], state, ready))
@@ -655,7 +660,7 @@ def _observe_snapshot_locked(B, symbol, venue, session, now, item, family_sha256
                 reason="ready",
                 native_event_id=event["event_id"],
                 signal_id=event["signal_id"],
-                native_deadline_epoch=event["epoch"] + 5,
+                native_deadline_epoch=signal_deadline_epoch(event),
                 scope_execution_hash=state.generation,
             )
         parent = B._FAMILY["native_parent_bundle"]["continuous_reversal"][
@@ -682,7 +687,7 @@ def _observe_snapshot_locked(B, symbol, venue, session, now, item, family_sha256
         if ready["claimed"]:
             receipt["reason"] = "already_claimed"
             continue
-        if not 0 <= now - event["epoch"] <= 5:
+        if not signal_is_current(event, now):
             receipt["reason"] = "signal_expired"
             continue
         snapshot = state.snapshot(ready)
@@ -711,7 +716,7 @@ def _observe_snapshot_locked(B, symbol, venue, session, now, item, family_sha256
                 reason="ready",
                 native_event_id=event["event_id"],
                 signal_id=event["signal_id"],
-                native_deadline_epoch=event["epoch"] + 5,
+                native_deadline_epoch=signal_deadline_epoch(event),
             )
         receipt["reason"] = "native_path_changed"
     return None, receipt
@@ -787,12 +792,12 @@ def observation_binding_valid(expected, *, now=None):
                 type(v) in (int, float) and math.isfinite(v) and v > 0
                 for v in (epoch, deadline, perf, stamp)
             )
-            and epoch <= stamp < deadline <= epoch + 5
+            and epoch <= stamp < deadline <= signal_deadline_epoch(event)
             and time.perf_counter() < perf
             and expected["observer_pid"] == os.getpid()
             and expected.get("observer_start_ticks") == _PROCESS_START_TICKS
         )
-    except (KeyError, TypeError, IndexError):
+    except (KeyError, TypeError, IndexError, ValueError):
         return False
 
 
@@ -915,8 +920,14 @@ def verified_registration(claim, proof):
             )
             or proof["claim_token"]
             != B.digest([proof["generation"], event["signal_id"], proof["snapshot"]])
-            or not 0 <= proof["claim_epoch"] - event["epoch"] <= 5
-            or not 0 <= proof["observed_epoch"] - proof["claim_epoch"] <= 5
+            or not event["epoch"]
+            <= proof["claim_epoch"]
+            <= signal_deadline_epoch(event)
+            # This authenticates a historical registration, not execution now.
+            # Receipt observation may follow the original execution expiry.
+            or not 0
+            <= proof["observed_epoch"] - proof["claim_epoch"]
+            <= LEGACY_SIGNAL_MAX_AGE_SEC
         ):
             return None
         return proof
@@ -1066,7 +1077,9 @@ def compact_claim_state(B, claim, family_sha256, now, reason):
         ),
         any_branch_survives=any(survivors.values()) if branches else None,
         original_deadline_valid=(
-            0 <= now - event["epoch"] <= 5 if event.get("epoch") else None
+            signal_is_current(event, now, live_clock=True)
+            if event.get("epoch")
+            else None
         ),
     )
     return dict(
@@ -1094,8 +1107,10 @@ def compact_claim_state(B, claim, family_sha256, now, reason):
         native_epoch=event.get("native_epoch"),
         native_sequence=event.get("native_sequence"),
         signal_epoch=event.get("epoch"),
-        original_deadline=event.get("epoch", now) + 5,
-        remaining_seconds=event.get("epoch", now) + 5 - now,
+        original_deadline=signal_deadline_epoch(event) if event.get("epoch") else None,
+        remaining_seconds=(
+            signal_deadline_epoch(event) - now if event.get("epoch") else None
+        ),
         branch_survival=survivors,
         current_turn_id=turn,
         latest_native_epoch=last[1] if last else None,
@@ -1254,7 +1269,7 @@ def _claim_failure_receipt(B, claim, family_sha256, now, reason):
         and not original
         and verified
         and B._GENERATION == family_sha256 == verified["generation"]
-        and receipt["signal_age_seconds"] > 5
+        and now >= signal_deadline_epoch(event)
     ):
         receipt["failure_cause"] = "reversal_signal_expired"
     if reason == "reversal_signal_expired_or_changed":
@@ -1263,7 +1278,7 @@ def _claim_failure_receipt(B, claim, family_sha256, now, reason):
             if receipt["snapshot_sha256"] != receipt["supplied_snapshot_sha256"]
             else (
                 "reversal_signal_expired"
-                if receipt["signal_age_seconds"] > 5
+                if now >= signal_deadline_epoch(event)
                 else "reversal_signal_clock_invalid"
             )
         )

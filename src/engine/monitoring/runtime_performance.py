@@ -14,6 +14,13 @@ from pathlib import Path
 from threading import Lock, get_native_id
 from contextlib import contextmanager
 from contextvars import ContextVar
+from datetime import datetime
+from zoneinfo import ZoneInfo
+from src.engine.scalping.entry_deadline import (
+    LEGACY_SIGNAL_MAX_AGE_SEC,
+    signal_deadline_epoch,
+    signal_is_current,
+)
 
 _LOCK = Lock()
 _LIMIT = 4096
@@ -78,6 +85,7 @@ _NAMES += (
 )
 _ENTRY_TIMINGS = ContextVar("entry_local_stage_timings", default=None)
 _NATIVE_VISIT_HINTS = OrderedDict()
+_NATIVE_VISIT_DEADLINES = {}
 _NATIVE_VISIT_TOKENS = {}
 _NATIVE_HINT_SEQUENCE = 0
 _MAIN_PHASE = {"name": "not_observed", "epoch": None, "perf": None, "code": None}
@@ -290,6 +298,7 @@ def acknowledge_native_watch_visit(target, token, *, now):
         ):
             _NATIVE_VISIT_HINTS.pop(code, None)
             _NATIVE_VISIT_TOKENS.pop(code, None)
+            _NATIVE_VISIT_DEADLINES.pop(code, None)
         for stream, keys in _ACTIVE_SELECTED.items():
             if stream[0] != code:
                 continue
@@ -362,7 +371,7 @@ def rearm_native_watch_after_completion(claim):
                 and row["signal_id"] != original["signal_id"]
                 and row["native_epoch"] == original["native_epoch"]
                 and row["scope_execution_hash"] == claim["generation"]
-                and 0 <= now - row["epoch"] < 5
+                and now >= row["epoch"]
                 and now < row["original_deadline"]
                 and perf
                 < row["first_seen_perf"]
@@ -374,14 +383,24 @@ def rearm_native_watch_after_completion(claim):
             return False
         code = str(original["symbol"])[:6]
         # Never replace a newer ingress token or restart the signal clock.
-        if not 0 <= now - _NATIVE_VISIT_HINTS.get(code, float("-inf")) < 5:
+        if not (
+            _NATIVE_VISIT_HINTS.get(code, float("inf"))
+            <= now
+            < _NATIVE_VISIT_DEADLINES.get(code, float("-inf"))
+        ):
             _NATIVE_HINT_SEQUENCE += 1
             _NATIVE_VISIT_TOKENS[code] = _NATIVE_HINT_SEQUENCE
             _NATIVE_VISIT_HINTS[code] = min(eligible)
+            _NATIVE_VISIT_DEADLINES[code] = max(
+                _SELECTED_READY[k]["original_deadline"]
+                for k in _ACTIVE_SELECTED.get(stream, ())
+                if k in _SELECTED_READY and _SELECTED_READY[k]["epoch"] in eligible
+            )
             _NATIVE_VISIT_HINTS.move_to_end(code)
             while len(_NATIVE_VISIT_HINTS) > 128:
                 old_code, _ = _NATIVE_VISIT_HINTS.popitem(last=False)
                 _NATIVE_VISIT_TOKENS.pop(old_code, None)
+                _NATIVE_VISIT_DEADLINES.pop(old_code, None)
         event = _NATIVE_READY_EVENT
     event.set()
     return True
@@ -404,9 +423,14 @@ def prioritize_native_watches(
     """
     with _LOCK:
         for code, stamp in tuple(_NATIVE_VISIT_HINTS.items()):
-            if not 0 <= now - stamp < 5:
+            if (
+                not stamp
+                <= now
+                < _NATIVE_VISIT_DEADLINES.get(code, stamp + LEGACY_SIGNAL_MAX_AGE_SEC)
+            ):
                 _NATIVE_VISIT_HINTS.pop(code, None)
                 _NATIVE_VISIT_TOKENS.pop(code, None)
+                _NATIVE_VISIT_DEADLINES.pop(code, None)
         hints = dict(_NATIVE_VISIT_HINTS)
         tokens = {
             code: (stamp, _NATIVE_VISIT_TOKENS.get(code))
@@ -549,10 +573,12 @@ def set_native_ready_event(event):
         if _NATIVE_READY_EVENT is not event:
             _NATIVE_VISIT_HINTS.clear()
             _NATIVE_VISIT_TOKENS.clear()
+            _NATIVE_VISIT_DEADLINES.clear()
         _NATIVE_READY_EVENT = event
         if event is None:
             _NATIVE_VISIT_HINTS.clear()
             _NATIVE_VISIT_TOKENS.clear()
+            _NATIVE_VISIT_DEADLINES.clear()
 
 
 _ACTIVE_SELECTED = {}  # stream -> bounded active keys, never all-day scans per tick
@@ -800,6 +826,7 @@ def observe(name, seconds, *, generation=None):
         if generation is not None and generation != _GENERATION:
             _NATIVE_VISIT_HINTS.clear()
             _NATIVE_VISIT_TOKENS.clear()
+            _NATIVE_VISIT_DEADLINES.clear()
             _SIGNALS.clear()
             for values in _SAMPLES.values():
                 values.clear()
@@ -860,13 +887,15 @@ def snapshot():
             if row["claimed"]
             else (
                 "expired_before_claim"
-                if selected_as_of >= row["epoch"] + 5
+                if selected_as_of >= row["original_deadline"]
                 else "pending"
             )
         )
         selected_counts[state] += 1
         terminal = row.get("terminal") or (
-            "not_yet_due" if selected_as_of < row["epoch"] + 5 else "unobservable"
+            "not_yet_due"
+            if selected_as_of < row["original_deadline"]
+            else "unobservable"
         )
         lifecycle_counts[terminal] += 1
     metrics = {}
@@ -1028,10 +1057,12 @@ def notify_source_recovery_target(symbol, *, original_epoch, now):
         _NATIVE_HINT_SEQUENCE += 1
         _NATIVE_VISIT_TOKENS[code] = _NATIVE_HINT_SEQUENCE
         _NATIVE_VISIT_HINTS[code] = original_epoch
+        _NATIVE_VISIT_DEADLINES[code] = original_epoch + LEGACY_SIGNAL_MAX_AGE_SEC
         _NATIVE_VISIT_HINTS.move_to_end(code)
         while len(_NATIVE_VISIT_HINTS) > 128:
             old_code, _ = _NATIVE_VISIT_HINTS.popitem(last=False)
             _NATIVE_VISIT_TOKENS.pop(old_code, None)
+            _NATIVE_VISIT_DEADLINES.pop(old_code, None)
     event.set()
     return True
 
@@ -1050,13 +1081,33 @@ def record_native_ready(B, symbol, venue, item, market, epoch):
     with _LOCK:
         event = _NATIVE_READY_EVENT
         if notify and event is not None:
+            stream = (
+                symbol,
+                venue,
+                item,
+                market,
+                datetime.fromtimestamp(epoch, ZoneInfo("Asia/Seoul"))
+                .date()
+                .isoformat(),
+            )
             _NATIVE_HINT_SEQUENCE += 1
             _NATIVE_VISIT_TOKENS[str(symbol)[:6]] = _NATIVE_HINT_SEQUENCE
             _NATIVE_VISIT_HINTS[str(symbol)[:6]] = epoch
+            _NATIVE_VISIT_DEADLINES[str(symbol)[:6]] = max(
+                (
+                    row["original_deadline"]
+                    for key in _ACTIVE_SELECTED.get(stream, ())
+                    if (row := _SELECTED_READY.get(key))
+                    and not row.get("terminal")
+                    and row.get("epoch", float("inf")) <= epoch
+                ),
+                default=epoch + LEGACY_SIGNAL_MAX_AGE_SEC,
+            )
             _NATIVE_VISIT_HINTS.move_to_end(str(symbol)[:6])
             while len(_NATIVE_VISIT_HINTS) > 128:
                 old_code, _ = _NATIVE_VISIT_HINTS.popitem(last=False)
                 _NATIVE_VISIT_TOKENS.pop(old_code, None)
+                _NATIVE_VISIT_DEADLINES.pop(old_code, None)
     if notify and event is not None:
         event.set()
 
@@ -1096,7 +1147,7 @@ def _record_native_ready_locked(B, symbol, venue, item, market, epoch):
                 )
                 for ready in getattr(state, "ready", ()):
                     event = ready.get("event") if isinstance(ready, dict) else None
-                    if event and 0 <= epoch - float(event["epoch"]) <= 5:
+                    if event and signal_is_current(event, epoch, live_clock=True):
                         selection = _native_selection(
                             B, native, scope, state, event, epoch
                         )
@@ -1130,6 +1181,7 @@ def _record_native_ready_locked(B, symbol, venue, item, market, epoch):
                                 (
                                     dict(
                                         epoch=event["epoch"],
+                                        original_deadline=signal_deadline_epoch(event),
                                         signal_id=event.get("signal_id")
                                         or event["event_id"],
                                         native_event_id=event["event_id"],
@@ -1225,7 +1277,7 @@ def _record_native_ready_locked(B, symbol, venue, item, market, epoch):
                     claimed=False,
                     first_native_seen=epoch,
                     first_seen_perf=time.perf_counter(),
-                    original_deadline=event["epoch"] + 5,
+                    original_deadline=event["original_deadline"],
                     terminal=None,
                     first_eligible_seen=None,
                     last_eligible_seen=None,

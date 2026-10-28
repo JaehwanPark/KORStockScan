@@ -5424,7 +5424,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_DELIVERY_INTEGRATED_PROFILE,
+        "current": handoff.REVIEWED_ENTRY_LIFETIME_PROFILE,
+        "consumed_delivery_integration": handoff.REVIEWED_DELIVERY_INTEGRATED_PROFILE,
         "p5_diagnostic": handoff.REVIEWED_P5_DIAGNOSTIC_PROFILE,
         "preclaim_market": handoff.REVIEWED_PRECLAIM_MARKET_PROFILE,
         "holding_expiry": handoff.REVIEWED_HOLDING_EXPIRY_PROFILE,
@@ -5524,6 +5525,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     str(canonical),
                     "show",
                     {
+                        "consumed_delivery_integration": "f4cdac806",
                         "issuer_bytes_source": "29a3c1475",
                         "holding_expiry": "3171f2a92",
                         "p5_diagnostic": "138443c8d",
@@ -7204,3 +7206,24 @@ def test_delivery_integration_complete_generation(tmp_path, family, dependency, 
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, fault, "current", dependency
     )
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("fault", [None, "missing", "dirty", "committed_change", "parent_mix"])
+def test_entry_lifetime_complete_candidate_through_native_reader(tmp_path, family, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "current", "src/engine/scalping/entry_deadline.py"
+    )
+
+
+@pytest.mark.parametrize("dependency", sorted(handoff.REVIEWED_ENTRY_LIFETIME_HASHES))
+@pytest.mark.parametrize("fault", ["missing", "parent_mix"])
+def test_entry_lifetime_every_discovered_dependency_is_required(tmp_path, dependency, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, "pre_submit_delay", fault, "current", dependency
+    )
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+def test_entry_lifetime_keeps_issued_delivery_predecessor(tmp_path, family):
+    test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, family, None, "consumed_delivery_integration")

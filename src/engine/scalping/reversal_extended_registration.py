@@ -281,12 +281,22 @@ def initial_reports(
             composition="ANY_MATCH_ONE_INTENT", branches=[C.branch(b) for b in ids]
         )
         aux = dict(arm=arm, binding=binding)
+        lifetime = mc[key]["routes"][route].get("signal_lifetime_policy")
         mc[key]["routes"][route] = dict(
+            **(
+                {"signal_lifetime_policy": copy.deepcopy(lifetime)}
+                if lifetime is not None
+                else {}
+            ),
             payload=payload,
             payload_sha256=P.digest(payload),
             backend="union_v6",
             scope_execution_hash=V.scope_hash(
-                ids, aux, "union_v6", machine["execution_code_sha256"]
+                ids,
+                aux,
+                "union_v6",
+                machine["execution_code_sha256"],
+                mc[key]["routes"][route].get("signal_lifetime_policy"),
             ),
             status=(
                 "operator_initial_registered"

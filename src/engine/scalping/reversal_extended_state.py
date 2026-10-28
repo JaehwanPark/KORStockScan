@@ -8,6 +8,10 @@ from __future__ import annotations
 import copy
 from datetime import datetime
 from types import MappingProxyType
+from src.engine.scalping.entry_deadline import (
+    signal_deadline_epoch,
+    bind_signal_lifetime,
+)
 from src.engine.scalping import continuous_reversal as K
 from src.engine.scalping import continuous_reversal_branches as B
 from src.engine.scalping import reversal_path_runtime as OLD
@@ -122,7 +126,7 @@ class State(OLD.State):
     def _remember_hold_invalidation(self, signal, row, previous):
         """Keep the first native breach, never revive a removed ready signal.
 
-        Same state/ingestion lock and original five-second lifetime. Capacity
+        Same state/ingestion lock and original issued lifetime. Capacity
         uses the existing ready limit; no disk or provider work runs here.
         """
         if signal.get("decision_phase") != "FIRST_PRICE_HOLD":
@@ -135,6 +139,8 @@ class State(OLD.State):
                 or old["registry_generation"] != self.generation
             ):
                 self.first_invalidations.pop(key)
+        signal = dict(signal)
+        bind_signal_lifetime(signal, self.lifetime_policy)
         identity = signal["signal_id"]
         proof = self.first_invalidations.setdefault(
             identity,
@@ -143,12 +149,19 @@ class State(OLD.State):
                 **{
                     k: signal[k]
                     for k in (
-                        "signal_id", "event_id", "symbol", "venue", "market",
-                        "source_item", "native_epoch", "native_sequence", "epoch",
+                        "signal_id",
+                        "event_id",
+                        "symbol",
+                        "venue",
+                        "market",
+                        "source_item",
+                        "native_epoch",
+                        "native_sequence",
+                        "epoch",
                         "registry_generation",
                     )
                 },
-                original_deadline=signal["epoch"] + 5,
+                original_deadline=signal_deadline_epoch(signal),
                 **process_identity_fields(),
                 runtime_effect=False,
                 allowed_runtime_apply=False,
@@ -573,6 +586,7 @@ class State(OLD.State):
                 ]
             ),
         )
+        bind_signal_lifetime(event, self.lifetime_policy, live_clock=not self.offline)
         ready = dict(event=event, row=row, claimed=False, path_inputs=inputs)
         self.ready.append(ready)
         return [ready]

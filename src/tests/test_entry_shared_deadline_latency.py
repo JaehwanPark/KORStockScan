@@ -1562,3 +1562,199 @@ def test_submit_clock_shortcut_cannot_accept_invalid_source(monkeypatch, event):
             "auxiliary_registry_sha256": "b" * 64, "policy_version": "continuous_reversal_policy_v6",
             "action": "ENTER_NOW", "event": event}}, now=100.0)
     assert calls == ["native_source_validation"]
+
+
+@pytest.mark.parametrize("cap", [0.5, 5.0, 6.0, 8.0, 12.0])
+def test_issued_lifetime_drives_budget_without_resetting_confirmation(monkeypatch, cap):
+    from src.engine.scalping import entry_deadline as D
+
+    event = dict(
+        epoch=100.0, signal_id="actual-confirmation", registry_generation="scope-a"
+    )
+    D.bind_signal_lifetime(
+        event,
+        dict(
+            schema="entry_signal_lifetime_policy_v1",
+            version="fixture",
+            max_signal_age_sec=cap,
+        ),
+    )
+    issued = copy.deepcopy(event)
+    monkeypatch.setattr(D.time, "time", lambda: 100.25)
+    monkeypatch.setattr(D.time, "perf_counter", lambda: 200.25)
+    budget = D.EntryDeadline.create({"snapshot": [event]}, caller_epoch=200.0)
+    assert budget.epoch == 100.0 + cap and budget.perf == 200.0 + cap
+    assert D.signal_is_current(event, 100.0 + cap - 0.001)
+    assert not D.signal_is_current(event, 100.0 + cap)
+    assert not D.signal_is_current(event, 99.999)
+    D.bind_signal_lifetime(event, event["entry_signal_lifetime"]["policy"])
+    assert event == issued
+    assert (
+        D.EntryDeadline.create({"snapshot": [event]}, caller_epoch=100.3).epoch == 100.3
+    )
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "deadline_epoch",
+        "signal_id",
+        "generation",
+        "confirmed_epoch",
+        "policy_sha256",
+        "policy",
+    ],
+)
+def test_issued_lifetime_tamper_fails_closed_without_renewal(damage):
+    from src.engine.scalping import entry_deadline as D
+
+    event = dict(epoch=100.0, signal_id="confirmed", registry_generation="scope-a")
+    D.bind_signal_lifetime(
+        event,
+        dict(
+            schema="entry_signal_lifetime_policy_v1",
+            version="fixture",
+            max_signal_age_sec=8.0,
+        ),
+    )
+    issued = event["entry_signal_lifetime"]
+    issued[damage] = {"schema": "unknown"} if damage == "policy" else "changed"
+    assert D.claim_deadline_epoch({"snapshot": [event]}) == 0
+    with pytest.raises(ValueError):
+        D.signal_deadline_epoch(event)
+
+
+@pytest.mark.parametrize("cap", [True, 0, -1, float("nan"), float("inf"), "8"])
+def test_invalid_lifetime_never_becomes_an_unbounded_budget(cap):
+    from src.engine.scalping.entry_deadline import bind_signal_lifetime
+
+    with pytest.raises(ValueError):
+        bind_signal_lifetime(
+            dict(epoch=100, signal_id="a", registry_generation="a"),
+            dict(
+                schema="entry_signal_lifetime_policy_v1",
+                version="fixture",
+                max_signal_age_sec=cap,
+            ),
+        )
+
+
+def test_live_lifetime_cannot_renew_under_wall_clock_rollback(monkeypatch):
+    from src.engine.scalping import entry_deadline as D
+    wall, perf = [100.25], [200.25]
+    monkeypatch.setattr(D.time, "time", lambda: wall[0])
+    monkeypatch.setattr(D.time, "perf_counter", lambda: perf[0])
+    event = dict(epoch=100.0, signal_id="confirmed", registry_generation="scope-a")
+    policy = dict(schema="entry_signal_lifetime_policy_v1", version="clock-test", max_signal_age_sec=8.0)
+    D.bind_signal_lifetime(event, policy, live_clock=True)
+    original = copy.deepcopy(event)
+    wall[0], perf[0] = 101.0, 207.0
+    budget = D.EntryDeadline.create({"snapshot": [event]})
+    assert budget.perf == 208.0 and budget.remaining() == 1.0
+    D.bind_signal_lifetime(event, policy, live_clock=True)
+    assert event == original
+    assert D.signal_is_current(event, wall[0], live_clock=True)
+    perf[0] = 208.0
+    assert not D.signal_is_current(event, wall[0], live_clock=True)
+    with pytest.raises(ValueError, match="deadline_expired"):
+        budget.require()
+    # A forward wall jump also expires authority even with monotonic time left.
+    wall[0], perf[0] = 108.0, 201.0
+    assert not D.signal_is_current(event, wall[0], live_clock=True)
+    assert D.EntryDeadline.create({"snapshot": [event]}).remaining() == 0
+    wall[0], perf[0] = 101.0, 200.0
+    assert not D.signal_is_current(event, wall[0], live_clock=True)
+
+
+def test_research_or_other_pid_lifetime_cannot_acquire_live_authority(monkeypatch):
+    from src.engine.scalping import entry_deadline as D
+    monkeypatch.setattr(D.time, "time", lambda: 100.25)
+    monkeypatch.setattr(D.time, "perf_counter", lambda: 200.25)
+    event = dict(epoch=100.0, signal_id="confirmed", registry_generation="scope-a")
+    policy = dict(schema="entry_signal_lifetime_policy_v1", version="clock-test", max_signal_age_sec=8.0)
+    D.bind_signal_lifetime(event, policy)
+    assert D.signal_is_current(event, 101.0)
+    assert not D.signal_is_current(event, 101.0, live_clock=True)
+    event.pop("entry_signal_lifetime")
+    D.bind_signal_lifetime(event, policy, live_clock=True)
+    event["entry_signal_lifetime"]["clock"]["pid"] += 1
+    assert D.signal_deadline_epoch(event) == 108.0  # Historical reader remains valid.
+    assert not D.signal_is_current(event, 101.0, live_clock=True)
+    with pytest.raises(ValueError, match="pid_changed"):
+        D.EntryDeadline.create({"snapshot": [event]})
+
+
+@pytest.mark.parametrize("field,value", [("issued_epoch", float("nan")), ("issued_perf", True), ("deadline_perf", 999.0), ("pid", 0)])
+def test_issued_clock_tamper_fails_closed(monkeypatch, field, value):
+    from src.engine.scalping import entry_deadline as D
+    monkeypatch.setattr(D.time, "time", lambda: 100.25)
+    monkeypatch.setattr(D.time, "perf_counter", lambda: 200.25)
+    event = dict(epoch=100.0, signal_id="confirmed", registry_generation="scope-a")
+    D.bind_signal_lifetime(event, dict(schema="entry_signal_lifetime_policy_v1", version="clock-test", max_signal_age_sec=8.0), live_clock=True)
+    event["entry_signal_lifetime"]["clock"][field] = value
+    assert D.claim_deadline_epoch({"snapshot": [event]}) == 0.0
+
+
+def test_issued_visit_hint_is_not_truncated_to_legacy_five_seconds(monkeypatch):
+    monkeypatch.setattr(R, "_NATIVE_VISIT_HINTS", OrderedDict([("036930", 100.0)]))
+    monkeypatch.setattr(R, "_NATIVE_VISIT_TOKENS", {"036930": 7})
+    monkeypatch.setattr(R, "_NATIVE_VISIT_DEADLINES", {"036930": 108.0})
+    monkeypatch.setattr(R, "_ACTIVE_SELECTED", {})
+    target = dict(
+        code="036930", status="WATCHING", _fixed_watch_async_claim={"token": "prior"}
+    )
+    token = (100.0, 7)
+    tokens = {}
+    R.prioritize_native_watches([target], now=105.1, visit_tokens=tokens)
+    assert tokens[id(target)] == token
+    # Completion rearming remains owned by its existing native caller.
+    R.acknowledge_native_watch_visit(target, token, now=105.1)
+    assert not R._NATIVE_VISIT_HINTS and not R._NATIVE_VISIT_DEADLINES
+
+
+def test_preprovider_definition_is_immutable_and_does_not_cache_eligibility(
+    monkeypatch,
+):
+    from src.engine.scalping import reversal_evaluation_context as E
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+
+    active = E.N._freeze({"bundle_sha256": "a" * 64})
+
+    @contextmanager
+    def view(**kw):
+        yield active
+
+    monkeypatch.setattr(E.N, "verified_evaluation", view)
+    monkeypatch.setattr(E, "_prepared_v6_claim", lambda *a, **kw: ["original"])
+    definition = dict(
+        model="gpt-5.4-nano", registry_sha256="b" * 64, schema={"required": ["verdict"]}
+    )
+    checks = []
+
+    def fresh(*a, **kw):
+        checks.append(True)
+        if len(checks) > 1:
+            raise ValueError("auxiliary_decision_generation_revoked")
+        return definition
+
+    monkeypatch.setattr(I, "validate_decision", fresh)
+    policy = {
+        "continuous_reversal_assessment": dict(
+            policy_version=V.SCHEMA,
+            auxiliary_registry_sha256="b" * 64,
+            matched_policy_refs=["original"],
+        )
+    }
+    sink = {}
+    E.validate_before_provider(
+        policy, data_root="fixture", model="gpt-5.4-nano", definition_sink=sink
+    )
+    with pytest.raises(TypeError):
+        sink["definition"]["schema"]["required"].append("changed")
+    definition["schema"]["required"].append("external")
+    assert sink["definition"]["schema"]["required"] == ["verdict"]
+    with pytest.raises(ValueError, match="revoked"):
+        E.validate_before_provider(
+            policy, data_root="fixture", model="gpt-5.4-nano", definition_sink={}
+        )

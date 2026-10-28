@@ -1,6 +1,10 @@
 # 정규장 제출 시간 소진·fresh 재평가·일반종목 감시 지연 보완계획 — 2026-10-27
 
+> **10/28 후속 설계 기준:** 사용자가 5초 고정 전제를 해제한 근본 개선안과 실제 만료 대안 비교를 요청했다. 신규 설계·구현 우선순위는 [§10 기한·신호 유효성 재설계](#entry-validity-redesign-20261028)를 따른다. 아래 §1~§9의 원5초 유지 문구는 당시 구현/운영 계약의 기록이며 새 설계값을 제한하지 않는다. 이번 계획 수립은 운영 기한 변경·배포 승인이 아니다.
+
 ## 1. 결정과 실행 기준
+
+10/28 PRE 후속은 [프리마켓 전달·제출 지연 상세계획](main-premarket-opportunity-delivery-submit-latency-and-auxiliary-input-remediation-plan-2026-10-28.md)이 소유한다. 아래 완료된 공통 수리/원 정규장 Acceptance는 유지하며 PRE의 적격 최초·재관찰 배분과 원5초/별도1,200ms reference 대사를 같은 기존 owner에서 추가한다. PRE 관측을 REGULAR/SOR/_AL 수용으로 대체하거나 기존 기능을 다시 구현하지 않는다.
 
 **기존 수리를 유지한 채 P0 잔여 처리비용, P1 가격 변경 후 새 판정 연결, P2 일반종목의 적시 감시를 순서대로 보완한다.** 계측·코드 반영·자연 경로 수용을 구분하고, 이미 구현된 기능을 미구현으로 되돌려 다시 만들지 않는다. 이번 구현은 최신 선택f14f42989 위에서 P0·P1·G1/G2를 기존 owner에 반영한다. AI 호출·정책 변경·배포·재기동은 실행하지 않는다.
 
@@ -81,6 +85,8 @@
 
 ## 6. P2 — 일반종목의 감시 진입·재관찰 지연
 
+10/28 REGULAR에서 새로 확인한 매도 우세의 source 오분류·미배정/재관찰·저가 상승지속 후보 선택은 [정규장 후속 계획](main-regular-preclaim-and-discovery-allocation-remediation-plan-2026-10-28.md)이 소유한다. 아래 G1/G2와 기존 P0/P1의 완료 구현·원 안전/clock은 유지하고, Q1/Q2 준비본은 실제 배포와 구분해 필요한 차이만 통합한다. 새 계획은 RFHIC 최종 배포본 기반에서 진행하며 그 복구 owner의 전환·원장을 조작하지 않는다.
+
 **원칙:** 기존5슬롯·동시성/구독·residence·신호 기한·상품/active/manual 제외를 유지하고, 놓친 구간이 어느 단계에서 발생했는지 기존 admission 증거로 보완한다. 상승 종목만 사후 우선 배정하거나 전체 패턴을 활성화하지 않는다.
 
 |순서|보완 범위|구체 구현/측정·완료 기준|
@@ -144,3 +150,130 @@ P0/P1 실행 owner는 `MainEntrySourceTerminalRepair1022`, 일반종목 전달 �
 다른 세션이17:37 기동한 `f14f4298907806aa568bec65a764e2f38e2e0530`/Main1993963/start73475785를 실제 최신 기반으로 다시 통합했다. 초기3178→3a와 중간ebbf 후보의 인계/시험/보고서 증거는 원 시점대로 보존하며 최종 후보의 운영 인계·P5에 재사용하지 않는다. 최신 기반의 시장가 wire-price 증빙 수리, quote collection JSON 결속과 WS local-session/raw-state 분리는 그대로 유지했다. 시장가 증빙은 추가28개 정상 경계 반례와 실제 adapter·가짜 POST 연결로 재확인했으며 route/type/quantity·원 기한/현재 가격 guard는 바꾸지 않았다. 공식 HEAD/API spec·core·Postman 검토는 [검토 증거](../../tmp/submit-fresh-latency-implementation-20261027/official-reference-market-context.json)를 따른다. 새로운 API/AI/주문 호출은 없다.
 
 최종 기반 영향 검사는 runtime1,241 PASS이며 새 native/독립 preparation/fixture reader와 후보 준비는 [최종 인계](../../tmp/submit-fresh-latency-implementation-20261027/handoff.md)의 receipt 및 SHA를 따른다. 중간 보고서 재검증 중 외부 selector 전환으로 보호조건이 실패한 이력은 보존한다. 원 holding/report/manifest·정책은 그대로이며 외부 selector 전환을 이 세션의 배포로 세지 않는다.
+
+<a id="entry-validity-redesign-20261028"></a>
+## 10. 기한·신호 유효성·처리 경로의 근본 재설계 — 2026-10-28
+
+### 10.1 결정·권한·현재 기준
+
+**5초는 비교 기준이며 설계의 고정 전제가 아니다. 신호 수명과 처리 예산의 정책 적합성을 처리 단축과 동시에 검증한다.** 기존 §4의 “먼저 원5초 안에서 줄이고 이후 검토” 순서는 이번 신규 설계에서 대체한다. 과거 수리의 원5초 보존, 당시 회귀와 운영 증거는 그대로 보존한다. 이번 권한은 개선안 수립과 기존 실제 사례의 오프라인 비교다. 실행 코드/기한·provider·API·슬롯/자원·주문·배포/재기동 변경은 없다.
+
+- 15:00 기준 최신 운영본 `f4cdac80647b71aae8f7d8ef5114ff5879c463cf`, PID197518/start81121238, 실제cwd와 native policy consumption `ready` 확인. [기준·문서 원본](../../tmp/entry-validity-redesign-20261028/baseline.json). 구현 시작 때 다시 핀하고 이미 반영된 cache/완료 우선 처리/wake/의미 분리를 재구현하지 않는다.
+- 실제 사고는 각각 원래 PID/릴리스·정책으로 해석한다. 10/27 REGULAR/SOR,10/28 PRE/NXT,10/28 REGULAR/SOR는 별개 모집단이다. 수치가 다른 당시 정책을 새 정책으로 소급하지 않는다. 138/PID4183243의13:57:58~14:45:52 동결을 새197518 성과로 바꾸지 않는다.
+- 공통 기한·전달은 `MainEntrySourceTerminalRepair1022`, 비상시 관찰 배분/선택은 `MachinePatternOpportunityResearch1023`가 계속 소유한다. 새 OPEN ID·cron·상시 진단기·정책 자동 승격기를 추가하지 않는다. 현재 일정/다음 자연 창은 [10/28 checklist](../checklists/2026-10-28-stage2-todo-checklist.md)의 같은 두 owner를 따른다.
+- 유지되는 안전과 연구 가능한 기한을 구분한다. 현재 승인된 실행 정책은 새 정책 선택·인계 전까지 그대로 적용되지만, 그 숫자를 개선안의 성공 조건으로 고정하지 않는다. 기한 연장은 정책 의미를 바꾸므로 동일정책 code handoff만으로 운영 승인할 수 없다.
+
+검토 중 추가된 [동일 최신 PID의15:06 동결](../../tmp/regular-delivery-integrated-20261028/natural-acceptance-through-1506.json)도 확인했다. 상시 claim11건 중5건이 신호 후2초를 넘었고,036930의 `aims-7bf521db52d3b5c36625`는 첫 큐 방문0.141초→claim4.638초로 잔여0.362초에서 시작해 AI 전 만료됐다. 같은 PID의 구간 합계는 target 처리3.618초·idle1.000초이며 세부 구간은 일부 잘려 단일 함수의 원인으로 단정하지 않는다. 별도 호출 후 timeout5건의 transport 예산은447~1146ms였다. 이 관측은 아래 사전 지정9건 분모에 사후 추가하지 않고, **claim 전 대기와 provider 예산도 P0에 포함해야 하는 현재 증거**로 사용한다. 비상시 배정34건(최초23/재관찰11)은 정식 기계 승인·제출34건이 아니다.
+
+### 10.2 실제 사례로 수행한 대안 비교
+
+[재현 가능한 비교 코드](../../tmp/entry-validity-redesign-20261028/compare.py)와 [입력 hash·결과](../../tmp/entry-validity-redesign-20261028/comparison.json)를 남겼다. 원 capsule의 내용 SHA, native Main/physical 시각, request/evaluation/PID를 연결했다. 10/27 원 payload8.8MiB와 작은 기존 동결본만 읽었고 전체 pipeline/일별 원천을 재스캔하거나 provider를 재호출하지 않았다.
+
+**정확한 만료 시각을 가진 사전 지정9건**을 비교한다. 만료 사례로 선정한 표본이므로 전체 기회·승률·정상 제출률의 분모가 아니다. `decision_ts`나 로그 출력 시각을 실제 검사 시각으로 바꾸지 않았다.
+
+| 원 사례 | 실제 차단 경계 | 원 신호 이후 시간 | 당시 AI |
+| --- | --- | ---: | --- |
+| 10/28 삼성 `aims-cffc16d81c6749fec266` | 입력 최종 동결 | 5.123초 | 미호출 |
+| 10/28 삼성 `aims-ad7553e6c2ed5c6dddec` | 입력 최종 동결 | 5.049초 | 미호출 |
+| 10/28 삼성 `aims-84bef36c8b1f6dfd88fc` | 입력 최종 동결 | 5.321초 | 미호출 |
+| 10/27 삼성 `aims-4e553d575a726719402f` | Main 종료 판정 | 5.171초 | PASS |
+| 10/27 주성 `aims-34e13653a782f358d16e` | 물리 전송 직전 native 검사 | 5.364초 | PASS |
+| 10/27 삼성 `aims-c8cab60bb3dfad2f1b66` | 물리 전송 직전 native 검사 | 5.480초 | PASS |
+| 10/27 HPSP `aims-dbabc38bc3b3fb87ecb6` | Main 종료 판정 | 5.470초 | PASS |
+| 10/28 삼성 `aims-b0dd134e5473a3e6335a` | 응답 처리 후 Main 검사 | 5.203초 | PASS |
+| 10/28 알테오젠 PRE `aims-7f20a47ca8d7fd6e4339` | Main commit 검사 | 5.010초 | PASS |
+
+| 대안 | 현재 자료의 검증 결과 | 판단 |
+| --- | --- | --- |
+| A: 현행5초+처리 단축 | 같은 경계에서0.25초 단축을 **가정**하면5/9,0.5초면9/9가 시간상 기한 안에 들어옴 | 실측 절감량이 아니다. 최적화만으로 근본 수명 설계가 맞다고 결론낼 수 없음 |
+| B: 일괄 고정6초/8초 | 같은 기록된 검사 시점에서는 각각9/9가 시간 조건을 통과 | 6·8은 연구용 민감도 값이며 채택값 아님. 미호출3건의 이후 AI·최종검사 시간은 미관측이고 후단 가격/계좌·주문 검사가 모두 끝난 것도 아님 |
+| C: 의미적 무효화+유한 수명 상한+독립 quote/AI/주문 검사 | PRE 알테오젠1건은 같은 Main 시점의 age 이외 native predicate가 모두 참. 삼성14:12는 branch/원천/호가가 참이지만 ready membership이 이미 없어 보존·만료 원인 분리가 필요. 나머지7건은 해당 비교 경계의 완전한 비시간 predicate 부족 | **우선 구현할 설계 후보.** 현재 증거로 신규 주문 허용을 입증한 건수0. 결손을 true로 채우지 않고 같은 원천으로 최종 consumer까지 재생할 것 |
+| D: 만료 후 새 신호로 fresh 재평가 | 기존 신호를 되살릴 수 없으며 새 신호/claim/input/request/AI와 새 시각이 필요 | 보완 경로다. 원 만료 경로를 고치는 것과 별개이며 무한 재요청/기존 PASS 재사용 금지 |
+| E: claim 또는 AI 호출 때부터 다시5초 | 최신036930은 claim4.638초 후 기한을 다시5초 주면 원 신호의 총 수명이9.638초가 됨. 반면 첫 가격 유지선 이탈은0.100초에도 발생 | 시작점 이동만으로는 신호 안전성을 설명하지 못함. 총 신호 수명 상한·연속 유효성 없이 이 방식을 채택하지 않음 |
+
+현재 native `EntryDeadline.create`에 호출자8초를 넣어도 claim의 원5초와 min을 취해5초가 유지되는 것을 실제 helper로 확인했다. **한 timeout 인자만 바꾸는 방식은 대안B/C 구현이 아니다.** 전체 주문 경로 재생·가상 체결은 수행하지 않았으며 실제/모형 손익은 null이다. 부분 시계만 있는10/27 09:47·11:15,10/28 08:05 및 다른 사전 AI4건은 이9건 수치에서 제외하고 원 증거를 보존했다.
+
+안전 대조군도 분리했다.
+
+- 10/27 주성 `aims-d4593848a6191aaed9ca`: 원신호+4.644초·quote age140ms에도 `execution_price_changed_reprice_required`. 기한을 바꿔도 원 주문을 보내면 안 된다.
+- 10/28 심텍 원 signal `...:92`·`...:150`: 각1.487초/0.100초에 `first_price_hold_breached`. 가격이 회복돼도 원 신호 무효화를 취소하면 안 된다. 새 신호는 별도 발급한다.
+- 10/28 알테오젠08:06: native 검사+3.336초로 원 수명 안이었지만 별도 `latency_block`. 5초 변경으로 이 결과를 자동 해제하지 않는다. 원 signal reference의 신원/clock 결함 여부와 승인된 DANGER/stale/가격 안전은 별도로 검사한다.
+- 정상 비상시 PRE RFHIC49558·안랩49559의 BUY receipt 원 SHA를 확인해 회귀 입력으로 지정했다. 과거 주문/체결을 새 대안의 주문 성공이나 수익으로 합산하지 않는다.
+
+### 10.3 한 숫자에 섞인 역할을 분리하는 설계
+
+| 계약/시계 | 의미 | 새 설계의 소유·처리 |
+| --- | --- | --- |
+| 패턴 확인 창 | FIRST/CONFIRMED/HOLD 등 정의가 성립하는 관측 시간 | 기존 branch 정의·최초 기준·필수 관측량 유지. 같은 숫자5라고 실행 수명과 함께 변경하지 않음 |
+| 신호 최대 수명 | 원 confirmation에서 얼마 동안 동일 신호를 실행 후보로 인정할지 | 기존 native family/claim owner가 버전·scope·발급시각·절대기한을 한 번 발급. 5/6/8 등 후보를 비교하되 적용값은 미선정 |
+| 의미적 유효성 | 원 유지선/저점 이탈·branch 소멸·epoch/세대 변경·원천 연속성 손실 | 첫 무효화를 종료까지 보존. 현재가 회복·재조회로 reset하지 않음. unknown은 실행 불가 |
+| 실제 처리 예산 | admission/준비/AI/후처리/Main/submit이 사용할 남은 시간 | 발급된 절대기한과 wall/perf의 보수적인 min을 모든 consumer가 전달. 단계마다 now+TTL 발급 금지 |
+| AI 결과 권한 | 정확한 input/정책/claim에 대한 특정 응답의 사용 가능 범위 | 현행 AI authority 만료와 request/input hash/변경 민감 fact를 독립 검증. 신호 수명 연장만으로 AI 권한 연장 금지 |
+| 실행 원천·호가 현재성 | 해당 item/route/epoch의 최신 체결·BBO·가격 유효성 | 기존 quote-time/source contract와 물리 검사 유지. 신호의 나이가 늘어도 stale quote 허용하지 않음 |
+| latency reference | 별도 signal reference의 나이·가격/slippage 판정 | 기존 source identity·시각 결속 유지. stale/DANGER·원 가격/계좌·주문 보호는 우회하지 않음 |
+
+후보C의 실행 조건은 **유한 signal deadline 안 + 원 신호의 연속 유효성 + 유효 AI 권한 + 최신 실행 원천/가격 + 기존 모든 주문 안전**이다. 상한 없는 “계속 유효하니 계속 기다림”도, 기한 초과 결과를 조용히 새 신호에 붙이는 것도 허용하지 않는다. KRX/NXT/SOR·PRE/REGULAR/AFTER·상시/비상시를 시계로 추측하지 않고 실제 session/정책 cohort/data item·route/broker 요청/체결 venue를 분리한다.
+
+신호 수명 후보는 기존 family가 정의한 최초 confirmation을 `T0`로 고정하고 `T_signal_end = T0 + L(scope, policy_version)`로 발급한다. 처리 시작점은 별도로 기록하며 준비·AI·후처리의 예산을 남은 수명 안에서 배분한다. L은 원 가격 경로의 유효성·실행 품질과 비용을 비교해 선택하며 **현재 큐가 밀렸다는 이유로 자동 증가시키지 않는다.** 실행 기한을 claim/응답 시점으로 옮기는 대안도 총 신호 나이를 함께 비교한다. 새 확인을 시작점으로 쓰려면 이전 신호를 종료하고 실제 새 관측으로 확인된 신호를 발급해야 한다. 최종 AI PASS를 다른 신호에 재사용하지 않으며, 미리 계산할 수 있는 것은 불변 정책/정적 입력 준비와 허용된 문맥뿐이다.
+
+발급 계약은 기존 claim/등록 영수증과 family 정책에 필요한 lifetime policy version, scope, confirmation 시각, 절대기한, 최초 무효화 identity, input/정책 hash를 연결한다. 새 독립 정책 엔진이나 주문 원장을 만들지 않는다. historical5초 claim은 당시 버전으로만 읽고 새 수명으로 소급하지 않는다. 실행 중 발급한 claim의 기한은 변경 불가다. 세대 전환은 새 claim부터 적용하며 이전 in-flight claim은 기존 기한·권한으로 종료한다. 선후 관계를 증명하지 못하는 중간 세대·PID 재사용은 차단한다.
+
+현재 `response_reserve()`는 관측 없으면0, 최근 `response_validate` p95를 최대0.25초로 제한한다. 삼성14:12 실제 `response_reserve_ms=0`, 로컬 후처리1.132초였다. 이 함수의 예측 범위가 필수 후단 전체를 대표하는지 검증해야 한다. **reserve를 크게 만드는 것만으로는 AI 호출 전 탈락을 앞당길 수 있어 개선이 아니다.** 준비 단축·후단 비용·전체 신호 수명과 함께 비교하고 냉기동/정상/혼잡·상시/비상시 분모를 유지한다. 충분한 예측 자료가 없으면 unknown으로 기록하며 provider 지연을 0이나 임의 p95로 가정하지 않는다.
+
+### 10.4 구현 우선순위와 기존 owner의 변경 범위
+
+| 우선순위 | 구현 범위·기존 소유 위치 | 산출물과 완료 판정 |
+| --- | --- | --- |
+| P0-A / 공통 | `entry_deadline`, `reversal_extended_runtime/state`, 현재 상속되는 `reversal_registered_runtime`·`reversal_path_runtime`, `reversal_source_diagnostics`의 발급/보존/claim/검증/종료 연결 | lifetime 정책·절대기한의 단일 발급 계약과 typed 종료 원인. 단계별 hard-coded5 중 실행 수명만 이관. confirmation/source-clock5는 유지. 원9건+무효화/세대/clock 음성을 실제 caller로 재생 |
+| P0-B / 상시 및 공통 후단 | `ai_engine_openai`·`mechanistic_entry_runtime_policy`·`reversal_auxiliary_intraday`·`continuous_reversal_policy`·기존 outbox/writer | 신호 전 immutable 준비, 응답 뒤 mandatory 검증/저장/변환의 CPU/I/O/lock 비용 분해와 중복 제거. 단일 evaluation 안의 불변 검증만 재사용; provider 대기 뒤 mutable 검사는 새 경계에서 수행 |
+| P0-C / 상시와 비상시 신호 인수·async 직접 소비 | `sniper_state_handlers`·`scanner_async_eval`의 기존 coordinator/완료 소비·`physical_send_guard` | native-ready→claim 대기와 응답→Main 대기를 함께 수리. 기존 loop의 ready/완료 우선 인수·기한순 처리·idle wake를 비교하되 한 종목 독점/다른 안전 작업 기아를 방지. issued contract를 Main→submit→가격/수량/intent→adapter 직전까지 전달. 기존 completion-first/wake를 재작성하거나 별도 무제한 worker를 추가하지 않음 |
+| P1-A / 비상시 병행 | `zero_base_probe`, 기존 DiscoveryQueue/dispatch와 등록·첫 수신 owner | Q0/current와 구현된 Q1/Q2를 같은 적격/source/슬롯/체류/due로 비교. 최초/재관찰의 admission→first receive→필수창→선택까지 대사. 수신0은 exact item/lease/epoch의 local send/connection response/wire/normalize로 분리; Kiwoom 코드 변경 전 공식 reference gate |
+| P1-B / 비상시 병행 | 기존 machine candidate registry·누적 비교/선택 owner | 선택 신호0을 기한 문제와 분리. 기존 G4/G1/G2·등록 상승지속 후보의 실제 price-band/branch·현재성·누적/미사용 결과 비교. 기한 연구에 패턴 완화를 섞지 않고 이미 실패한 후보를 새 이름으로 재등록하지 않음 |
+| P2 / 정책 선택·적용 준비 | 현재 native family 선택/등록·policy handoff·release routing owner | 대안A/B/C의 완전한 비교 후 한 scope의 lifetime 후보를 명시 선택. 최대 수명 변경을 동일정책 parity로 위장하지 않음. 기존 선택·canary/override 계약·rollback과 source consumer inventory로 승격하며 자동 승인하지 않음 |
+
+P0-A의 계약 설계와 P0-B/C의 실제 비용 검증은 함께 착수한다. P1-A/B도 이 결과를 기다리지 않는다. 순서가 “최적화를 모두 끝낸 뒤 TTL 연구”로 돌아가면 계획 위반이다. 현재 일부 공유 파일의 dirty 작업·다른 세션의 보유/SELL/수량 수리는 원 scope에 남겨 두고 구현 시 최신 선택본에서 필요한 hunk만 통합한다.
+
+비상시 근거는138/PID4183243의 종료106lease/97종목: 패턴 불일치39·확정대기2·유효 이력 후 현재 stale35·route 미수신18·0B age9·0B없음1·필수호가/feature2, 선택 TRUE0이다. 당일 최초85/재관찰21, 적격대기422·활성5·관측된 최대대기47.3분이다. 반복 평가/관찰과 독립 기회·연속 적격 대기를 구분한다. 기한만 변경해 이106건이 진입 신호로 바뀐다고 가정하지 않는다. [원 분석](../../tmp/submit-cause-latest-20261028-1447/144552/analysis.json).
+
+### 10.5 제거·통합 및 유지할 안전장치
+
+| 기존 경로 | 후속 처리 | 확인할 caller/consumer |
+| --- | --- | --- |
+| active 신호의 `epoch+5`, ready pop/claim/validate 각자 수명 계산 | `consolidated` 예정: 단일 발급 계약 소비 후 중복 실행 수명 산식 제거 | native state→claim→EntryDeadline→AI→async→Main→physical→observer 전부; 동적 backend dispatch 포함 |
+| 중간 `now+5`·별도 caller 상한 | `retained` 또는 `removed`를 실제 claim 존재/legacy 역할별 확정 | non-claim legacy를 신규 승인 우회로 사용하지 않음; original caller보다 기한 확대하지 않음 |
+| confirmation timeout·exchange/source clock 허용5·quote freshness | `retained` | 별도 의미의 현행 source/branch 계약. 숫자 일괄 치환 금지 |
+| 원/구 버전 claim·봉인 code reader | `retained` | 과거 재생·인계/rollback consumer, 현행 실행으로 퇴역 기능 복원 금지 |
+| 동일 immutable 경계의 중복 검증/보고용 복제 | 측정 후 `consolidated`/`removed` | 기존 cache/writer의 실제 direct caller·실패 저장·queue 포화 확인. 필수 outbox/intent durable 저장은 retained |
+| 기존 Q1/Q2·fresh successor·완료 wake | `retained` | 이미 구현된 경로를 확장. 새 queue·worker·validator 추가 없음 |
+
+보호 조건은 다음 전체를 유지한다: DANGER·stale/conflict, current price/executable BBO·spread/slippage·depth, exact route/item/epoch/시계·세대, 최초 무효화·등록된 claim, 기계 ENTER와 동일 input에 대한 유효 AI PASS, 수동관리/operator lock·보유 custody·퇴역 owner 경계, 계좌/현금·수량·cap·미체결/중복·cooldown, hard/protect/emergency와 기존 청산 권한. 미확정 전송 재시도·만료 PASS 재사용·인수 성공을 필수 저장 성공으로 대체하지 않는다. 최대 수명·결과 권한·현재 원천 중 하나라도 만료/unknown이면 실행 불가다. 승인되지 않은 live 수명 연장은 없다.
+
+### 10.6 비교 실험과 완료 기준
+
+**이번에 완료한 것은 원 사고 비교와 계획 검토다.** 구현·새 기한 선택·전체 제출 재생·배포·자연 제출·경제성은 아직 완료하지 않았다. 아래 검증으로 계획을 실행하며 단순 테스트 개수/기동 성공을 성능 수용으로 바꾸지 않는다.
+
+1. **동결 재현:** 위9건+가격변경1+유지선 이탈2+독립 latency1+정상 비상시 PRE2를 각 원 code/source reader로 baseline 재현한다. 회복/악화 가능성을 보기 위해 만료만 뽑은9건에 정상·실패·새 원천 결손을 더한 전체 적격 cohort를 별도로 고정한다. closed loop를 임의 성공 stub으로 바꾸지 않는다. 원천 부재는 U/null이며 새 자료를 과거 predicate로 채우지 않는다.
+2. **실제 경로 비교:** A/B/C는 같은 immutable inputs·동일 provider 응답 bytes·정확한 시각/최초 무효화 stream·비용과 actor provenance를 사용한다. 원 provider 미호출3건에는 새 응답을 꾸며 넣지 않고 `post_provider_unknown`을 유지한다. replay에서는 네트워크·broker adapter만 no-send spy로 막고 Main→submit→수량/intent→physical predicate는 실제 owner를 실행한다. 미래 정보가 당시 선택·예산을 바꾸면 실패다.
+3. **기한/경계 회귀:** confirmation 직전/직후, 수명 상한 직전/같은 시각/직후, wall clock 역행/전진, monotonic 소진, 세대/PID/route/epoch 변경, ready evict/첫 무효화 후 가격 회복, provider late/unsettled·중복 완료, lock/writer 포화·부분 append·중단/재기동을 검증한다. 현재 native `<=5`와 budget/physical `>=deadline`의 경계 차이도 한 계약으로 명시한다. 기존 MAX_READY/queue/storage 경계를 넘겨 자료를 보존하지 않으며 결손은 실행 불가로 남긴다.
+4. **코드 완료:** 원 계약 차단/가격변경/최초무효화/unknown 음성의 adapter 호출0, 정상 입력은 단일 intent/정상 initial adapter 도달, mixed generation 거부, 필요한 기록의 원 SHA/custody 보존, 이전 active consumer의 중복 수명 산식 제거를 확인한다. TTL-only로 보이는 사례는 비시간 guard와 실제 처리 소요를 함께 증명한 경우에만 복원으로 센다. 실제 원가/체결 부재는 진단 코드 수리의 실패 조건으로 추가하지 않는다.
+5. **지연·처리량 완료:** cohort별 signal→claim→provider→response→Main→physical/adapter의 비중첩 시간, cold/warm/혼잡 p50/p95/p99, 잔여기한, CPU/I/O/lock, writer lag·누락·호출/자원수를 baseline과 비교한다. 선택한 유한 cap 안에 정상 경로의 측정 p99와 계측 불확실성이 들어오지 않으면 성능 수용을 닫지 않는다. 표본 부족으로 p99를 추정한 경우 그대로 미확정이다. 사전 AI 탈락만 늘려 만료율을 낮춘 후보는 채택하지 않는다. 상시/비상시의 유효 기계→AI PASS→정상 제출 도달률·정당한 비진입을 각각 보고한다.
+6. **정책 적합성·경제성:** lifetime 변경은 전 사례에서 추가로 허용/차단한 exact 기회와 가격 불리, native 비용 후 target/stop/timeout/U, rolling/cumulative·미사용 날짜를 owning family 지표로 비교한다. Main machine selection의 현행 win-rate 예외를 다른 가족에 확대하지 않고, provider/기한 수리의 코드 완료에 새 EV gate를 임의 추가하지 않는다. 비용/후행 경로/실제 venue가 없으면 손익 null, 다른 venue census 최고가로 이익을 주장하지 않는다. 9/9 시간 통과만으로6초를 선택하지 않는다.
+7. **배포·자연 수용:** 별도 승인된 후보에 현재 정책 또는 새로 명시 선택된 정책의 정확한 handoff·consumer census·격리P5·rollback을 준비한다. 실제 selected generation/PID 소비와 observer/health를 확인하고 기존 checklist의 PRE/NXT/_NX, REGULAR/SOR/_AL 창에서 branch별 자연 결과를 검증한다. AFTER 적용을 포함하면 해당 실제 session/route에 새 창을 같은 owner에 명시하며 REGULAR로 대체하지 않는다. 해당 표본이 없으면 자연 수용 OPEN이고 이미 완료한 코드 수리를 반복하지 않는다. 새 source/price/권한 결손·중복 전송·안전 실패가 나타나면 기존 native rollback owner로 되돌리고 실패 영수증을 보존한다.
+
+**선택 방향은 C의 단일 발급·연속 유효성·유한 상한 구조와 B/C 간 실제 정책 비교, 그리고 공통 처리 단축이다.** 5초 고정도, 무조건 연장도 이번 결론이 아니다. 현재 9건의 경계 비교에서 추가 수명 여지는 보이지만 안전한 신규 제출·순익은 아직 입증되지 않았다는 경계를 유지한다.
+
+
+### 10.7 구현·리뷰 인계 — 10/28
+
+사용자는 P0-A/B/C와 비상시 P1의 병행 구현 및 리뷰 후 배포·재기동을 승인했다. 기준은 선택본 `f4cdac80647b71aae8f7d8ef5114ff5879c463cf`이며 격리 작업본은 `/home/ubuntu/KORStockScan-worktrees/entry-validity-20261028`이다. 다른 세션의 보유·청산·저장소 작업은 이 변경에 혼합하지 않는다.
+
+- **P0-A:** 기존 `entry_deadline`이 confirmation에 결속된 유한 lifetime을 발급하고 ready/claim/AI/Main/physical 및 관측기가 동일 기한을 소비한다. 새 family 필드는 scope hash와 동일 정책 판정에 포함되며 장후·누적·joint/extended 등록 생산자가 보존한다. live 발급에는 PID·wall/monotonic 쌍을 결속한다. 재발급·다른 PID·회귀 시계로 기한을 연장하지 않는다. 별도 lifetime이 없는 봉인/현 정책은 원5초 계약으로 읽는다. **이번에 새 live 수명 숫자를 선택하지 않는다.** 6/8/12초는 격리 검증 값이다.
+- **P0-B:** provider 직전 검증한 immutable 요청 definition을 그 응답의 decode에서 재사용하여 동일 registry의 후단 재로딩을 제거했다. 현재 revocation·정책·claim·원천/가격 검증과 raw/decoded durable 저장은 유지한다. decode·decoded 저장·normalization 및 응답 CPU 구간을 기존 로컬 계측에 추가하여 미확정 응답 후처리 지연을 추적한다. 실제 응답의 해당 decode 경계 51회 측정은 median3.866→0.807ms, p953.922→0.822ms다. 이 측정은 전체1.132초 원인이나 전체 제출 경로 속도 개선의 증거가 아니다.
+- **P0-C:** 동일 bounded 힌트/selected stream·raw→selected projection에서 원 발급 기한을 소비하며 새 큐/worker/슬롯을 추가하지 않았다. 리뷰 중 추가한 pending 방문 토큰 보존은 기존 완료 후 rearm owner와 중복되어 제거했다. 실제 pending→완료→후속 claim 및 invalid/owner 변경 회귀로 기존 완료 우선 소비·rearm·Main 재검증·physical 이중 시계를 유지한다.
+- **P1:** 이미 선택본에 있는 Q0/Q1/Q2 및 최초/재관찰 경로를 재사용하고 probe·제한된 원천 복구 예산을 발급 기한에 연결했다. 선택된 배분은 `current`, 장기슬롯/구독/패턴/모델은 변경하지 않았다. 같은 owner의 진행 중 source28 봉인·다음 PRE/REG 관찰을 중복 실행하지 않는다. 기존 동결 비교는 실제 점유5에서 추가배정0이며 가상 빈 슬롯 비교도 승패 U다. 코드 준비와 배분/패턴의 자연 성능 수용을 구분한다.
+
+**재생의 범위:** 원 SHA를 인증한 만료9건, 원 provider 응답6건의 decode, 미호출3건의 실제 `analyze_target`→preflight→trace 종료를 재생한다. 9개 실제 경계 시각을 사용한 전체 physical adapter 회귀는 별도 격리 continuation fixture다. 당시 claim/수량/계좌/Main quote가 없는 구간을 성공 stub으로 채우지 않는다. 따라서 역사적 전체 경로 재생·복원 제출 건수·경제성은 미확정이며 수명 정책 선택 P2의 근거로 승격하지 않는다. [입력·계측·검증](../../tmp/entry-validity-implementation-20261028/).
+
+**교체·제거:** 실행 수명의 분산 `epoch+5`는 기존 `entry_deadline`으로 `consolidated`; provider 후단 동일 definition 재로딩은 live v5/v6에서 `removed`, 원 historical/non-native reader는 named caller를 위해 `retained`; 원5초 confirmation/source clock·quote freshness·MAX_READY·outbox·첫 무효화 이력·manual/계좌/주문/수량/cooldown·hard safety는 `retained`. 새 모듈/worker/producer/CLI는 없다. 기존 준비 reader의 전체 source profile과 독립 reader 쌍을 갱신하고 원 발급 predecessor는 유지한다.
+
+**운영 순서:** 최종 source/소비자 census 고정 → 원 active-parent native parity/인계 → 변경된 capability·trailing derived generation만 재생성 → 완전한 후보/독립 준비/P5 → native ordered 전환 → selected 준비/P5 → 실제 PID 정책 소비 → 현재 observer → full health. 실패하면 원 incumbent·정책·실패 기록을 보존하며 먼저 중지해 증거를 만들지 않는다. 현재 startup/health는 아직 이 절차를 실행하기 전이며 배포 완료를 뜻하지 않는다. PRE/NXT/_NX, REGULAR/SOR/_AL 자연 수용과 충분한 p99·비용 후 성능은 다음 창의 같은 checklist owner에 OPEN이다.

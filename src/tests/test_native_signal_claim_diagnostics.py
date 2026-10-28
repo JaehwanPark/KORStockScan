@@ -117,6 +117,20 @@ def observe(native, at=T):
     return next(iter(R._SELECTED_READY.values()))
 
 
+def test_selected_projection_preserves_issued_deadline_past_legacy_five(native, monkeypatch):
+    from src.engine.scalping import entry_deadline as E
+    event = native[3]
+    event["registry_generation"] = "scope"
+    perf = [10.0]
+    monkeypatch.setattr(E.time, "perf_counter", lambda: perf[0])
+    E.bind_signal_lifetime(event, dict(schema="entry_signal_lifetime_policy_v1", version="projection", max_signal_age_sec=8.0), live_clock=True)
+    perf[0] = 15.0
+    row = observe(native, at=T + 6)
+    assert row["original_deadline"] == T + 8
+    assert R._READY[event["signal_id"]]["selections"][0]["reason"] == "selected"
+    assert not row["claimed"] and not native[0]._CLAIMS
+
+
 def test_raw_first_can_be_ineligible_without_ever_being_a_delivery_miss(native):
     native[2].legacy.turn = None
     before = deepcopy(native[2].ready)

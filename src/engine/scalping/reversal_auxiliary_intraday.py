@@ -748,6 +748,8 @@ def apply_request(data_root, bundle, snapshot, result):
 
 
 def validate_decision(data_root, policy, active, *, now):
+    from src.engine.scalping.entry_deadline import signal_is_current
+
     a = policy["continuous_reversal_assessment"]
     if (
         a.get("policy_version") not in {V.SCHEMA, "continuous_reversal_policy_v6"}
@@ -768,7 +770,7 @@ def validate_decision(data_root, policy, active, *, now):
         or a.get("auxiliary_base_bundle_sha256") != active["bundle_sha256"]
         or a.get("auxiliary_overlay_sha256")
         != (overlay or {}).get("artifact_content_sha256")
-        or not 0 <= now - a["event"]["epoch"] <= 5
+        or not signal_is_current(a["event"], now, live_clock=True)
     ):
         raise ValueError("auxiliary_decision_generation_changed")
     latest = current(

@@ -13,6 +13,7 @@ from pathlib import Path
 from threading import Lock
 
 from src.engine.scalping import mechanistic_entry_runtime_policy as N
+from src.engine.scalping.entry_deadline import signal_is_current
 
 _LOCK = Lock()
 _CONFIGURED = None
@@ -118,14 +119,13 @@ def validate_submit(data_root, fields, *, now, check_generation=False):
         event = assessment.get("event")
         epoch = event.get("epoch") if isinstance(event, Mapping) else None
         if (
-            assessment.get("policy_version") in {
-                "continuous_reversal_policy_v5", "continuous_reversal_policy_v6"
-            }
+            assessment.get("policy_version")
+            in {"continuous_reversal_policy_v5", "continuous_reversal_policy_v6"}
             and assessment.get("action") == "ENTER_NOW"
             and assessment.get("auxiliary_registry_sha256")
             and type(epoch) in (int, float)
             and math.isfinite(epoch)
-            and not 0 <= now - epoch <= 5
+            and not signal_is_current(event, now, live_clock=True)
         ):
             checked = now
             raise ValueError("auxiliary_decision_generation_changed")
@@ -173,7 +173,7 @@ def validate_submit(data_root, fields, *, now, check_generation=False):
         raise
 
 
-def validate_before_provider(policy, *, data_root, model):
+def validate_before_provider(policy, *, data_root, model, definition_sink=None):
     """Fresh final guards on one loader-owned view, before any provider I/O.
 
     This pass only shares ancestor resolution and avoids materializing a full
@@ -241,6 +241,10 @@ def validate_before_provider(policy, *, data_root, model):
                 raise ValueError("auxiliary_registered_definition_missing")
             if model != registered["model"]:
                 raise ValueError("auxiliary_registered_model_mismatch")
+            if definition_sink is not None:
+                # Decode the response under the exact immutable request schema.
+                # This is not a live eligibility/overlay/revocation verdict.
+                definition_sink["definition"] = N._freeze(registered)
         return remaining
 
 

@@ -9,6 +9,11 @@ import json
 from pathlib import Path
 from collections import deque
 from datetime import datetime
+from src.engine.scalping.entry_deadline import (
+    signal_deadline_epoch,
+    signal_is_current,
+    bind_signal_lifetime,
+)
 from src.engine.scalping import continuous_reversal as K
 from src.engine.scalping import continuous_reversal_branches as B
 from src.engine.scalping import reversal_registered_runtime as OLD
@@ -18,7 +23,13 @@ from src.engine.scalping.continuous_reversal_postclose import digest
 
 class State(OLD.State):
     def __init__(
-        self, *, branch_ids, session_anchor=None, generation="research", offline=False
+        self,
+        *,
+        branch_ids,
+        session_anchor=None,
+        generation="research",
+        offline=False,
+        lifetime_policy=None,
     ):
         self.selected_ids = tuple(branch_ids)
         self.offline = offline
@@ -36,6 +47,7 @@ class State(OLD.State):
             branch_ids=[b for b in branch_ids if b not in C.NEW_DEFINITIONS],
             session_anchor=session_anchor,
             generation=generation,
+            lifetime_policy=lifetime_policy,
         )
 
     def _reset_windows(self):
@@ -88,7 +100,9 @@ class State(OLD.State):
         f = self.features(row)
         t = row[0]
         signals = {}
-        while self.ready and t - self.ready[0]["event"]["epoch"] > 5:
+        while self.ready and not signal_is_current(
+            self.ready[0]["event"], t, live_clock=not getattr(self, "offline", False)
+        ):
             self.ready.popleft()
             self.counts["ready_expired"] += 1
         # Ready observations are invalidated by native path breaks, not by a
@@ -235,6 +249,9 @@ class State(OLD.State):
                 row[1],
                 row[2],
             ]
+        )
+        bind_signal_lifetime(
+            event, self.lifetime_policy, live_clock=not getattr(self, "offline", False)
         )
         ready = dict(event=event, row=row, claimed=False)
         if (
@@ -543,6 +560,9 @@ class State(OLD.State):
         if not self.offline and len(self.ready) >= B.MAX_READY:
             self.counts["path_ready_overload"] += 1
             return []
+        bind_signal_lifetime(
+            event, self.lifetime_policy, live_clock=not getattr(self, "offline", False)
+        )
         ready = dict(event=event, row=row, claimed=False, path_inputs=inputs)
         self.ready.append(ready)
         return [ready]
@@ -913,13 +933,15 @@ def claim_snapshot(symbol, venue, session, *, now, item, family_sha256):
         if family_sha256 != _GENERATION:
             return None
         for token, old in list(_CLAIMS.items()):
-            if now - old["snapshot"][0]["epoch"] > 5:
+            if now >= signal_deadline_epoch(old["snapshot"][0]):
                 _CLAIMS.pop(token)
         state = _STATES.get(key)
         if not state:
             return None
         for ready in state.ready:
-            if ready["claimed"] or not 0 <= now - ready["event"]["epoch"] <= 5:
+            if ready["claimed"] or not signal_is_current(
+                ready["event"], now, live_clock=True
+            ):
                 continue
             e = ready["event"]
             # An all-FIRST bundle must still be the latest uninvalidated turn.
@@ -976,9 +998,8 @@ def validate_claim(claim, family_sha256, *, now):
             raise ValueError("reversal_signal_generation_changed")
         snap = original["snapshot"]
         event = snap[0]
-        if (
-            digest(snap) != digest(claim.get("snapshot"))
-            or not 0 <= now - event["epoch"] <= 5
+        if digest(snap) != digest(claim.get("snapshot")) or not signal_is_current(
+            event, now, live_clock=True
         ):
             raise ValueError("reversal_signal_expired_or_changed")
         state = _STATES.get(original["scope"])

@@ -652,3 +652,27 @@ def test_current_projection_never_turns_prepared_into_pid_consumption(
 
         monkeypatch.setattr(H, "_identity", dies)
         assert STATUS.current_view(tmp_path, day=day)["status"] == "changed_during_read"
+
+
+@pytest.mark.parametrize("cap", [6.0, 8.0, 12.0])
+def test_lifetime_policy_survives_cumulative_cell_builder_and_changes_execution_identity(cap):
+    from src.engine.scalping import reversal_cumulative_postclose as Q
+    key, route = next(iter(V.scopes()))
+    bid = next(b for b in C.DEFINITIONS if C.applicable(b, key, route))
+    policy = dict(schema="entry_signal_lifetime_policy_v1", version="future-selected", max_signal_age_sec=cap)
+    payload = dict(branches=[C.branch(bid)])
+    cell = dict(backend="union_v6", payload=payload, signal_lifetime_policy=policy)
+    parent = dict(continuous_reversal=dict(machine_cells={key:dict(routes={route:cell})}, auxiliary_cells={key:dict(routes={route:dict(payload={})})}))
+    # Exercise the actual cell producer on this exact one-scope input.
+    from unittest.mock import patch
+    with patch.object(V, "scopes", return_value=[(key, route)]):
+        result = Q.machine_cells(parent, dict(scopes={V.scope_id(key, route):[bid]}), "code")
+    issued = result[0]["routes"][route]
+    assert issued["signal_lifetime_policy"] == policy
+    assert issued["scope_execution_hash"] == V.scope_hash([bid], {}, "union_v6", "code", policy)
+    assert issued["scope_execution_hash"] != V.scope_hash([bid], {}, "union_v6", "code")
+    changed = copy.deepcopy(parent["continuous_reversal"])
+    changed["machine_cells"][key]["routes"][route]["signal_lifetime_policy"]["max_signal_age_sec"] += 1
+    assert V._behavioral_family(parent["continuous_reversal"]) != V._behavioral_family(changed)
+    with pytest.raises(ValueError, match="explicit_transition"):
+        V.carry_signal_lifetime(parent,key,route,dict(backend="registered_v4"))

@@ -9,6 +9,7 @@ import copy
 import math
 import threading
 from datetime import datetime
+from src.engine.scalping.entry_deadline import signal_deadline_epoch, signal_is_current
 from src.engine.scalping import continuous_reversal as K
 from src.engine.scalping import continuous_reversal_branches as B
 from src.engine.scalping import reversal_extended_catalog as C
@@ -233,6 +234,7 @@ def observe_normalized(symbol, session, envelope):
                         registry_sha256=_FAMILY["registry_sha256"],
                         session_anchor=R._ANCHORS.get(stream),
                         generation=cell["scope_execution_hash"],
+                        lifetime_policy=cell.get("signal_lifetime_policy"),
                     )
                 state.observe(row, symbol=symbol, venue=venue, session=session)
             for key in list(_STATES):
@@ -335,7 +337,7 @@ def claim_snapshot(symbol, venue, session, *, now, item, family_sha256):
         if not _FAMILY or family_sha256 != _FAMILY["family_sha256"]:
             return None
         for token, original in list(_CLAIMS.items()):
-            if now - original["snapshot"][0]["epoch"] > 5:
+            if now >= signal_deadline_epoch(original["snapshot"][0]):
                 _CLAIMS.pop(token)
         ready_list = []
         for band in (("ALL",) if C.group(symbol) == "samsung" else C.BANDS):
@@ -347,7 +349,7 @@ def claim_snapshot(symbol, venue, session, *, now, item, family_sha256):
                 e = ready["event"]
                 if (
                     not ready["claimed"]
-                    and 0 <= now - e["epoch"] <= 5
+                    and signal_is_current(e, now, live_clock=True)
                     and C.cell_key(symbol, session, e["confirmation_price"]) == key[-1]
                 ):
                     ready_list.append(
@@ -454,7 +456,7 @@ def validate_claim(claim, family_sha256, *, now):
         ):
             raise ValueError("reversal_signal_generation_changed")
         event, source = copy.deepcopy(original["snapshot"])
-        if not 0 <= now - event["epoch"] <= 5:
+        if not signal_is_current(event, now, live_clock=True):
             raise ValueError("reversal_signal_expired_or_changed")
         if (
             not state.legacy.last

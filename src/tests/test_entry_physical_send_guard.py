@@ -896,3 +896,32 @@ def test_all_local_buy_adapter_vetoes_have_process_local_zero_wire_proof(
     assert posts == []
     assert orders.is_verified_local_buy_no_call_response(result)
     assert not result.get("_local_buy_reserved_intent_id")
+
+
+@pytest.mark.parametrize("cap", [5.0, 6.0, 8.0])
+@pytest.mark.parametrize("age", [5.122544, 5.049123, 5.321385, 5.170555, 5.364271, 5.479747, 5.470078, 5.203117, 5.010037])
+@pytest.mark.parametrize("fault", [None, "price", "stale", "ai_expiry", "native_invalid"])
+def test_captured_expiry_ages_through_real_order_adapter_keep_independent_guards(case, monkeypatch, cap, age, fault):
+    # Actual incident ages, with explicitly synthetic continuation inputs.
+    # This exercises the adapter contract, not historical order recoverability.
+    from src.engine.scalping.entry_deadline import EntryDeadline, bind_signal_lifetime
+    event = dict(epoch=100.0, signal_id="confirmed", registry_generation="scope")
+    bind_signal_lifetime(event, dict(schema="entry_signal_lifetime_policy_v1", version="offline-comparison", max_signal_age_sec=cap))
+    budget = EntryDeadline.create({"snapshot": [event]})
+    case.clock.epoch, case.clock.perf = 100.0 + age, 10.0 + age
+    case.context = replace(case.context, original_deadline_epoch=budget.epoch, original_deadline_perf=budget.perf)
+    case.state["snapshot"] = snapshot(case.clock.epoch - .1)
+    if fault == "price": case.state["snapshot"]["curr"] = 99
+    if fault == "stale": case.state["snapshot"] = snapshot(case.clock.epoch - 1)
+    if fault == "ai_expiry": case.context = replace(case.context, ai_authority_expires_epoch=case.clock.epoch - .01, ai_authority_expires_perf=case.clock.perf - .01)
+    if fault == "native_invalid":
+        def invalid(): raise ValueError("reversal_first_signal_invalidated")
+        case.context = replace(case.context, binding_reader=invalid)
+    posts = transport(case, monkeypatch, [{"return_code": "0", "ord_no": "offline"}])
+    if cap <= age or fault:
+        with pytest.raises(guard.EntrySendGuardBlocked): send(case)
+        assert posts == []
+    else:
+        _, result = send(case)
+        assert len(posts) == 1 and result["return_code"] == "0"
+        assert result["entry_send_guard_receipts"][0]["original_deadline_epoch"] == 100.0 + cap

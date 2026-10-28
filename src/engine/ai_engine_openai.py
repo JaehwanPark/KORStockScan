@@ -12256,6 +12256,7 @@ class GPTSniperEngine:
                 input_contract_fields[
                     "entry_setup_live_policy_selected_prompt_version"
                 ] = prompt_version
+            response_definition = {}
             if entry_setup_live_policy.get("continuous_reversal_assessment", {}).get(
                 "policy_version"
             ) in {
@@ -12289,6 +12290,7 @@ class GPTSniperEngine:
                             entry_setup_live_policy,
                             data_root=DATA_DIR,
                             model=target_model,
+                            definition_sink=response_definition,
                         )
                     except ValueError as exc:
                         # Only native eligibility endings from this validator
@@ -12529,6 +12531,7 @@ class GPTSniperEngine:
             )
 
             local_stage_clocks["provider_returned_perf"] = time.perf_counter()
+            response_cpu_started = time.thread_time()
             provider_returned_deadline_remaining = (
                 entry_budget.remaining() if entry_budget is not None else None
             )
@@ -12624,9 +12627,19 @@ class GPTSniperEngine:
                     reversal_auxiliary_registry as auxiliary_registry,
                 )
 
-                registered = auxiliary_registry.load(
-                    DATA_DIR, auxiliary_assessment["auxiliary_registry_sha256"]
-                )
+                local_stage_clocks["decode_started_perf"] = time.perf_counter()
+                registered = response_definition.get("definition")
+                if registered is None:
+                    # Historical/non-native callers still authenticate their
+                    # own definition. Live v5/v6 captured it before provider I/O.
+                    registered = auxiliary_registry.load(
+                        DATA_DIR, auxiliary_assessment["auxiliary_registry_sha256"]
+                    )
+                if (
+                    registered["registry_sha256"]
+                    != auxiliary_assessment["auxiliary_registry_sha256"]
+                ):
+                    raise ValueError("auxiliary_response_definition_changed")
                 raw_result = result
                 if received_meta.get("auxiliary_response_status") != "completed":
                     raise ValueError("auxiliary_provider_response_incomplete")
@@ -12635,6 +12648,10 @@ class GPTSniperEngine:
                     entry_setup_live_policy["continuous_reversal_input"],
                     registered,
                 )
+                local_stage_clocks["decode_seconds"] = (
+                    time.perf_counter() - local_stage_clocks["decode_started_perf"]
+                )
+                local_stage_clocks["decoded_receipt_started_perf"] = time.perf_counter()
                 from src.engine.scalping.reversal_auxiliary_intraday import (
                     record_decoded_response,
                 )
@@ -12646,6 +12663,10 @@ class GPTSniperEngine:
                     raw_result,
                     result,
                     registered,
+                )
+                local_stage_clocks["decoded_receipt_seconds"] = (
+                    time.perf_counter()
+                    - local_stage_clocks["decoded_receipt_started_perf"]
                 )
                 received_meta["auxiliary_decoded_receipt_sha256"] = decoded_receipt[
                     "artifact_content_sha256"
@@ -12733,12 +12754,19 @@ class GPTSniperEngine:
                                 "anticipatory_reversal_analysis_v1"
                             ],
                         }
+                    local_stage_clocks["normalization_started_perf"] = (
+                        time.perf_counter()
+                    )
                     result = self._normalize_decision_quality_entry_result(
                         result,
                         exact_payload=normalization_exact_payload,
                         prompt_version=prompt_version,
                         entry_setup_evidence=entry_setup_evidence,
                         live_policy=entry_setup_live_policy,
+                    )
+                    local_stage_clocks["normalization_seconds"] = (
+                        time.perf_counter()
+                        - local_stage_clocks["normalization_started_perf"]
                     )
                 # Preserve the machine-owned evaluation identity for the
                 # ENTRY_PIPELINE provenance projection.  This is diagnostic
@@ -12862,6 +12890,9 @@ class GPTSniperEngine:
             local_stage_clocks["response_processing_seconds"] = (
                 local_stage_clocks["annotation_started_perf"]
                 - local_stage_clocks["provider_returned_perf"]
+            )
+            local_stage_clocks["response_processing_cpu_seconds"] = max(
+                0.0, time.thread_time() - response_cpu_started
             )
             # Annotation owns trace/outcome writes; capture its own interval
             # separately from native/semantic response validation.

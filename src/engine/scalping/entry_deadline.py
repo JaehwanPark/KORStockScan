@@ -1,19 +1,140 @@
 """One original reversal budget; no admission, policy or order authority."""
 
 from dataclasses import dataclass
+from collections.abc import Mapping
+import hashlib
+import json
 import math
+import os
 import time
+
+LEGACY_SIGNAL_MAX_AGE_SEC = 5.0
+
+
+def validate_lifetime_policy(policy):
+    """A family-owned finite lifetime; never a queue/load-derived timeout."""
+    if (
+        not isinstance(policy, Mapping)
+        or set(policy) != {"schema", "version", "max_signal_age_sec"}
+        or policy["schema"] != "entry_signal_lifetime_policy_v1"
+        or not isinstance(policy["version"], str)
+        or not policy["version"].isascii()
+        or not 0 < len(policy["version"]) <= 128
+        or type(policy["max_signal_age_sec"]) not in (int, float)
+        or not math.isfinite(policy["max_signal_age_sec"])
+        or policy["max_signal_age_sec"] <= 0
+    ):
+        raise ValueError("entry_signal_lifetime_policy_invalid")
+    return dict(policy)
+
+
+def _policy_hash(policy):
+    return hashlib.sha256(
+        json.dumps(
+            policy, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode()
+    ).hexdigest()
+
+
+def bind_signal_lifetime(event, policy, *, live_clock=False):
+    """Issue once at confirmation. Legacy evidence keeps its original bytes."""
+    if policy is None:
+        return
+    policy = validate_lifetime_policy(policy)
+    if "entry_signal_lifetime" in event:
+        signal_deadline_epoch(event)
+        if event["entry_signal_lifetime"]["policy"] != policy:
+            raise ValueError("entry_signal_lifetime_already_issued")
+        return
+    epoch = event.get("epoch")
+    if type(epoch) not in (int, float) or not math.isfinite(epoch):
+        raise ValueError("entry_signal_confirmation_invalid")
+    event["entry_signal_lifetime"] = dict(
+        schema="entry_signal_lifetime_v1",
+        policy=policy,
+        policy_sha256=_policy_hash(policy),
+        signal_id=event["signal_id"],
+        generation=event["registry_generation"],
+        confirmed_epoch=epoch,
+        deadline_epoch=epoch + policy["max_signal_age_sec"],
+    )
+    if live_clock:
+        # Bind before claim/admission. Wall-clock rollback must not renew the
+        # original confirmation's remaining real processing time.
+        perf, stamp = time.perf_counter(), time.time()
+        event["entry_signal_lifetime"]["clock"] = dict(
+            pid=os.getpid(),
+            issued_epoch=stamp,
+            issued_perf=perf,
+            deadline_perf=perf + (epoch + policy["max_signal_age_sec"] - stamp),
+        )
+    signal_deadline_epoch(event)
+
+
+def signal_deadline_epoch(event):
+    """Read the issued lifetime, or the dated legacy contract, without renewal."""
+    epoch = event["epoch"]
+    if type(epoch) not in (int, float) or not math.isfinite(epoch):
+        raise ValueError("entry_signal_confirmation_invalid")
+    issued = event.get("entry_signal_lifetime")
+    if issued is None:
+        return epoch + LEGACY_SIGNAL_MAX_AGE_SEC
+    if not isinstance(issued, Mapping):
+        raise ValueError("entry_signal_lifetime_invalid")
+    policy = validate_lifetime_policy(issued.get("policy"))
+    expected = epoch + policy["max_signal_age_sec"]
+    if (
+        issued.get("schema") != "entry_signal_lifetime_v1"
+        or issued.get("signal_id") != event.get("signal_id")
+        or issued.get("generation") != event.get("registry_generation")
+        or issued.get("confirmed_epoch") != epoch
+        or issued.get("policy_sha256") != _policy_hash(policy)
+        or type(issued.get("deadline_epoch")) not in (int, float)
+        or issued["deadline_epoch"] != expected
+        or not math.isfinite(expected)
+        or expected <= epoch
+    ):
+        raise ValueError("entry_signal_lifetime_invalid")
+    clock = issued.get("clock")
+    if clock is not None and (
+        not isinstance(clock, Mapping)
+        or type(clock.get("pid")) is not int
+        or clock["pid"] <= 0
+        or any(
+            type(clock.get(k)) not in (int, float) or not math.isfinite(clock[k])
+            for k in ("issued_epoch", "issued_perf", "deadline_perf")
+        )
+        or clock["deadline_perf"]
+        != clock["issued_perf"] + (expected - clock["issued_epoch"])
+    ):
+        raise ValueError("entry_signal_lifetime_clock_invalid")
+    return expected
+
+
+def signal_is_current(event, now, *, live_clock=False):
+    # One exclusive upper boundary, shared with the physical send guard.
+    current = (
+        type(now) in (int, float)
+        and math.isfinite(now)
+        and event["epoch"] <= now < signal_deadline_epoch(event)
+    )
+    if live_clock and event.get("entry_signal_lifetime") is not None:
+        clock = event["entry_signal_lifetime"].get("clock")
+        return bool(
+            current
+            and clock
+            and clock["pid"] == os.getpid()
+            and clock["issued_perf"] <= time.perf_counter() < clock["deadline_perf"]
+        )
+    return current
 
 
 def claim_deadline_epoch(claim):
     if claim is None:
         return None
     try:
-        epoch = claim["snapshot"][0]["epoch"]
-        if isinstance(epoch, bool) or not math.isfinite(float(epoch)):
-            return 0.0
-        return float(epoch) + 5.0
-    except (KeyError, TypeError, IndexError, ValueError):
+        return signal_deadline_epoch(claim["snapshot"][0])
+    except (KeyError, TypeError, IndexError, ValueError, OverflowError):
         return 0.0  # Malformed input cannot acquire a renewed budget.
 
 
@@ -24,9 +145,8 @@ class EntryDeadline:
 
     @classmethod
     def create(cls, claim=None, caller_epoch=None, caller_perf=None):
-        values = [
-            v for v in (claim_deadline_epoch(claim), caller_epoch) if v is not None
-        ]
+        native_deadline = claim_deadline_epoch(claim)
+        values = [v for v in (native_deadline, caller_epoch) if v is not None]
         if not values:
             return None
         if any(isinstance(v, bool) or not math.isfinite(float(v)) for v in values):
@@ -35,6 +155,13 @@ class EntryDeadline:
         now = time.time()
         # Source wall-clock validity remains the native validator's job.
         perf = time.perf_counter() + max(0.0, epoch - now)
+        if native_deadline is not None and native_deadline > 0:
+            event = claim["snapshot"][0]
+            clock = (event.get("entry_signal_lifetime") or {}).get("clock")
+            if clock is not None:
+                if clock["pid"] != os.getpid():
+                    raise ValueError("entry_signal_lifetime_pid_changed")
+                perf = min(perf, clock["deadline_perf"])
         if caller_perf is not None:
             if isinstance(caller_perf, bool) or not math.isfinite(float(caller_perf)):
                 raise ValueError("entry_machine_input_deadline_invalid")

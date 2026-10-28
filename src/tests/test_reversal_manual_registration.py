@@ -329,3 +329,20 @@ def test_native_machine_registration_emits_compatibility_terminal_without_legacy
         and terminal["staged"]["status"] == "machine_component_prepared"
     )
     assert terminal["report_sha256"] == result["artifact_content_sha256"]
+
+
+@pytest.mark.parametrize("cap", [6.0, 8.0, 12.0])
+def test_selected_lifetime_keeps_first_breach_terminal_after_recovery(cap):
+    from src.engine.scalping.entry_deadline import signal_deadline_epoch
+    bid = bid_for("other_non_fixed", "FIRST_HOLD3")
+    values = hold_rows()
+    policy = dict(schema="entry_signal_lifetime_policy_v1", version="bounded-fixture", max_signal_age_sec=cap)
+    state = R.State(branch_ids=[bid], session_anchor=values[0], generation="a" * 64, lifetime_policy=policy, offline=True)
+    observe(state, values)
+    event = copy.deepcopy(state.ready[-1]["event"])
+    assert signal_deadline_epoch(event) == event["epoch"] + cap
+    observe(state, [row(126, 99.49), row(127, 99.5001)])
+    proof = state.first_invalidations[event["signal_id"]]
+    assert proof["original_deadline"] == signal_deadline_epoch(event)
+    assert all(x["event"]["signal_id"] != event["signal_id"] for x in state.ready)
+    assert proof["branches"][bid]["observation"][3] == 99.49

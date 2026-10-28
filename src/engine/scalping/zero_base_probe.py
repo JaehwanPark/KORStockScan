@@ -1453,11 +1453,12 @@ def run_zero_base_probe(
                     0, native_wait_deadline_epoch - now()
                 )
                 if native_snapshot is not None:
-                    from src.engine.scalping.entry_deadline import EntryDeadline
-
-                    native_budget = EntryDeadline.create(
-                        caller_epoch=native_snapshot[0]["epoch"] + 5
+                    from src.engine.scalping.entry_deadline import (
+                        EntryDeadline,
                     )
+
+                    # Budget projection only; native claim remains independent.
+                    native_budget = EntryDeadline.create({"snapshot": native_snapshot})
                     break
                 remaining = min(
                     native_wait_deadline_epoch - now(),

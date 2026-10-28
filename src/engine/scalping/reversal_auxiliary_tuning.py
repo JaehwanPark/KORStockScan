@@ -1248,6 +1248,15 @@ def auxiliary_report(data_root, day, publication, parent, *, publish_policy=True
                 ac[key]["routes"][route]["payload"],
                 cell["backend"],
                 machine["execution_code_sha256"],
+                **(
+                    {
+                        "lifetime_policy": V.carry_signal_lifetime(
+                            parent, key, route, cell
+                        )
+                    }
+                    if V.SCHEMA == "continuous_reversal_policy_v6"
+                    else {}
+                ),
             )
             if cell["backend"] not in {"union_v5", "union_v6"}:
                 pending.append(

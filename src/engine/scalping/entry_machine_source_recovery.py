@@ -13,6 +13,8 @@ import re
 import threading
 import time
 
+from src.engine.scalping.entry_deadline import signal_deadline_epoch, EntryDeadline
+
 STATE_KEY = "entry_machine_source_recovery"
 _STATUSES = {
     "source_quality_blocked_before_assessment",
@@ -123,10 +125,10 @@ def capture_quote_failure(
             )
         ):
             return {}
-        if _number(deadline_perf) is None:
-            deadline_perf = time.perf_counter() + max(
-                0.0, event["epoch"] + 5 - time.time()
-            )
+        budget = EntryDeadline.create(
+            {"snapshot": [event]}, caller_perf=_number(deadline_perf)
+        )
+        deadline_perf = budget.perf
         return {
             "_entry_source_recovery": dict(
                 schema=QUOTE_SCHEMA,
@@ -358,7 +360,7 @@ def pending_after_failure(stock, decision, *, now, cooldown_sec, stock_code=None
         try:
             claim = captured["claim"]
             event = claim["snapshot"][0]
-            original_deadline = _number(event["epoch"]) + 5
+            original_deadline = signal_deadline_epoch(event)
             perf_deadline = _number(captured.get("deadline_perf"))
             failure_at = _number(captured.get("failed_at"))
             if (
@@ -1027,7 +1029,7 @@ def validate_evaluation_quote_receipt(receipt, event, raw):
             or receipt["transport_epoch"] != event["native_epoch"]
             or not event["epoch"]
             < receipt["original_deadline_epoch"]
-            <= event["epoch"] + 5
+            <= signal_deadline_epoch(event)
             or not event["epoch"]
             <= receipt["failed_at"]
             < receipt["quote_packet_received_epoch"]
