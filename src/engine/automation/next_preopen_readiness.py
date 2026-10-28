@@ -646,6 +646,30 @@ def _source_receipts(
             else {}
         ),
     )
+    if (
+        checklist_snapshot is None
+        and "strict_checklist_generation_stale" in issues
+        and set(issues)
+        <= {
+            "strict_checklist_generation_stale",
+            "strict_generation_changed_during_recheck",
+        }
+    ):
+        # Working tasks can advance after sealing. Authenticate the original
+        # strict document, then recheck every sealed source binding. The caller
+        # still verifies its prepared hashes and full activation/bootstrap.
+        from src.engine.automation.postclose_finalization_generation import (
+            strict_bound_checklist_for_observer,
+        )
+
+        preserved = strict_bound_checklist_for_observer(DATA_DIR.parent, source_date)
+        issues = done_terminal_receipt_issues(
+            controller_path,
+            source_date,
+            started_after_ns=0,
+            generation_only=True,
+            checklist_snapshot=Path(preserved["path"]),
+        )
     if issues:
         raise ValueError("postclose_controller_not_closed:" + ",".join(issues))
     summary_path = (

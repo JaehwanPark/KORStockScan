@@ -984,3 +984,8 @@ code in both explicit origins and altered attestations still fail.
 
 
 The held-position smart SELL successor carries the verified HOLDING fact through all original adapter branches. Its complete native entry-code profile and independent preparation reader bind both changed sources together and retain issued predecessor generations. Missing, dirty, mixed or symlinked members remain invalid; the existing market-close, custody, route, quantity and order guards remain authoritative. Fresh affected report-capability fixtures, native active-parent parity and candidate/selected P5 are required before acceptance. This code repair does not replace original unresolved-terminal evidence. [Review](audits/postclose-root-cause-recovery-review-2026-10-19.md#postclose-monitor-source28-holding-context-repair-2026-10-28).
+
+
+### Prepared source checks after working checklist updates
+
+Next-session preparation can outlive edits to the operating checklist. When the native controller reports only checklist-generation drift, the existing readiness source reader authenticates the strict-bound original through `strict_bound_checklist_for_observer` and rechecks the sealed controller and every source generation against that exact document. Missing, changed or untrusted originals and all other controller/strict defects still fail. This preserves the original completed computation; it issues no new whole-chain PASS. Prepared receipt, selector, policies, activation candidate, auxiliary reader and full bootstrap checks retain their existing owners and requirements. Do not restore the working document or rerun calculations to satisfy a checksum of later task notes.

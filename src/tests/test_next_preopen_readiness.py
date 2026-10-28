@@ -440,6 +440,62 @@ def test_source_receipt_rejects_unclosed_controller_and_changed_policy(
         readiness._source_receipts(source, target)["policy_receipts"][0]["sha256"]
         == policy_sha
     )
+    from src.engine.automation import postclose_finalization_generation as finalization
+
+    snapshot = tmp_path / "original-checklist.md"
+    snapshot.write_text("original strict-bound tasks")
+    visits = []
+
+    def preserved(project, day):
+        assert project == tmp_path.parent and day == source
+        visits.append("original")
+        return {"path": str(snapshot)}
+
+    monkeypatch.setattr(finalization, "strict_bound_checklist_for_observer", preserved)
+    drift = [
+        "strict_checklist_generation_stale",
+        "strict_generation_changed_during_recheck",
+    ]
+
+    def sealed(*args, **kwargs):
+        if kwargs.get("checklist_snapshot") is None:
+            return drift
+        assert kwargs == dict(
+            started_after_ns=0, generation_only=True, checklist_snapshot=snapshot
+        )
+        visits.append("sealed")
+        return []
+
+    monkeypatch.setattr(readiness, "done_terminal_receipt_issues", sealed)
+    for generation_only in (False, True):
+        assert (
+            readiness._source_receipts(source, target, generation_only=generation_only)[
+                "policy_receipts"
+            ][0]["sha256"]
+            == policy_sha
+        )
+    assert visits == ["original", "sealed"] * 2
+    for extra in (
+        "strict_stage_generation_stale:machine",
+        "controller_report_not_done",
+    ):
+        monkeypatch.setattr(
+            readiness, "done_terminal_receipt_issues", lambda *a, **k: drift + [extra]
+        )
+        with pytest.raises(ValueError, match=extra):
+            readiness._source_receipts(source, target)
+    assert visits == ["original", "sealed"] * 2
+    monkeypatch.setattr(readiness, "done_terminal_receipt_issues", sealed)
+    monkeypatch.setattr(
+        finalization,
+        "strict_bound_checklist_for_observer",
+        lambda *a, **k: (_ for _ in ()).throw(
+            ValueError("historical_checklist_snapshot_invalid")
+        ),
+    )
+    with pytest.raises(ValueError, match="historical_checklist_snapshot_invalid"):
+        readiness._source_receipts(source, target)
+    monkeypatch.setattr(finalization, "strict_bound_checklist_for_observer", preserved)
     policy.write_text("{}\n", encoding="utf-8")
     with pytest.raises(ValueError, match="target_policy_receipt_invalid"):
         readiness._source_receipts(source, target)
