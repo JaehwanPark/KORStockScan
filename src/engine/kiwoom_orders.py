@@ -2502,6 +2502,8 @@ def send_smart_sell_order(
     bypass_open_time_block=False,
     dmst_stex_tp=None,
     owner_context=None,
+    *,
+    existing_holding=False,
 ):
     """
      [v14.0] 슬리피지 방어를 위한 스마트 매도 로직 (사유 기반 동적 시장가 전환)
@@ -2529,6 +2531,7 @@ def send_smart_sell_order(
                 bypass_open_time_block=bypass_open_time_block,
                 dmst_stex_tp=dmst_stex_tp,
                 owner_context=owner_context,
+                existing_holding=existing_holding is True,
             )
 
         # 매수 1호가 정보 (bids[0] 이 가장 높은 매수 호가)
@@ -2547,6 +2550,7 @@ def send_smart_sell_order(
             bypass_open_time_block=bypass_open_time_block,
             dmst_stex_tp=dmst_stex_tp,
             owner_context=owner_context,
+            existing_holding=existing_holding is True,
         )
 
     # 2. 매매 성격(reason_type)에 따른 주문 분기
@@ -2565,6 +2569,7 @@ def send_smart_sell_order(
             bypass_open_time_block=bypass_open_time_block,
             dmst_stex_tp=dmst_stex_tp,
             owner_context=owner_context,
+            existing_holding=existing_holding is True,
         )
 
     # 💰 익절(PROFIT): 슬리피지 방어 가동
@@ -2583,6 +2588,7 @@ def send_smart_sell_order(
             bypass_open_time_block=bypass_open_time_block,
             dmst_stex_tp=dmst_stex_tp,
             owner_context=owner_context,
+            existing_holding=existing_holding is True,
         )
 
     # 💰 일반 익절, 타임아웃 (PROFIT, TIMEOUT) : 지정가(00) 우선 시도, 안 되면 최유리지정가(6) (8:2 비율 중 2의 영역)
@@ -2604,6 +2610,7 @@ def send_smart_sell_order(
                 bypass_open_time_block=bypass_open_time_block,
                 dmst_stex_tp=dmst_stex_tp,
                 owner_context=owner_context,
+                existing_holding=existing_holding is True,
             )
 
         else:
@@ -2619,6 +2626,7 @@ def send_smart_sell_order(
                 bypass_open_time_block=bypass_open_time_block,
                 dmst_stex_tp=dmst_stex_tp,
                 owner_context=owner_context,
+                existing_holding=existing_holding is True,
             )
 
 

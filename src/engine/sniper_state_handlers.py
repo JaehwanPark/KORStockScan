@@ -94730,6 +94730,9 @@ def handle_holding_state(
                 "manual_control_exclusion_blocked"
             ):
                 return None
+            # Capture the existing position before the owned submit boundary
+            # changes its state. Unknown/nonholding callers retain the native veto.
+            existing_holding = stock.get("status") == "HOLDING" and buy_qty > 0
             _mutate_stock_state(
                 stock,
                 set_fields={
@@ -94766,6 +94769,7 @@ def handle_holding_state(
                 ws_data=ws_data,
                 reason_type=sell_reason_type,
                 strategy=strategy,
+                existing_holding=existing_holding,
                 bypass_open_time_block=(
                     sell_safety_exit or nxt_aftermarket_early_sell_passthrough
                 ),

@@ -5297,6 +5297,7 @@ def test_holding_state_uses_net_profit_rate_for_sell_decision(monkeypatch):
         ai_engine=None,
     )
 
+    assert sell_calls[0]["existing_holding"] is True
     assert sell_calls
     assert stock["status"] == "SELL_ORDERED"
     assert "-0.13%" in stock["pending_sell_msg"]

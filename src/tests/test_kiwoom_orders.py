@@ -2251,3 +2251,78 @@ def test_inventory_auth_retry_cannot_bypass_full_replacement_token_bucket(
             url, {"api-id": "kt00018", "authorization": "Bearer OLD"}, {}, "kt00018"
         )
     assert len(posts) == 1
+
+
+@pytest.mark.parametrize(
+    "branch", ["empty", "invalid", "loss", "trailing", "deep", "thin"]
+)
+@pytest.mark.parametrize("held", [False, True, "unverified"])
+@pytest.mark.parametrize("closed", [False, True])
+@pytest.mark.parametrize("route", ["KRX", "NXT", "SOR"])
+def test_smart_sell_retains_holding_proof_through_real_terminal_preflight(
+    monkeypatch, branch, held, closed, route
+):
+    from datetime import datetime as RealDateTime
+    from types import SimpleNamespace
+
+    at = (
+        RealDateTime(2026, 10, 28, 20, 0, tzinfo=session_contract.KST)
+        if closed
+        else RealDateTime(2026, 10, 28, 19, 46, tzinfo=session_contract.KST)
+    )
+
+    class Clock(RealDateTime):
+        @classmethod
+        def now(cls, tz=None):
+            return at if tz is not None else at.replace(tzinfo=None)
+
+    monkeypatch.setattr(kiwoom_orders, "datetime", Clock)
+    monkeypatch.setattr(
+        kiwoom_orders, "is_sell_side_open_time_blocked", lambda **kw: False
+    )
+    monkeypatch.setattr(
+        kiwoom_orders, "_reserve_owner_registry_intent", lambda **kw: (None, None, None)
+    )
+    wire = []
+    monkeypatch.setattr(
+        kiwoom_orders,
+        "_post_kiwoom_with_auth_retry",
+        lambda url, headers, payload, api_id, **kw: (
+            wire.append((api_id, dict(payload))) or SimpleNamespace(status_code=200),
+            {"return_code": "0", "ord_no": "TEST_ONLY"},
+        ),
+    )
+    data = {"orderbook": {"bids": [{"price": 30000, "volume": 100}]}}
+    reason = {"loss": "LOSS", "trailing": "TRAILING"}.get(branch, "PROFIT")
+    if branch == "empty":
+        data = {}
+    elif branch == "invalid":
+        data = {"orderbook": {"bids": 42}}
+    elif branch == "thin":
+        data["orderbook"]["bids"][0]["volume"] = 1
+    result = kiwoom_orders.send_smart_sell_order(
+        code="036930",
+        qty=3,
+        token="TEST_ONLY",
+        ws_data=data,
+        reason_type=reason,
+        strategy="SCALPING",
+        dmst_stex_tp=route,
+        owner_context=_main_owner_context("HOLDING_EXIT_SELL"),
+        existing_holding=held,
+    )
+    assert len(wire) == int(held is True and not closed)
+    if wire:
+        assert wire[0][0] == "kt10001"
+        assert wire[0][1]["ord_qty"] == "3"
+        assert wire[0][1]["dmst_stex_tp"] == route
+        assert wire[0][1]["trde_tp"] in {"00", "6"}
+        assert "existing_holding" not in wire[0][1]
+        assert result["ord_no"] == "TEST_ONLY"
+    else:
+        assert result["broker_order_attempted"] is False
+        if not closed:
+            assert result["return_msg"] == "existing_holding_required"
+        from src.engine.sniper_state_handlers import _classify_sell_submit_response
+
+        assert _classify_sell_submit_response(result)["state"] == "local_no_call"
