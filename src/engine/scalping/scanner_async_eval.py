@@ -224,6 +224,11 @@ class FixedWatchGeneration:
 def thaw_scanner_async_value(value: Any) -> Any:
     """Return a private mutable copy for a worker/provider call."""
 
+    # Exact builtins are already immutable and deepcopy returns them unchanged.
+    # Most of a completed AI/claim graph consists of these leaves. Keep the
+    # full copy protocol for subclasses and every mutable/unknown object.
+    if type(value) in (str, int, float, bool, bytes, type(None)):
+        return value
     if isinstance(value, Mapping):
         return {str(key): thaw_scanner_async_value(item) for key, item in value.items()}
     if isinstance(value, tuple):

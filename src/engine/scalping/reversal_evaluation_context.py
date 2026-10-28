@@ -7,6 +7,8 @@ AI and submit callers continue using their independent validation boundaries.
 
 import os
 import time
+import math
+from collections.abc import Mapping
 from pathlib import Path
 from threading import Lock
 
@@ -110,6 +112,23 @@ def validate_submit(data_root, fields, *, now, check_generation=False):
     loaded = checked = None
     active = None
     try:
+        # Native auxiliary validation rejects this exact age as well. Reject
+        # already-expired input before loading policy/registry source bytes;
+        # never reuse a verdict or renew either original clock.
+        event = assessment.get("event")
+        epoch = event.get("epoch") if isinstance(event, Mapping) else None
+        if (
+            assessment.get("policy_version") in {
+                "continuous_reversal_policy_v5", "continuous_reversal_policy_v6"
+            }
+            and assessment.get("action") == "ENTER_NOW"
+            and assessment.get("auxiliary_registry_sha256")
+            and type(epoch) in (int, float)
+            and math.isfinite(epoch)
+            and not 0 <= now - epoch <= 5
+        ):
+            checked = now
+            raise ValueError("auxiliary_decision_generation_changed")
         with N.signature_pass(), ExitStack() as boundary:
             with entry_stage("entry_submit_native_load"):
                 active = boundary.enter_context(
@@ -147,7 +166,7 @@ def validate_submit(data_root, fields, *, now, check_generation=False):
                 None if loaded is None else max(0.0, loaded - started) * 1000
             ),
             elapsed_ms=max(0.0, time.perf_counter() - started) * 1000,
-            original_signal_epoch=(assessment.get("event") or {}).get("epoch"),
+            original_signal_epoch=epoch,
             expected_bundle_sha256=expected,
             current_bundle_sha256=(active or {}).get("bundle_sha256"),
         )

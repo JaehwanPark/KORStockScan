@@ -1205,7 +1205,7 @@ def test_native_predecessor_seal_requires_verified_consumption(
 
 
 @pytest.mark.parametrize("damage", ["phase", "selection", "running", "hold"])
-def test_start_refuses_unprepared_or_changed_generation(driver, monkeypatch, damage, closed):
+def test_start_refuses_unprepared_or_changed_generation(driver, monkeypatch, damage):
     d = driver
     d.acquire_hold()
     d.phase = "drained"

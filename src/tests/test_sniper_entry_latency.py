@@ -3,7 +3,7 @@ import time
 import pytest
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import src.engine.sniper_entry_latency as entry_latency_module
@@ -17,8 +17,67 @@ from src.engine.sniper_entry_latency import (
     clear_signal_reference,
     evaluate_live_buy_entry,
     freeze_signal_reference,
+    submit_signal_reference_scope,
 )
 from src.utils.constants import TRADING_RULES as CONFIG
+
+
+@pytest.mark.parametrize("outcome", [False, True, "exception"])
+def test_submit_reference_scope_retains_in_call_deadline_and_unwinds_observers(outcome):
+    from src.engine.monitoring.entry_attempt_identity import observe_submit_attempt
+    from src.trading.entry.entry_types import LatencyState, LatencyStatus
+    from src.trading.entry.signal_snapshot import build_signal_snapshot
+
+    clock = datetime.fromisoformat("2026-10-27 23:05:48.397882+00:00")
+    stock = {"id": 1, "code": "196170", "operator_veto": True}
+    seen = []
+
+    def finished(stock, code, result):
+        seen.append((stock["entry_signal_time"], result))
+        raise ValueError("observer failure must not retain runtime state")
+
+    @submit_signal_reference_scope
+    @observe_submit_attempt(on_finish=finished)
+    def submit(stock, code):
+        first = freeze_signal_reference(
+            stock, signal_price=10000, strategy_id="SCALPING", signal_time=clock
+        )
+        later = clock + timedelta(milliseconds=1201)
+        repeated = freeze_signal_reference(
+            stock, signal_price=10010, strategy_id="SCALPING", signal_time=later
+        )
+        assert repeated == first
+        result = entry_latency_module._ENTRY_POLICY.evaluate(
+            snapshot=build_signal_snapshot(
+                symbol=code,
+                strategy_id="SCALPING",
+                signal_price=first[0],
+                signal_time=first[1],
+                signal_strength=1.0,
+                planned_qty=1,
+            ),
+            latency_status=LatencyStatus(LatencyState.SAFE, 1, 0, 0, 0, False, 0.0001),
+            latest_price=10000,
+            now=later,
+        )
+        assert result.reason == "signal_deadline_exceeded"
+        assert result.computed_deadline_ms == 1200
+        if outcome == "exception":
+            raise RuntimeError("submit failure")
+        return outcome
+
+    if outcome == "exception":
+        with pytest.raises(RuntimeError, match="submit failure"):
+            submit(stock=stock, code="196170")
+    else:
+        assert submit(stock=stock, code="196170") is outcome
+    assert seen == [
+        (
+            clock,
+            "raised" if outcome == "exception" else "returned_" + str(outcome).lower(),
+        )
+    ]
+    assert stock == {"id": 1, "code": "196170", "operator_veto": True}
 
 
 def test_orderbook_observer_uses_exact_ws_item_and_fails_closed_without_identity(
@@ -10610,3 +10669,121 @@ def test_post_sell_registration_to_native_route_horizons_preserves_unknown_fill_
         for row in logs
     )
     assert candidate["actual_execution_venue_verified"] is (broker == "NXT")
+
+
+def test_new_evaluation_does_not_inherit_previous_submit_clock():
+    from datetime import timedelta
+    from src.trading.entry.entry_types import SignalSnapshot, LatencyStatus, LatencyState
+    old = datetime.fromisoformat("2026-10-27T23:05:48.397882+00:00")
+    admitted = datetime.fromtimestamp(1793142365.3905966, UTC)
+    checked = datetime.fromisoformat("2026-10-28T08:06:05.705316+09:00")
+    stock = dict(id=1, code="196170", status="WATCHING", buy_qty=0,
+                 last_watching_ai_machine_primary_fields={"evaluation_attempt_id": "aims-4b8fe8a7ddfd46362bec"},
+                 last_watching_ai_decision_trace_id="analyze_target:196170:1793142346173:3b76a95a")
+    freeze_signal_reference(stock, signal_price=221500, strategy_id="SCALPING", signal_time=old)
+    state_handlers._set_async_terminal(stock, "auxiliary_binding_submit_recheck")
+    stock["last_watching_ai_machine_primary_fields"] = {"evaluation_attempt_id": "aims-67a3161b72a51d7493f8"}
+    stock["last_watching_ai_decision_trace_id"] = "analyze_target:196170:1793142363651:a7688901"
+    price, clock = freeze_signal_reference(stock, signal_price=221500, strategy_id="SCALPING", signal_time=admitted)
+    assert clock == admitted
+    health = LatencyStatus(LatencyState.SAFE, 146, 0, 0, 0, False, 500 / 221500)
+    signal = SignalSnapshot("196170", "SCALPING", clock, price, 1.0, 1, "BUY")
+    policy = entry_latency_module._ENTRY_POLICY
+    assert policy.config.entry_deadline_ms == 1200
+    assert policy.evaluate(snapshot=signal, latency_status=health, latest_price=221500, now=checked).decision.value == "ALLOW_NORMAL"
+    # The separate original source deadline remains 08:06:07.024626.
+    assert checked.timestamp() < 1793142367.024626
+    assert policy.evaluate(snapshot=signal, latency_status=health, latest_price=221500, now=admitted + timedelta(milliseconds=1201)).reason == "signal_deadline_exceeded"
+    assert freeze_signal_reference(stock, signal_price=230000, strategy_id="SCALPING", signal_time=checked) == (price, clock)
+    clear_signal_reference(stock)
+    assert not any(key.startswith("entry_signal_") for key in stock)
+
+
+@pytest.mark.parametrize("change", ["same", "trace_only", "evaluation_only", "missing", "pending", "partial", "uncertain", "record", "bundle", "in_progress"])
+def test_signal_clock_cannot_renew_same_unknown_or_inflight_attempt(change):
+    from datetime import timedelta
+    start = datetime.now(UTC) - timedelta(seconds=17)
+    stock = dict(id=1, code="196170", status="WATCHING", buy_qty=0,
+                 last_watching_ai_machine_primary_fields={"evaluation_attempt_id": "first"},
+                 last_watching_ai_decision_trace_id="trace-first")
+    freeze_signal_reference(stock, signal_price=221500, strategy_id="SCALPING", signal_time=start)
+    if change != "in_progress":
+        state_handlers._set_async_terminal(stock, "auxiliary_binding_submit_recheck")
+    if change != "same":
+        stock["last_watching_ai_machine_primary_fields"] = {"evaluation_attempt_id": "second"}
+        stock["last_watching_ai_decision_trace_id"] = "trace-second"
+    if change == "trace_only": stock["last_watching_ai_machine_primary_fields"]["evaluation_attempt_id"] = "first"
+    if change == "evaluation_only": stock["last_watching_ai_decision_trace_id"] = "trace-first"
+    if change == "missing": stock.pop("last_watching_ai_decision_trace_id")
+    if change == "pending": stock["status"] = "BUY_ORDERED"
+    if change == "partial": stock["buy_qty"] = 1
+    if change == "uncertain": stock["_async_entry_submission_identity"] = {"evaluation_attempt_id": "first"}
+    if change == "record": stock["id"] = 2
+    if change == "bundle": stock["initial_quantity_bundle"] = {"phase": "planned"}
+    assert freeze_signal_reference(stock, signal_price=222000, strategy_id="SCALPING") == (221500, start)
+
+
+def test_projected_latency_context_keeps_reference_on_original_stock(monkeypatch):
+    stock = dict(id=1, code="196170", status="WATCHING", buy_qty=0,
+                 last_watching_ai_machine_primary_fields={"evaluation_attempt_id": "new"},
+                 last_watching_ai_decision_trace_id="new-trace")
+    projection = dict(stock)
+    evaluate_live_buy_entry(stock=projection, reference_stock=stock, code="196170",
+                           ws_data={"curr": 221500}, strategy_id="SCALPING",
+                           planned_qty=1, signal_price=221500)
+    assert isinstance(stock["entry_signal_time"], datetime)
+    assert "entry_signal_time" not in projection
+    assert stock["entry_signal_owner"][2:] == ("new", "new-trace")
+
+
+@pytest.mark.parametrize("fields", [None, [], "invalid", {"evaluation_attempt_id": None}])
+def test_terminal_clock_does_not_crash_on_invalid_machine_source(fields):
+    stock = {"last_watching_ai_machine_primary_fields": fields}
+    state_handlers._set_async_terminal(stock, "source_invalid")
+    assert "entry_signal_terminal_owner" not in stock
+
+
+@pytest.mark.parametrize("guard", [{"async_entry_broker_attempts": 1}, {"async_entry_broker_accepted": True}])
+def test_terminal_does_not_retire_clock_after_broker_boundary(guard):
+    stock = dict(id=1, code="196170", status="WATCHING", buy_qty=0,
+                 last_watching_ai_machine_primary_fields={"evaluation_attempt_id": "old"},
+                 last_watching_ai_decision_trace_id="trace-old", _async_consumption_guard=guard)
+    freeze_signal_reference(stock, signal_price=221500, strategy_id="SCALPING")
+    state_handlers._set_async_terminal(stock, "order_bundle_failed")
+    assert "entry_signal_terminal_owner" not in stock
+
+
+@pytest.mark.parametrize("outcome", ["not_sent", "exception", "inflight", "unknown"])
+def test_integrated_submit_scope_cannot_renew_native_clock(outcome):
+    start = datetime.fromisoformat("2026-10-28T08:05:48.397882+09:00")
+    stock = dict(id=1, code="196170", status="WATCHING", buy_qty=0,
+                 last_watching_ai_machine_primary_fields={"evaluation_attempt_id": "first"},
+                 last_watching_ai_decision_trace_id="trace-first")
+    if outcome == "unknown":
+        stock["last_watching_ai_machine_primary_fields"] = None
+        stock["last_watching_ai_decision_trace_id"] = None
+    original = freeze_signal_reference(stock, signal_price=221500,
+                                      strategy_id="SCALPING", signal_time=start)
+
+    @submit_signal_reference_scope
+    def submit(stock):
+        if outcome == "exception":
+            raise RuntimeError("failed before terminal")
+        if outcome == "inflight":
+            stock["_async_consumption_guard"] = {"async_entry_broker_attempts": 1}
+        state_handlers._set_async_terminal(stock, "order_bundle_failed")
+        return False
+
+    if outcome == "exception":
+        with pytest.raises(RuntimeError, match="failed before terminal"):
+            submit(stock)
+    else:
+        assert submit(stock) is False
+    assert freeze_signal_reference(stock, signal_price=222000,
+                                   strategy_id="SCALPING") == original
+    stock["last_watching_ai_machine_primary_fields"] = {"evaluation_attempt_id": "second"}
+    stock["last_watching_ai_decision_trace_id"] = "trace-second"
+    successor = start + timedelta(seconds=17)
+    result = freeze_signal_reference(stock, signal_price=222000,
+                                     strategy_id="SCALPING", signal_time=successor)
+    assert result == ((222000, successor) if outcome == "not_sent" else original)

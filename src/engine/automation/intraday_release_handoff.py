@@ -12859,6 +12859,29 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_CLOSED_NATIVE_PREPARATION_HASHES.items()
 }}
 
+# Exact signal reference lifetime over the complete closed PREOPEN and holding profile.
+REVIEWED_FINAL_SIGNAL_REFERENCE_HASHES = {'src/engine/sniper_entry_latency.py': 'a86968300bd117acf5f8cf8168eb735264357b7dfa2385f607ba8dd5919b9e9d', 'src/engine/sniper_state_handlers.py': '0bb6cc87e8acead7c0161bfe3d4c3ed24aa92a440a9647fbb61b69ba33bf02dd', 'src/engine/scalping/reversal_evaluation_context.py': 'e394bbf86455185ac7081d3b419f041141766b4f8566791dcd3309b75a2bf4c9', 'src/engine/scalping/scanner_async_eval.py': '5830d0e031cb649d3a37b40aff61ea6e7d7548f16519f3d2e13d71acf71b3a95', 'src/engine/infrastructure/startup_validation_code_context.py': '8b53de5b151b4fa8484716e748fc076e7fe0048ac04fb2fbf05d933e73f4adda'}
+REVIEWED_FINAL_SIGNAL_REFERENCE_ORIGINS = {'src/engine/sniper_entry_latency.py': '343ce1cb5a84b4b30d039942da42d4618cea4bc6f8350d0c7c22966552eda289', 'src/engine/sniper_state_handlers.py': '0c8c1874583f1ff23993b23e3187289d205c155bc257b3cb89e4f839a26a4d2c', 'src/engine/scalping/reversal_evaluation_context.py': '5eabeecc8cc043b42e9e7df0a4fe51733736cfe2d8c3e94267ad95f765856a63', 'src/engine/scalping/scanner_async_eval.py': '376aef38820f7e2f2a6869b65822e1072eb0abe426836644c3ee9d7357b8bac7', 'src/engine/infrastructure/startup_validation_code_context.py': '9cb12a16dd2fa78ba4e99b9f19ae7036ed1016efed65f0bb436c3e74bd48065c'}
+REVIEWED_FINAL_SIGNAL_REFERENCE_PROFILE = {**REVIEWED_CLOSED_NATIVE_PREPARATION_PROFILE, **REVIEWED_FINAL_SIGNAL_REFERENCE_HASHES}
+REVIEWED_FINAL_SIGNAL_REFERENCE_VARIANTS = {
+    (key[0], REVIEWED_FINAL_SIGNAL_REFERENCE_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/sniper_entry_latency.py",
+        "selector_sha256": REVIEWED_FINAL_SIGNAL_REFERENCE_HASHES["src/engine/sniper_entry_latency.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_FINAL_SIGNAL_REFERENCE_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_FINAL_SIGNAL_REFERENCE_HASHES.get(os.path.normpath(name), sha) for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_CLOSED_NATIVE_PREPARATION_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current) for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_FINAL_SIGNAL_REFERENCE_ORIGINS[name]})
+    for name, current in REVIEWED_FINAL_SIGNAL_REFERENCE_HASHES.items()
+}}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -13746,6 +13769,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_CLOSED_NATIVE_PREPARATION_PROFILE
         prepared_variants = REVIEWED_CLOSED_NATIVE_PREPARATION_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/sniper_entry_latency.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_FINAL_SIGNAL_REFERENCE_HASHES["src/engine/sniper_entry_latency.py"]
+    ):
+        prepared_hashes = REVIEWED_FINAL_SIGNAL_REFERENCE_PROFILE
+        prepared_variants = REVIEWED_FINAL_SIGNAL_REFERENCE_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

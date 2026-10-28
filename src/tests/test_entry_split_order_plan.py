@@ -7572,7 +7572,16 @@ def test_verified_completed_receipt_survives_capital_join_gap_in_producer():
 
 
 @pytest.mark.parametrize(
-    "mode", ["deferred", "admission_deferred", "probe", "invalid_sizing", "opening"]
+    "mode",
+    [
+        "deferred",
+        "admission_deferred",
+        "probe",
+        "invalid_sizing",
+        "opening",
+        "auxiliary_expired",
+        "revision_changed",
+    ],
 )
 def test_live_submit_split_branch_binds_or_releases_reservation(
     monkeypatch, tmp_path, mode
@@ -7582,6 +7591,10 @@ def test_live_submit_split_branch_binds_or_releases_reservation(
     from pathlib import Path
     from src.engine import sniper_state_handlers as handlers
     from src.engine.scalping import strategy_owner_replay
+    from src.engine.scalping import (
+        reversal_evaluation_context,
+        reversal_auxiliary_intraday,
+    )
 
     monkeypatch.setattr(split_plan, "PROBE_RUNTIME_STATE_PATH", tmp_path / "probe.json")
     # The native optional source producer returns None on capture failure;
@@ -7608,8 +7621,12 @@ def test_live_submit_split_branch_binds_or_releases_reservation(
         if isinstance(function.body[i], ast.Assign)
         and ast.unparse(function.body[i].targets[0]) == "msg"
     )
-    branch = ast.parse("def run(planned_orders):\n    return True\n").body[0]
+    branch = ast.parse("def run(stock, code, planned_orders):\n    return True\n").body[
+        0
+    ]
     branch.body = function.body[start:end] + branch.body
+    # Preserve the real caller's lifecycle scopes around this bounded branch.
+    branch.decorator_list = function.decorator_list
     module = ast.fix_missing_locations(ast.Module(body=[branch], type_ignores=[]))
     fields = {
         "entry_split_order_probe_first_required": True,
@@ -7639,6 +7656,47 @@ def test_live_submit_split_branch_binds_or_releases_reservation(
         "entry_signal_time": datetime(2026, 7, 20, tzinfo=timezone(timedelta(hours=9))),
         "entry_signal_strategy_id": "SCALPING",
     }
+    if mode == "auxiliary_expired":
+        stock["entry_signal_time"] = datetime.fromisoformat(
+            "2026-10-27 23:05:48.397882+00:00"
+        )
+        stock["entry_signal_price"] = 221500
+        stock["last_watching_ai_machine_primary_fields"] = {
+            "evaluation_attempt_id": "aims-4b8fe8a7ddfd46362bec",
+            "entry_mechanistic_policy_decision": {
+                "policy_version": "continuous_reversal_policy_v6",
+                "action": "ENTER_NOW",
+                "event": {"epoch": 1793142343.324124},
+                "auxiliary_registry_sha256": "registry",
+                "auxiliary_binding": "binding",
+                "auxiliary_base_bundle_sha256": "bundle",
+                "auxiliary_overlay_sha256": None,
+            },
+        }
+        monkeypatch.setattr(
+            reversal_auxiliary_intraday,
+            "selected_definition",
+            lambda *a: ({"registry_sha256": "registry"}, None),
+        )
+        monkeypatch.setattr(
+            reversal_auxiliary_intraday.G, "binding", lambda *a: "binding"
+        )
+
+        def original_deadline_check(data, fields, **kwargs):
+            return reversal_auxiliary_intraday.validate_decision(
+                data,
+                {
+                    "continuous_reversal_assessment": fields[
+                        "entry_mechanistic_policy_decision"
+                    ]
+                },
+                {"bundle_sha256": "bundle"},
+                now=1793142348.5568068,
+            )
+
+        monkeypatch.setattr(
+            reversal_evaluation_context, "validate_submit", original_deadline_check
+        )
     env = {
         **vars(handlers),
         "stock": stock,
@@ -7660,6 +7718,7 @@ def test_live_submit_split_branch_binds_or_releases_reservation(
         "microstructure_submit_log_fields": {},
         "submit_revalidation_fields": {},
         "entry_ai_submit_authority": {},
+        "native_original": None,
         "requested_qty": 5,
         "entry_mode": "normal",
         "wait_probe_required": False,
@@ -7676,12 +7735,22 @@ def test_live_submit_split_branch_binds_or_releases_reservation(
             {"entry_execution_sizing_valid": mode != "invalid_sizing"},
         ),
         "clear_signal_reference": handlers.clear_signal_reference,
+        "_observe_entry_submit_finished": lambda *a: None,
+        "_machine_submit_revision_is_current": lambda *a: mode != "revision_changed",
         "_log_entry_pipeline": lambda stock, code, stage, **kw: calls.append(
             (stage, kw)
         ),
     }
     exec(compile(module, "<live-pre-broker-branch>", "exec"), env)
-    assert env["run"]([probe]) is (mode in {"probe", "opening"})
+    assert env["run"](
+        stock, "196170" if mode == "auxiliary_expired" else "000001", [probe]
+    ) is (mode in {"probe", "opening"})
+    if mode == "auxiliary_expired":
+        assert stock["entry_signal_time"] == datetime.fromisoformat(
+            "2026-10-27 23:05:48.397882+00:00"
+        )
+    else:
+        assert stock.get("entry_signal_time") is None
     stages = [stage for stage, _ in calls]
     split_events = [
         (stage, fields)
@@ -7695,7 +7764,25 @@ def test_live_submit_split_branch_binds_or_releases_reservation(
             mode in {"deferred", "admission_deferred"}
         )
     state = json.loads((tmp_path / "probe.json").read_text())["bundles"]["new-plan"]
-    if mode == "probe":
+    if mode in {"auxiliary_expired", "revision_changed"}:
+        assert stages == [
+            (
+                "auxiliary_binding_submit_recheck"
+                if mode == "auxiliary_expired"
+                else "machine_observation_revision_recheck"
+            )
+        ]
+        assert calls[-1][1]["actual_order_submitted"] is False
+        assert calls[-1][1]["broker_order_forbidden"] is True
+        if mode == "auxiliary_expired":
+            assert calls[-1][1]["reason"] == "auxiliary_decision_generation_changed"
+            assert (
+                stock["last_watching_ai_machine_primary_fields"][
+                    "entry_mechanistic_policy_decision"
+                ]["event"]["epoch"]
+                == 1793142343.324124
+            )
+    elif mode == "probe":
         assert stock["entry_split_probe_bundle_id"] == "new-plan"
         assert stock["entry_split_probe_phase"] == state["phase"] == "probe_submitting"
         assert (

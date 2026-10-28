@@ -1489,3 +1489,76 @@ def test_digest_read_bytes_and_concurrent_policy_spans_are_call_local(
     )
     assert len({r["call_id"] for r in rows}) == 2
     assert R._POLICY_CALL.get() is None
+
+
+@pytest.mark.parametrize("age", [5.001, -0.001])
+def test_expired_or_future_native_submit_never_loads_sources(monkeypatch, age):
+    from src.engine.scalping import reversal_evaluation_context as E
+    fields = {"entry_mechanistic_policy_decision": {
+        "auxiliary_registry_sha256": "b" * 64,
+        "policy_version": "continuous_reversal_policy_v6", "action": "ENTER_NOW",
+        "event": {"epoch": 100.0 - age}}}
+    monkeypatch.setattr(E.N, "verified_evaluation", lambda **kw: pytest.fail("expired source read"))
+    with pytest.raises(ValueError, match="auxiliary_decision_generation_changed") as failure:
+        E.validate_submit("unused", fields, now=100.0)
+    assert failure.value.entry_submit_revalidation["native_load_ms"] is None
+    assert failure.value.entry_submit_revalidation["checked_epoch"] == 100.0
+
+
+def test_completed_result_thaw_preserves_isolation_and_custom_copy_protocol():
+    from src.engine.scalping.scanner_async_eval import thaw_scanner_async_value
+    from types import MappingProxyType
+    class Custom(str):
+        def __deepcopy__(self, memo): return Custom("copied")
+    source = MappingProxyType({"rows": (MappingProxyType({"price": 221500, "value": Custom("original")}),), "bytes": b"proof"})
+    result = thaw_scanner_async_value(source)
+    assert result == {"rows": [{"price": 221500, "value": "copied"}], "bytes": b"proof"}
+    result["rows"][0]["price"] = 1
+    assert source["rows"][0]["price"] == 221500
+
+
+@pytest.mark.parametrize("expired", [False, True])
+def test_actual_submit_caller_checks_original_deadline_before_funds(monkeypatch, expired):
+    from src.engine import sniper_state_handlers as H
+    from src.tests.test_fixed_watch_submit_source_repair import fixed
+    stock, fields = fixed()
+    stock.update(name="TEST", strategy="SCALPING", status="WATCHING", buy_qty=0,
+                 last_watching_ai_machine_primary_fields=fields,
+                 last_watching_ai_decision_trace_id="trace")
+    stock["_machine_observation_revision"] = dict(digest="a" * 64, key=[
+        stock["watch_admission_id"], fields["evaluation_attempt_id"], "403870",
+        fields["effective_venue"], fields["market_session_bucket"], "b" * 64, os.getpid()])
+    deadline = dict(evaluation_attempt_id=fields["evaluation_attempt_id"], ai_decision_trace_id="trace",
+                    deadline_epoch=time.time() + (-1 if expired else 10),
+                    deadline_perf=time.perf_counter() + (-1 if expired else 10))
+    stock["_async_entry_decision_deadline"] = dict(deadline)
+    monkeypatch.setattr(H, "_log_entry_pipeline", lambda *a, **k: None)
+    class FundsReached(Exception): pass
+    def funds(*args): raise FundsReached()
+    monkeypatch.setattr(H.kiwoom_orders, "get_deposit", funds)
+    runtime = dict(strategy="SCALPING", ratio=.1, curr_price=10000, liquidity_value=10**9,
+                   msg="", now_ts=time.time(), cooldowns={}, alerted_stocks=set(),
+                   machine_primary_entry_provenance=fields)
+    if expired:
+        assert H._submit_watching_triggered_entry(stock, "403870", {"curr": 10000}, 1, runtime) is False
+    else:
+        with pytest.raises(FundsReached):
+            H._submit_watching_triggered_entry(stock, "403870", {"curr": 10000}, 1, runtime)
+    assert stock["_async_entry_decision_deadline"] == deadline
+
+
+@pytest.mark.parametrize("event", [None, [], "invalid", {}, {"epoch": float("nan")}, {"epoch": True}])
+def test_submit_clock_shortcut_cannot_accept_invalid_source(monkeypatch, event):
+    from src.engine.scalping import reversal_evaluation_context as E
+    calls = []
+    @contextmanager
+    def invalid(**kw):
+        calls.append("native_source_validation")
+        raise ValueError("native_source_invalid")
+        yield
+    monkeypatch.setattr(E.N, "verified_evaluation", invalid)
+    with pytest.raises(ValueError, match="native_source_invalid"):
+        E.validate_submit("unused", {"entry_mechanistic_policy_decision": {
+            "auxiliary_registry_sha256": "b" * 64, "policy_version": "continuous_reversal_policy_v6",
+            "action": "ENTER_NOW", "event": event}}, now=100.0)
+    assert calls == ["native_source_validation"]

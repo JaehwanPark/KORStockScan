@@ -227,8 +227,10 @@ from src.engine.sniper_scale_in_utils import record_add_history_event
 from src.engine.trade_pause_control import is_buy_side_paused, get_pause_state_label
 from src.engine.sniper_entry_latency import (
     clear_signal_reference,
+    finish_signal_reference,
     evaluate_live_buy_entry,
     resolve_scalping_entry_price,
+    submit_signal_reference_scope,
 )
 from src.engine.sniper_entry_state import ENTRY_LOCK, move_orders_to_terminal
 from src.engine.sniper_strength_momentum import evaluate_scalping_strength_momentum
@@ -64426,6 +64428,16 @@ def _set_async_terminal(stock, reason, **facts):
     """Direct return-site facts, never the last arbitrary diagnostic message."""
     record_submit_attempt_terminal(stock, reason)
     guard = stock.get("_async_consumption_guard") if isinstance(stock, dict) else None
+    if (
+        isinstance(stock, dict)
+        and stock.get("entry_signal_owner")
+        and (guard is None or isinstance(guard, dict))
+        and not (guard or {}).get("async_entry_broker_attempts")
+        and not (guard or {}).get("async_entry_broker_accepted")
+        and not _has_open_pending_entry_orders(stock)
+        and not _already_holding_entry_position(stock)
+    ):
+        finish_signal_reference(stock)
     if isinstance(guard, dict):
         guard.setdefault("reason", str(reason))
         guard.update(facts)
@@ -65210,7 +65222,7 @@ def _resolve_scanner_async_entry_ai(
             result.ai_payload.get("_entry_observation_revision") or {}
         )
         if isinstance(revision, dict) and revision:
-            stock["_machine_observation_revision"] = thaw_scanner_async_value(revision)
+            stock["_machine_observation_revision"] = revision
         from src.engine.monitoring.runtime_performance import observe
 
         observe("main_commit", time.perf_counter() - commit_started)
@@ -70068,6 +70080,7 @@ def observe_pre_submit_delay_quote(stock, code, ws_data, *, now_ts=None):
             observations.advance(code, state)
 
 
+@submit_signal_reference_scope
 @probe_submission_scope()
 @observe_submit_attempt(on_finish=_observe_entry_submit_finished)
 def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
@@ -70269,7 +70282,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
     )
     if OPENING_ROTATION_RETIRED and opening_rotation_active:
-        clear_signal_reference(stock)
         _mutate_stock_state(
             stock,
             set_fields={
@@ -70386,7 +70398,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         runtime=runtime,
     )
     if upper_limit_block.get("blocked"):
-        clear_signal_reference(stock)
         _log_entry_pipeline(
             stock,
             code,
@@ -70416,6 +70427,13 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         _set_async_terminal(stock, "blocked_no_admin")
         return False
 
+    # Do not spend the original expired evaluation on account/sizing I/O.
+    # The existing later native and physical-send checks remain independent.
+    if strategy == "SCALPING" and _async_entry_deadline_expired(
+        stock, phase="before_funds_preparation"
+    ):
+        _set_async_terminal(stock, "result_deadline_expired")
+        return False
     deposit = kiwoom_orders.get_deposit(KIWOOM_TOKEN)
     deposit_meta = kiwoom_orders.get_last_deposit_meta()
     budget_context = (
@@ -70784,7 +70802,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                         _safe_float(cooldowns.get(code), 0.0), now_ts + remaining
                     )
                     alerted_stocks.discard(code)
-                clear_signal_reference(stock)
                 log_info(
                     f"[SCALP_REENTRY_GUARD_BLOCK] {stock.get('name')}({code}) "
                     f"reason={scalp_reentry_guard.get('reason')} remaining={remaining}s"
@@ -70876,7 +70893,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             with ENTRY_LOCK:
                 cooldowns[code] = now_ts + remaining
                 alerted_stocks.discard(code)
-            clear_signal_reference(stock)
             log_info(
                 f"[SWING_REENTRY_GUARD_BLOCK] {stock.get('name')}({code}) "
                 f"reason={guard_decision.get('reason')} remaining={remaining}s"
@@ -71049,6 +71065,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
     latency_gate = evaluate_live_buy_entry(
         stock=_rising_missed_tp1_latency_context_stock(stock),
+        reference_stock=stock,
         code=code,
         ws_data=ws_data,
         strategy_id=strategy,
@@ -71311,7 +71328,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             f"ws_age_ms={latency_gate.get('ws_age_ms')} ws_jitter_ms={latency_gate.get('ws_jitter_ms')} "
             f"spread_ratio={latency_gate.get('spread_ratio')} quote_stale={latency_gate.get('quote_stale')}"
         )
-        clear_signal_reference(stock)
         _log_entry_pipeline(
             stock,
             code,
@@ -71715,7 +71731,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                     "rising_missed_normal_buy_bridge_at",
                 ],
             )
-            clear_signal_reference(stock)
             block_fields = {
                 key: value
                 for key, value in latency_gate.items()
@@ -71771,7 +71786,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             _set_async_terminal(stock, "entry_mechanistic_price_contract_block")
             return False
     elif real_entry_panic_gap_subject and not planned_orders and requested_qty > 0:
-        clear_signal_reference(stock)
         _log_entry_pipeline(
             stock,
             code,
@@ -71876,7 +71890,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             f"[PRE_SUBMIT_MICRO_UNAVAILABLE_BLOCK] {stock.get('name')}({code}) "
             f"reason={pre_submit_micro_unavailable_guard.get('pre_submit_micro_unavailable_reason')}"
         )
-        clear_signal_reference(stock)
         _log_entry_pipeline(
             stock,
             code,
@@ -72009,7 +72022,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 or "-",
             },
         )
-        clear_signal_reference(stock)
         _log_entry_pipeline(
             stock,
             code,
@@ -72153,7 +72165,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "target_buy_price",
             ],
         )
-        clear_signal_reference(stock)
         _log_entry_pipeline(
             stock,
             code,
@@ -72251,7 +72262,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "target_buy_price",
             ],
         )
-        clear_signal_reference(stock)
         _log_entry_pipeline(
             stock,
             code,
@@ -72624,7 +72634,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             f"reason=observed_mark_gap_unresolved "
             f"gap_bps={submit_revalidation_fields.get('observed_mark_gap_bps')}"
         )
-        clear_signal_reference(stock)
         _log_entry_pipeline(
             stock,
             code,
@@ -72666,7 +72675,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             f"[ENTRY_SUBMIT_REVALIDATION_BLOCK] {stock.get('name')}({code}) "
             f"lifecycle=passive_probe warning={submit_revalidation_fields.get('entry_submit_revalidation_warning')}"
         )
-        clear_signal_reference(stock)
         _log_entry_pipeline(
             stock,
             code,
@@ -72709,7 +72717,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             f"lifecycle=standard latency=CAUTION overbought=pullback_observed "
             f"warning={submit_revalidation_fields.get('entry_submit_revalidation_warning')}"
         )
-        clear_signal_reference(stock)
         _log_entry_pipeline(
             stock,
             code,
@@ -72750,7 +72757,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             f"[ENTRY_SUBMIT_REVALIDATION_BLOCK] {stock.get('name')}({code}) "
             f"lifecycle=standard warning={submit_revalidation_fields.get('entry_submit_revalidation_warning')}"
         )
-        clear_signal_reference(stock)
         _log_entry_pipeline(
             stock,
             code,
@@ -72832,7 +72838,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             f"ma5={caution_stale_negative_micro_block.get('caution_stale_negative_micro_curr_vs_ma5_bp')} "
             f"ofi={caution_stale_negative_micro_block.get('caution_stale_negative_micro_ofi_norm')}"
         )
-        clear_signal_reference(stock)
         block_log_fields = _without_entry_pipeline_fields(
             _merge_entry_pipeline_field_groups(
                 real_pre_submit_guard_fields,
@@ -72908,7 +72913,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "rising_missed_normal_buy_bridge_at",
             ],
         )
-        clear_signal_reference(stock)
         _log_entry_pipeline(
             stock,
             code,
@@ -73144,7 +73148,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "rising_missed_normal_buy_bridge_at",
             ],
         )
-        clear_signal_reference(stock)
         entry_ai_authority_block_fields = _merge_entry_pipeline_field_groups(
             real_pre_submit_guard_fields,
             submit_revalidation_fields,
@@ -73244,7 +73247,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "rising_missed_normal_buy_bridge_at",
             ],
         )
-        clear_signal_reference(stock)
         block_fields = _merge_entry_pipeline_field_groups(
             real_pre_submit_guard_fields,
             submit_revalidation_fields,
@@ -73325,7 +73327,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 "rising_missed_normal_buy_bridge_at",
             ],
         )
-        clear_signal_reference(stock)
         block_fields = _merge_entry_pipeline_field_groups(
             real_pre_submit_guard_fields,
             submit_revalidation_fields,
@@ -73365,7 +73366,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             f"[TRADING_PAUSED_BLOCK] buy order blocked "
             f"{stock.get('name')}({code}) strategy={strategy} state={get_pause_state_label()}"
         )
-        clear_signal_reference(stock)
         _log_entry_pipeline(stock, code, "blocked_pause", strategy=strategy)
         if _is_swing_strategy(strategy):
             maybe_start_swing_intraday_probe(
@@ -73461,7 +73461,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 f"[PRE_SUBMIT_LIQUIDITY_GUARD_BLOCK] {stock.get('name')}({code}) "
                 f"liquidity={int(liquidity_value)} min={min_liquidity}"
             )
-            clear_signal_reference(stock)
         if greenfield_active or not liquidity_relief_decision.get("allowed"):
             liquidity_guard_fields = _merge_entry_pipeline_field_groups(
                 real_pre_submit_guard_fields,
@@ -73549,7 +73548,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 f"[PRE_SUBMIT_OVERBOUGHT_PULLBACK_GUARD_BLOCK] {stock.get('name')}({code}) "
                 f"state={overbought_context.get('risk_state')} bucket={overbought_context.get('risk_bucket')}"
             )
-            clear_signal_reference(stock)
         _log_entry_pipeline(
             stock,
             code,
@@ -73693,7 +73691,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             f"spread_ticks={weak_pullback_block_verdict.get('weak_pullback_entry_block_spread_ticks')} "
             f"micro_pos={weak_pullback_block_verdict.get('weak_pullback_entry_block_positive_signal_count')}"
         )
-        clear_signal_reference(stock)
         _log_entry_pipeline(
             stock,
             code,
@@ -73999,7 +73996,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             **final_price_sizing_fields,
         )
         if requested_qty <= 0:
-            clear_signal_reference(stock)
             final_zero_stage = (
                 "opening_rotation_one_share_pre_submit_block"
                 if opening_rotation_active
@@ -74091,7 +74087,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 )
             )
             if real_buy_qty < 1 or best_bid_at_submit <= 0 or opening_freshness_block:
-                clear_signal_reference(stock)
                 _log_entry_pipeline(
                     stock,
                     code,
@@ -74177,7 +74172,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             strategy=strategy,
         )
         if entry_greenfield_decision.active and not entry_greenfield_decision.allowed:
-            clear_signal_reference(stock)
             _log_entry_pipeline(
                 stock,
                 code,
@@ -74228,7 +74222,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             strategy=strategy,
         )
         if submit_greenfield_decision.active and not submit_greenfield_decision.allowed:
-            clear_signal_reference(stock)
             _log_entry_pipeline(
                 stock,
                 code,
@@ -74967,7 +74960,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 str(entry_split_fields.get("entry_split_order_probe_bundle_id") or ""),
                 reason="atomic_entry_execution_sizing_contract_invalid",
             )
-            clear_signal_reference(stock)
             _log_entry_pipeline(
                 stock,
                 code,
@@ -75104,7 +75096,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             and not entry_split_fields.get("entry_split_order_probe_first_applied")
         )
         if wait_probe_contract_blocked:
-            clear_signal_reference(stock)
             _log_entry_pipeline(
                 stock,
                 code,
@@ -75246,7 +75237,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             # This attempt cannot submit. A later scanner pass must qualify a
             # new signal instead of resuming the old arm past its 1.2 s clock.
             _clear_entry_arm(stock)
-            clear_signal_reference(stock)
             _set_async_terminal(stock, "entry_split_probe_first_deferred")
             return False
         if (
@@ -77230,7 +77220,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             log_info(f"⛔ [{stock['name']}] 매수 주문 미제출 (브로커 호출 전 차단)")
         else:
             log_info(f"❌ [{stock['name']}] 매수 주문 전송 실패 (성공 주문 없음)")
-        clear_signal_reference(stock)
         _log_entry_pipeline(
             stock,
             code,
@@ -77324,7 +77313,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 swing_entry_micro_fields,
             ),
         )
-        clear_signal_reference(stock)
         _set_async_terminal(stock, "swing_sim_order_bundle_assumed_filled")
         return False
 
@@ -77622,7 +77610,6 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     except Exception as e:
         log_error(f"🚨 [DB 에러] {stock['name']} BUY_ORDERED 장부 업데이트 실패: {e}")
 
-    clear_signal_reference(stock)
     _set_async_terminal(stock, "order_bundle_submitted")
     return False
 

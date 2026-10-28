@@ -153,6 +153,89 @@ def test_submit_caller_stops_with_exact_binding_failure_before_other_guards(
     assert events[0][1]["actual_order_submitted"] is False
 
 
+@pytest.mark.parametrize("terminal_raises", [False, True])
+def test_submit_exit_without_native_retirement_cannot_renew_alteogen_clock(
+    monkeypatch, terminal_raises
+):
+    from src.engine.sniper_entry_latency import freeze_signal_reference
+    from src.trading.config.entry_config import EntryConfig
+    from src.trading.entry.entry_policy import EntryPolicy
+    from src.trading.entry.entry_types import LatencyState, LatencyStatus
+    from src.trading.entry.signal_snapshot import build_signal_snapshot
+
+    # Original native clocks, including the UTC offset recorded by the producer.
+    first_clock = datetime.fromisoformat("2026-10-27 23:05:48.397882+00:00")
+    second_clock = datetime.fromisoformat("2026-10-27 23:06:05.700148+00:00")
+    stock, receipt = fixed()
+    stock["code"] = "196170"
+    stock["last_watching_ai_machine_primary_fields"] = {
+        "evaluation_attempt_id": "aims-67a3161b72a51d7493f8",
+        "entry_mechanistic_policy_decision": {
+            "event": {"epoch": 1793142362.024626},
+        },
+    }
+    native_signal = deepcopy(stock["last_watching_ai_machine_primary_fields"])
+    freeze_signal_reference(
+        stock, signal_price=221500, strategy_id="SCALPING", signal_time=first_clock
+    )
+    safe = LatencyStatus(LatencyState.SAFE, 10, 0, 0, 0, False, 0.0001)
+    policy = EntryPolicy(EntryConfig())
+
+    def verdict(clock):
+        return policy.evaluate(
+            snapshot=build_signal_snapshot(
+                symbol="196170",
+                strategy_id="SCALPING",
+                signal_price=221500,
+                signal_strength=1.0,
+                planned_qty=1,
+                signal_time=clock,
+            ),
+            latency_status=safe,
+            latest_price=221500,
+            now=second_clock,
+        )
+
+    assert verdict(first_clock).reason == "signal_deadline_exceeded"
+    assert verdict(first_clock).computed_deadline_ms == 1200
+    assert (
+        0
+        < second_clock.timestamp()
+        - native_signal["entry_mechanistic_policy_decision"]["event"]["epoch"]
+        < 5
+    )
+    monkeypatch.setattr(H, "_log_entry_pipeline", lambda *a, **k: None)
+
+    def terminal(*args, **kwargs):
+        if terminal_raises:
+            raise RuntimeError("terminal writer unavailable")
+
+    monkeypatch.setattr(H, "_set_async_terminal", terminal)
+    # Exercise the real submit caller and its finalizers on a blocked exit;
+    # malformed lineage prevents all account/provider/order access.
+    receipt["market_session_bucket"] = "krx_nxt_aftermarket_close_only"
+    args = (
+        stock,
+        "196170",
+        {},
+        None,
+        dict(strategy="SCALPING", machine_primary_entry_provenance=receipt),
+    )
+    if terminal_raises:
+        with pytest.raises(RuntimeError, match="terminal writer unavailable"):
+            H._submit_watching_triggered_entry(*args)
+    else:
+        assert H._submit_watching_triggered_entry(*args) is False
+    _, next_clock = freeze_signal_reference(
+        stock, signal_price=221500, strategy_id="SCALPING", signal_time=second_clock
+    )
+    # Neither a return nor a failing terminal writer proves retirement. The
+    # same evaluation must not acquire another 1.2 seconds on its next call.
+    assert next_clock == first_clock
+    assert verdict(next_clock).reason == "signal_deadline_exceeded"
+    assert stock["last_watching_ai_machine_primary_fields"] == native_signal
+
+
 @pytest.mark.parametrize(
     "stock_session,source_session",
     [

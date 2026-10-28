@@ -5424,7 +5424,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_CLOSED_NATIVE_PREPARATION_PROFILE,
+        "current": handoff.REVIEWED_FINAL_SIGNAL_REFERENCE_PROFILE,
         "issuer_bytes_source": handoff.REVIEWED_ISSUER_BYTES_PROFILE,
         "inventory_origin_source": handoff.REVIEWED_INVENTORY_ORIGIN_PROFILE,
         "quantity_source": handoff.REVIEWED_QUANTITY_SOURCE_PROFILE,
@@ -6983,6 +6983,29 @@ def test_closed_native_preopen_requires_original_pid_proof_and_operator_stop(tmp
         assert proof["pid_identity"] == identity
         assert proof["source_hashes"][str(closed)] == handoff._sha(closed)
 
+        # Exercise the real coordination mutations before rereading custody.
+        # A mocked ordered preflight cannot establish this phase's invariant.
+        from src.engine.infrastructure import runtime_release_router as router
+        root.mkdir()
+        driver = D.Deployment(tmp_path, root, day, D.CONFIRM,
+                              operator_hold_sha256=handoff._sha(data / "runtime/operator_startup_hold.json"))
+        driver.commit = "b" * 40
+        driver.identity = identity
+        driver.directory = data / "runtime/release_transitions" / day / driver.commit
+        driver.directory.mkdir(parents=True)
+        driver.state = {"operator_hold_adoption": {"transfer_status": "verified_not_transferred"}}
+        _, original, signature = D._owned_metadata(driver.hold)
+        (driver.directory / "operator-startup-hold-before.json").write_bytes(original)
+        driver.operator_hold_adoption = dict(raw=original, signature=signature)
+        driver._preflight_native_verified = True
+        driver.assert_unchanged = lambda: None
+        (data / "runtime/runtime_release_selection.lock").touch()
+        with router.scheduled_execution_lease(tmp_path, exclusive=True):
+            with D._source_database_epoch(tmp_path, day), D.sentinel_preparation_lock(driver):
+                driver.acquire_hold()
+                assert json.loads(driver.hold.read_bytes())["schema"] == "ordered_deployment_startup_hold_v1"
+                assert handoff._closed_native_preopen_observation(day, now, root, commit, selected) == proof
+
 
 @pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
 @pytest.mark.parametrize("dependency", sorted(handoff.REVIEWED_QUANTITY_COST_HASHES))
@@ -7008,4 +7031,11 @@ def test_capability_scope_rejects_incomplete_successor(tmp_path, family, depende
 @pytest.mark.parametrize('dependency', sorted(handoff.REVIEWED_CLOSED_NATIVE_PREPARATION_HASHES))
 @pytest.mark.parametrize('fault', [None,'missing','dirty','committed_change','parent_mix'])
 def test_closed_native_preparation_rejects_incomplete_successor(tmp_path, family, dependency, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault,'current',dependency)
+
+
+@pytest.mark.parametrize('family', ['main_stop','holding_vote','pre_submit_delay'])
+@pytest.mark.parametrize('dependency', sorted(handoff.REVIEWED_FINAL_SIGNAL_REFERENCE_HASHES))
+@pytest.mark.parametrize('fault', [None,'missing','dirty','committed_change','parent_mix'])
+def test_final_signal_reference_rejects_incomplete_successor(tmp_path, family, dependency, fault):
     test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault,'current',dependency)

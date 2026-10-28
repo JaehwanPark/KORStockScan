@@ -3146,6 +3146,17 @@ for _name, _sha in REVIEWED_CLOSED_NATIVE_PREPARATION_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# Exact submit-call reference lifetime; original signal deadline and guards are unchanged.
+REVIEWED_FINAL_SIGNAL_REFERENCE_SOURCES = {'src/engine/sniper_entry_latency.py': 'a86968300bd117acf5f8cf8168eb735264357b7dfa2385f607ba8dd5919b9e9d', 'src/engine/sniper_state_handlers.py': '0bb6cc87e8acead7c0161bfe3d4c3ed24aa92a440a9647fbb61b69ba33bf02dd', 'src/engine/scalping/reversal_evaluation_context.py': 'e394bbf86455185ac7081d3b419f041141766b4f8566791dcd3309b75a2bf4c9', 'src/engine/scalping/scanner_async_eval.py': '5830d0e031cb649d3a37b40aff61ea6e7d7548f16519f3d2e13d71acf71b3a95'}
+REVIEWED_FINAL_SIGNAL_REFERENCE_ORIGINS = {'src/engine/sniper_entry_latency.py': '343ce1cb5a84b4b30d039942da42d4618cea4bc6f8350d0c7c22966552eda289', 'src/engine/sniper_state_handlers.py': '0c8c1874583f1ff23993b23e3187289d205c155bc257b3cb89e4f839a26a4d2c', 'src/engine/scalping/reversal_evaluation_context.py': '5eabeecc8cc043b42e9e7df0a4fe51733736cfe2d8c3e94267ad95f765856a63', 'src/engine/scalping/scanner_async_eval.py': '376aef38820f7e2f2a6869b65822e1072eb0abe426836644c3ee9d7357b8bac7'}
+for _name, _sha in REVIEWED_FINAL_SIGNAL_REFERENCE_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_FINAL_SIGNAL_REFERENCE_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

@@ -6,7 +6,9 @@ import os
 import math
 import threading
 import time
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta, timezone
+from functools import wraps
 from typing import Any
 
 from src.engine.scalping.micro_estimator_state import (
@@ -4940,6 +4942,40 @@ def _should_apply_latency_other_danger_relief_canary(
     return True, "other_danger_relief_canary_applied"
 
 
+def _signal_reference_owner(stock: dict[str, Any]) -> tuple[str, ...] | None:
+    """Identify an issued evaluation, never a logger's per-call attempt UUID."""
+    fields = stock.get("last_watching_ai_machine_primary_fields") or {}
+    if not isinstance(fields, Mapping):
+        return None
+    evaluation = fields.get("evaluation_attempt_id")
+    trace = stock.get("last_watching_ai_decision_trace_id")
+    if (
+        not isinstance(evaluation, str)
+        or not evaluation
+        or not isinstance(trace, str)
+        or not trace
+    ):
+        return None
+    return (str(stock.get("id") or ""), str(stock.get("code") or ""), evaluation, trace)
+
+
+def finish_signal_reference(stock: dict[str, Any]) -> None:
+    """Retain a NOT_SENT clock for retries; permit a separately issued successor."""
+    if not isinstance(stock, dict):
+        return
+    owner = _signal_reference_owner(stock)
+    if (
+        owner is not None
+        and owner == stock.get("entry_signal_owner")
+        and str(stock.get("status") or "WATCHING").upper() == "WATCHING"
+        and not stock.get("buy_qty")
+        and not stock.get("initial_quantity_bundle")
+        and not stock.get("_async_entry_submission_identity")
+        and not stock.get("entry_submit_identity_reconciliation_required")
+    ):
+        stock["entry_signal_terminal_owner"] = owner
+
+
 def freeze_signal_reference(
     stock: dict[str, Any],
     *,
@@ -4952,11 +4988,30 @@ def freeze_signal_reference(
     frozen_price = int(float(stock.get("entry_signal_price", 0) or 0))
     frozen_time = stock.get("entry_signal_time")
     frozen_strategy = str(stock.get("entry_signal_strategy_id", "") or "")
+    owner = _signal_reference_owner(stock)
+    previous = stock.get("entry_signal_owner")
+    # A changed quote, policy, route or repeated submit call cannot buy time.
+    # Only two independently issued machine/AI identities identify a successor.
+    successor = (
+        owner is not None
+        and isinstance(previous, tuple)
+        and len(previous) == 4
+        and previous == stock.get("entry_signal_terminal_owner")
+        and owner[:2] == previous[:2]
+        and owner[2] != previous[2]
+        and owner[3] != previous[3]
+        and str(stock.get("status") or "WATCHING").upper() == "WATCHING"
+        and not stock.get("buy_qty")
+        and not stock.get("initial_quantity_bundle")
+        and not stock.get("_async_entry_submission_identity")
+        and not stock.get("entry_submit_identity_reconciliation_required")
+    )
 
     if (
         frozen_price > 0
         and isinstance(frozen_time, datetime)
         and frozen_strategy == strategy_id
+        and not successor
     ):
         return frozen_price, frozen_time
 
@@ -4964,14 +5019,44 @@ def freeze_signal_reference(
     stock["entry_signal_price"] = int(signal_price)
     stock["entry_signal_time"] = now
     stock["entry_signal_strategy_id"] = str(strategy_id)
+    stock["entry_signal_owner"] = owner
+    stock.pop("entry_signal_terminal_owner", None)
     return int(signal_price), now
 
 
 def clear_signal_reference(stock: dict[str, Any]) -> None:
     """Clear the frozen trigger-time reference after the attempt finishes."""
 
-    for key in ("entry_signal_price", "entry_signal_time", "entry_signal_strategy_id"):
+    for key in (
+        "entry_signal_price", "entry_signal_time", "entry_signal_strategy_id",
+        "entry_signal_owner", "entry_signal_terminal_owner",
+    ):
         stock.pop(key, None)
+
+
+def submit_signal_reference_scope(function):
+    """Clean legacy references after observers; retain issued evaluation clocks.
+
+    Native NOT_SENT retirement is owned by _set_async_terminal. A return or
+    exception alone cannot renew the same, unknown or in-flight evaluation.
+    Separately issued successors use freeze_signal_reference's exact identity
+    checks. Neither path changes the original machine signal deadline.
+    """
+
+    @wraps(function)
+    def wrapped(stock, *args, **kwargs):
+        try:
+            return function(stock, *args, **kwargs)
+        finally:
+            if not stock.get("entry_signal_owner") and not any(
+                key in stock for key in (
+                    "last_watching_ai_machine_primary_fields",
+                    "last_watching_ai_decision_trace_id",
+                )
+            ):
+                clear_signal_reference(stock)
+
+    return wrapped
 
 
 def evaluate_live_buy_entry(
@@ -4985,6 +5070,7 @@ def evaluate_live_buy_entry(
     signal_strength: float = 0.0,
     signal_time: datetime | None = None,
     target_buy_price: int = 0,
+    reference_stock: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Evaluate whether the legacy live path should still attempt a new BUY.
@@ -5006,7 +5092,7 @@ def evaluate_live_buy_entry(
         }
 
     frozen_price, frozen_time = freeze_signal_reference(
-        stock,
+        stock if reference_stock is None else reference_stock,
         signal_price=int(signal_price),
         strategy_id=strategy_id,
         signal_time=signal_time,
