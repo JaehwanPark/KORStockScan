@@ -3736,3 +3736,54 @@ def test_entry_lifetime_independent_preparation_checks_each_actual_source(relati
     if fault == "successor": current = "0" * 64
     if fault == "path": relative = "src/engine/scalping/unreviewed_lifetime.py"
     assert C.reviewed_preparation_pair(relative, old, current) is (fault is None)
+
+
+def test_issued_entry_member_is_bound_without_rewriting_old_policy_inventory(monkeypatch):
+    """P5 accepts only the attested added member; the issued list stays exact."""
+    import hashlib
+    import copy
+
+    member = "src/engine/scalping/entry_deadline.py"
+    prior = "src/engine/scalping/reversal_path_runtime.py"
+    member_sha = hashlib.sha256((C.ROOT / member).read_bytes()).hexdigest()
+    prior_sha = hashlib.sha256((C.ROOT / prior).read_bytes()).hexdigest()
+    ident = "a" * 64
+    policy = {
+        "bundle_sha256": ident,
+        "target_date": "2026-10-28",
+        "continuous_reversal": {
+            "schema": "continuous_reversal_policy_v6",
+            "contract_file_sha256": {"reversal_path_runtime.py": prior_sha},
+        },
+    }
+    extension = {
+        "relative": member,
+        "original_sha256": "b" * 64,
+        "runtime_sha256": member_sha,
+    }
+    proof = {
+        "inventories": [{
+            "bundle_sha256": ident,
+            "target_date": "2026-10-28",
+            "schema": "continuous_reversal_policy_v6",
+            "expected": {"reversal_path_runtime.py": prior_sha},
+        }],
+        "active_entry_code_extension": extension,
+        "original_code_hashes": {member: extension["original_sha256"]},
+        "runtime_code_hashes": {member: member_sha, prior: prior_sha},
+    }
+    monkeypatch.setattr(C, "_main_context", lambda: proof)
+    paths = {
+        "reversal_path_runtime.py": str(C.ROOT / prior),
+        "entry_deadline.py": str(C.ROOT / member),
+    }
+    actual = {"reversal_path_runtime.py": prior_sha, "entry_deadline.py": member_sha}
+    assert C.verify_validation_main_code(policy, paths, actual)
+    damaged = copy.deepcopy(proof)
+    damaged["active_entry_code_extension"]["runtime_sha256"] = "0" * 64
+    monkeypatch.setattr(C, "_main_context", lambda: damaged)
+    with pytest.raises(ValueError, match="extension_unbound"):
+        C.verify_validation_main_code(policy, paths, actual)
+    monkeypatch.setattr(C, "_main_context", lambda: proof)
+    with pytest.raises(ValueError, match="inventory_unbound"):
+        C.verify_validation_main_code(policy, {k: v for k, v in paths.items() if k != "entry_deadline.py"}, actual)

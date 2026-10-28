@@ -3974,6 +3974,67 @@ def _main_inventories(bundle):
     return result
 
 
+def _active_entry_code_extension(data_root, day, selected, root, commit, inventories):
+    """Bind a new runtime member absent from an already issued policy inventory.
+
+    The old policy's membership stays immutable.  Only the exact reviewed
+    entry-deadline addition, issued in the active-policy code handoff for this
+    candidate, may supplement the isolated preparation reader's code closure.
+    """
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+    from src.engine.scalping import reversal_code_handoff as H
+
+    if not inventories or inventories[0]["schema"] != V.SCHEMA:
+        return None
+    old_names = set(inventories[0]["expected"])
+    # Only a full issued V6 inventory can carry the active-policy extension.
+    # Historical partial fixture inventories retain their original reader.
+    if not {"continuous_reversal_policy_v6.py", "reversal_code_handoff.py"}.issubset(old_names):
+        return None
+    current_names = {Path(m.__file__).name for m in V.contract_modules()}
+    extra = current_names - old_names
+    if not extra:
+        return None
+    if extra != {"entry_deadline.py"} or old_names - current_names:
+        raise ValueError("startup_main_native_membership_extension_unreviewed")
+    relative = _code_path("entry_deadline.py")
+    original = _sha(Path(selected) / relative)
+    current = _sha(Path(root) / relative)
+    if (
+        REVIEWED_ENTRY_LIFETIME_ORIGINS.get(relative) != original
+        or REVIEWED_ENTRY_LIFETIME_SOURCES.get(relative) != current
+        or not reviewed_preparation_pair(relative, original, current)
+    ):
+        raise ValueError("startup_main_native_membership_extension_unreviewed")
+    pointer = Path(data_root) / "runtime/mechanistic_entry_policy/current.json"
+    active = _json(pointer)
+    active_sha = active.get("bundle_sha256")
+    if not _hex(active_sha):
+        raise ValueError("startup_main_native_membership_extension_unbound")
+    pointer_sha = _sha(pointer)
+    receipt_path = H.path(data_root, day, commit, active_sha)
+    receipt = H.validate_receipt(
+        _json(receipt_path), day=day, commit=commit, root=Path(root),
+        bundle_sha=active_sha, pointer_sha=pointer_sha,
+    )
+    if (
+        receipt.get("origin_root") != str(selected)
+        or receipt.get("origin_commit") != _git_head(selected)
+        or receipt.get("code_hashes") != H.code_hashes()
+        or receipt.get("code_hashes", {}).get(str(Path(root) / relative)) != current
+        or receipt.get("actual_pid_consumed") is not False
+        or receipt.get("policy_reselected") is not False
+        or receipt.get("source_semantics_repair") is not True
+        or _sha(pointer) != pointer_sha
+    ):
+        raise ValueError("startup_main_native_membership_extension_unbound")
+    return dict(
+        relative=relative, original_sha256=original, runtime_sha256=current,
+        receipt_path=str(receipt_path), receipt_sha256=_sha(receipt_path),
+        pointer_path=str(pointer), pointer_sha256=pointer_sha,
+    )
+
+
 def _code_path(name):
     if name == "session_contract.py":
         return "src/trading/market/" + name
@@ -4623,6 +4684,9 @@ def bind_main_preparation(root, commit, data_root, intake):
     ] or bundle["bundle_sha256"] not in closure.get("bundles", {}):
         raise ValueError("startup_main_native_bundle_unobserved")
     inventories = _main_inventories(bundle)
+    extension = _active_entry_code_extension(
+        data_root, day, selected, root, commit, inventories
+    )
     native_proof = dict(
         policy_path=str(policy),
         policy_sha256=bundle["bundle_sha256"],
@@ -4677,6 +4741,11 @@ def bind_main_preparation(root, commit, data_root, intake):
         ),
     }
     sources.update(preserved_sources)
+    if extension is not None:
+        for key in ("receipt", "pointer"):
+            path, sha = extension[key + "_path"], extension[key + "_sha256"]
+            if sources.setdefault(path, sha) != sha:
+                raise ValueError("startup_main_native_membership_extension_conflict")
     # Cold predecessor raw sources remain under their full native observation
     # and digest closure. Generic request sources are bounded metadata/code.
     # _main_inventory_origin rechecks the observation; never flatten its raw
@@ -4756,6 +4825,12 @@ def bind_main_preparation(root, commit, data_root, intake):
         ).hexdigest()
         if expected.setdefault(relative, old) != old:
             raise ValueError("startup_main_origin_inventory_conflict")
+    if extension is not None:
+        relative = extension["relative"]
+        if expected.setdefault(relative, extension["original_sha256"]) != extension[
+            "original_sha256"
+        ]:
+            raise ValueError("startup_main_origin_inventory_conflict")
     actual = {}
     for relative, old in expected.items():
         for checkout, revision, digest in (
@@ -4808,6 +4883,7 @@ def bind_main_preparation(root, commit, data_root, intake):
         original_code_hashes=expected,
         runtime_code_hashes=actual,
         inventories=inventories,
+        active_entry_code_extension=extension,
         inventory_git_attestations=inventory_attestations,
         delay_inventory_git_attestation=delay_inventory,
         historical_semantic_code_sources=histories,
@@ -5377,6 +5453,24 @@ def _main_proof(proof, request):
         old = _sha(selected / relative)
         if required.setdefault(relative, old) != old:
             raise ValueError("startup_main_origin_inventory_conflict")
+    extension = _active_entry_code_extension(
+        data, request["target_date"], selected, ROOT,
+        request["execution_release_commit"], proof["inventories"],
+    )
+    if extension != proof.get("active_entry_code_extension"):
+        raise ValueError("startup_main_native_membership_extension_changed")
+    if extension is not None:
+        relative = extension["relative"]
+        if (
+            required.setdefault(relative, extension["original_sha256"])
+            != extension["original_sha256"]
+            or sources.get(extension["receipt_path"])
+            != extension["receipt_sha256"]
+            or sources.get(extension["pointer_path"])
+            != extension["pointer_sha256"]
+            or actual.get(relative) != extension["runtime_sha256"]
+        ):
+            raise ValueError("startup_main_native_membership_extension_unbound")
     if required != expected or histories != proof.get(
         "historical_semantic_code_sources"
     ):
@@ -5788,15 +5882,36 @@ def verify_validation_main_code(bundle, paths, actual):
     )
     family = bundle.get("continuous_reversal") or {}
     expected = family.get("contract_file_sha256")
+    extension = proof.get("active_entry_code_extension")
+    extra = (
+        {Path(extension["relative"]).name}
+        if isinstance(extension, dict) and item is not None
+        and item["schema"] == "continuous_reversal_policy_v6"
+        else set()
+    )
     if (
         item is None
         or item["expected"] != expected
         or item["schema"] != family.get("schema")
         or item["target_date"] != bundle.get("target_date")
-        or set(paths) != set(expected)
-        or set(actual) != set(expected)
+        or set(paths) != set(expected) | extra
+        or set(actual) != set(expected) | extra
     ):
         raise ValueError("startup_main_native_inventory_unbound")
+    if extra:
+        relative = extension["relative"]
+        name = Path(relative).name
+        if (
+            name != "entry_deadline.py"
+            or proof["original_code_hashes"].get(relative)
+            != extension["original_sha256"]
+            or proof["runtime_code_hashes"].get(relative)
+            != extension["runtime_sha256"]
+            or actual.get(name) != extension["runtime_sha256"]
+            or str(Path(paths[name]).resolve(strict=True)) != str(ROOT / relative)
+            or _sha(paths[name]) != actual[name]
+        ):
+            raise ValueError("startup_main_native_membership_extension_unbound")
     for name, old in expected.items():
         relative = _code_path(name)
         if (
@@ -5807,7 +5922,7 @@ def verify_validation_main_code(bundle, paths, actual):
             raise ValueError("startup_main_native_code_unbound")
     _pairs(
         {_code_path(name): old for name, old in expected.items()},
-        {_code_path(name): value for name, value in actual.items()},
+        {_code_path(name): actual[name] for name in expected},
     )
     return True
 
