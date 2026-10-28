@@ -1837,6 +1837,8 @@ def test_source_first_intent_fulfills_only_exact_approved_recipe(tmp_path, monke
     assert R.fulfill_scoring(tmp_path,day,day)['status']=='not_requested'
     assert not R.scoring_path(tmp_path).exists()
     kwargs=dict(publication=day,scope_candidates={sid:['A09']},origin_root=tmp_path,origin_commit='a'*40)
+    from src.engine.infrastructure import runtime_release_router as router
+    monkeypatch.setattr(router, 'selected_release', lambda *_: (tmp_path, 'a'*40))
     with pytest.raises(ValueError, match='explicit_authority'):
         R.request_scoring(tmp_path,confirm='implementation',**kwargs)
     intent=R.request_scoring(tmp_path,confirm=R.SCORING_AUTHORITY,**kwargs)
@@ -1955,3 +1957,94 @@ def test_scoped_machine_selection_survives_enabled_auxiliary_campaign_and_issue(
     assert auxiliary['auxiliary_registry_bindings']==bindings
     assert issued['artifact_content_sha256']!=machine['artifact_content_sha256']
     assert T.read(O.directory(tmp_path,'2026-10-27')/'machine-comparison.json')==machine
+
+
+@pytest.mark.parametrize('fault', [None, 'review', 'recipe', 'source', 'stage', 'materialized', 'selector', 'archive', 'review_race'])
+def test_pending_scoring_handoff_keeps_approval_and_selected_reader(tmp_path, monkeypatch, fault):
+    import json
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from src.engine.scalping import continuous_reversal_postclose as P
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.infrastructure import runtime_release_router as router
+    from src.engine.automation import postclose_summary_handoff as H
+
+    day=datetime.now(ZoneInfo('Asia/Seoul')).date().isoformat()
+    data=tmp_path/'data'; root=tmp_path/'target'; source_root=tmp_path/'source'
+    root.mkdir(); source_root.mkdir()
+    parent,_=postclose_fixture(monkeypatch)
+    parent.update(bundle_sha256='e'*64,target_date=day)
+    parent['continuous_reversal']['operating_manifest']['registration_receipts']=[request()]
+    monkeypatch.setattr(V,'_attested_activation_parent',lambda *a,**k:parent)
+    monkeypatch.setattr(router,'selected_release',lambda *_:(source_root,'a'*40))
+    P.write(N.root(data)/'current.json',dict(bundle_sha256=parent['bundle_sha256']))
+    intent=R.request_scoring(data,publication=day,scope_candidates={'other_non_fixed|REGULAR|LT_20000|SOR':['A09']},
+        confirm=R.SCORING_AUTHORITY,origin_root=source_root,origin_commit='a'*40)
+    path=R.scoring_intent_path(data); original=path.read_bytes(); expected=P.file_hash(path)
+    selector=data/'runtime/runtime_release_selection.json'; P.write(selector,dict(root=str(root)))
+    monkeypatch.setattr(router,'selected_release',lambda *_:(root,'b'*40))
+    fields=('contract_file_sha256','preparation_reader_code_sha256')
+    source={k:intent[k] for k in fields}
+    target=dict(contract_file_sha256={**source['contract_file_sha256'],'new_module.py':'f'*64},
+        preparation_reader_code_sha256='d'*64)
+    proposed=P.seal(dict(intent,**target,activation_parent_origin=dict(root=str(root),commit='b'*40)))
+    review=dict(status='reviewed',intent_sha256=expected,source_code=source,target_code=target,
+        target_root=str(root),target_commit='b'*40,recipe_changed=False)
+    if fault=='review': review['target_commit']='c'*40
+    review_path=tmp_path/'review.json'; P.write(review_path,review)
+    def context(code_root,commit,old,**kwargs):
+        if code_root==source_root:
+            return {**source, 'contract_file_sha256':{} if fault=='source' else source['contract_file_sha256']}
+        if fault=='recipe': proposed['scopes']={}
+        if fault=='selector': P.write(selector,dict(changed=True))
+        return dict(target,proposed=proposed)
+    monkeypatch.setattr(R,'_scoring_handoff_context',context)
+    if fault=='stage': P.write(H.stage_path(data/'report',day,'main_machine_policy'),dict(status='running'))
+    if fault=='materialized': P.write(R.scoring_path(data),{})
+    if fault=='archive':
+        def fail(*a): raise OSError('archive_failed')
+        monkeypatch.setattr(R,'_archive',fail)
+    if fault=='review_race':
+        original_archive=R._archive
+        def race(source, destination):
+            if Path(source)==review_path:P.write(review_path,dict(changed=True))
+            return original_archive(source,destination)
+        monkeypatch.setattr(R,'_archive',race)
+    if fault:
+        with pytest.raises((ValueError,OSError)):
+            R.handoff_scoring_intent(data,expected_sha256=expected,review_path=review_path,confirm=R.SCORING_AUTHORITY)
+        assert path.read_bytes()==original
+        return
+    new=R.handoff_scoring_intent(data,expected_sha256=expected,review_path=review_path,confirm=R.SCORING_AUTHORITY)
+    assert new['scopes']==intent['scopes']
+    assert new['frozen_parent_scopes']==intent['frozen_parent_scopes']
+    assert new['spec']==intent['spec']
+    assert new['contract_file_sha256']==target['contract_file_sha256']
+    assert new['code_handoff']['predecessor_content_sha256']==intent['artifact_content_sha256']
+    archived=Path(new['code_handoff']['predecessor_intent']['path'])
+    assert archived.read_bytes()==original
+    assert R._validate_scoring_intent(new)==new
+    assert not R.scoring_path(data).exists()
+    with pytest.raises(ValueError,match='explicit_authority'):
+        R.handoff_scoring_intent(data,expected_sha256=P.file_hash(path),review_path=review_path,confirm='tests')
+
+
+def test_request_scoring_rejects_selector_advance_before_publication(tmp_path, monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from src.engine.scalping import continuous_reversal_postclose as P
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.infrastructure import runtime_release_router as router
+    parent,_=postclose_fixture(monkeypatch)
+    parent['continuous_reversal']['operating_manifest']['registration_receipts']=[request()]
+    parent['bundle_sha256']='e'*64
+    monkeypatch.setattr(V,'_attested_activation_parent',lambda *a,**k:parent)
+    monkeypatch.setattr(router,'selected_release',lambda *_:(tmp_path,'b'*40))
+    P.write(N.root(tmp_path)/'current.json',dict(bundle_sha256='e'*64))
+    with pytest.raises(ValueError,match='selected_generation_changed'):
+        R.request_scoring(tmp_path,publication=datetime.now(ZoneInfo('Asia/Seoul')).date().isoformat(),
+            scope_candidates={'other_non_fixed|REGULAR|LT_20000|SOR':['A09']},confirm=R.SCORING_AUTHORITY,
+            origin_root=tmp_path,origin_commit='a'*40)
+    assert not R.scoring_intent_path(tmp_path).exists()

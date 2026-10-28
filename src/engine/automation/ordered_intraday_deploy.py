@@ -1280,6 +1280,9 @@ class Deployment:
             raise ValueError("deployment_must_execute_reviewed_candidate_code")
         if self.candidate == self.previous:
             raise ValueError("deployment_candidate_already_selected")
+        from src.engine.scalping.reversal_cumulative_registration import pending_scoring_code_check
+
+        self.pending_scoring = pending_scoring_code_check(self.workspace / "data", self.day)
         for name in ("operator_startup_hold.json",):
             p = self.workspace / "data/runtime" / name
             if p.exists() or p.is_symlink():
@@ -1733,6 +1736,11 @@ class Deployment:
 
     def assert_unchanged(self):
         self._assert_failed_transition_unchanged()
+        if hasattr(self, "pending_scoring"):
+            from src.engine.scalping.reversal_cumulative_registration import pending_scoring_code_check
+
+            if pending_scoring_code_check(self.workspace / "data", self.day) != self.pending_scoring:
+                raise ValueError("deployment_pending_scoring_changed")
         if self.selection.read_bytes() != self.before:
             raise ValueError("deployment_selection_changed")
         if (
@@ -2382,6 +2390,9 @@ class StoppedDeploymentRecovery(Deployment):
             or Path(__file__).resolve().parents[3] != self.candidate
         ):
             raise ValueError("deployment_recovery_requires_new_reviewed_candidate")
+        from src.engine.scalping.reversal_cumulative_registration import pending_scoring_code_check
+
+        self.pending_scoring = pending_scoring_code_check(self.workspace / "data", self.day)
         native_basis = bool(selected.get("native_predecessor_path")) and not origin["preselection"]
         if native_basis:
             native = H._native_predecessor(
