@@ -15,12 +15,14 @@ from src.engine.monitoring import policy_generation_contract as generation
 from src.engine.monitoring import policy_generation_validation as validation
 
 
-def reviewed_source_transition(path):
+def reviewed_source_transition(path, *, consumer_family=None):
     """Authenticate one reviewed source delta and derive every affected family.
 
     The operator's immutable review is code-capability evidence only. Both
     generations still need their own native fixtures at the consuming reader.
     """
+    if consumer_family is not None and consumer_family not in generation.COMPONENTS:
+        raise ValueError("source_review_consumer_family_invalid")
     path = Path(path)
     if not path.is_absolute() or path.is_symlink() or path.resolve() != path:
         raise ValueError("source_review_path_invalid")
@@ -117,11 +119,16 @@ def reviewed_source_transition(path):
         if before != after:
             delta[relative] = dict(before=before, after=after)
     affected = sorted(f for f in new[0] if old[0][f] != new[0][f])
+    # Authenticate the entire immutable review, then bind only the requested
+    # consumer. Another family's later successor cannot invalidate unchanged
+    # code, and this scoped result cannot authorize that other family.
+    consumed = affected if consumer_family is None else [consumer_family]
     if (
         not affected
         or review.get("reviewed_files") != delta
         or review.get("reviewed_families") != affected
-        or any(new[0][f] != generation.code_generation(f) for f in affected)
+        or any(f not in affected for f in consumed)
+        or any(new[0][f] != generation.code_generation(f) for f in consumed)
     ):
         raise ValueError("source_review_incomplete_change_inventory")
     evidence = review.get("review_evidence") or {}
@@ -132,7 +139,7 @@ def reviewed_source_transition(path):
         raise ValueError("source_review_evidence_changed")
     return dict(
         reference=dict(path=str(path), sha256=sha),
-        pairs={family: [old[0][family], new[0][family]] for family in affected},
+        pairs={family: [old[0][family], new[0][family]] for family in consumed},
         source_hashes=source_hashes,
         review_evidence=evidence,
     )
@@ -1369,7 +1376,7 @@ def current_fixture_observation(observed, data):
             if references:
                 fixture, _ = validation.verify_fixture(data, family)
             for reference in references:
-                reviewed = reviewed_source_transition(reference["path"])
+                reviewed = reviewed_source_transition(reference["path"], consumer_family=family)
                 if reviewed["reference"] != reference:
                     raise ValueError("source_review_reference_changed")
                 if reviewed["pairs"].get(family) == list(actual_pair):
@@ -1521,7 +1528,7 @@ def current_fixture_observation(observed, data):
         ):
             raise ValueError("successor_historical_fixture_changed")
         if source_review and reviewed_source_transition(
-            source_review["reference"]["path"]
+            source_review["reference"]["path"], consumer_family=family
         ) != source_review:
             raise ValueError("source_review_changed_during_observation")
         result = deepcopy(observed)

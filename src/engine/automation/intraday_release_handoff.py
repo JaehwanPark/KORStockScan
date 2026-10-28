@@ -12813,6 +12813,29 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_HOLDING_SOURCE_HASHES.items()
 }}
 
+# Exact scoped capability reader over the complete integrated holding profile.
+REVIEWED_CAPABILITY_SCOPE_HASHES = {'src/engine/monitoring/policy_generation_code_handoff.py': '3a41e689b7c59de0a35bc2b76bd43effca721399d4936e9f747392e4a0951892', 'src/engine/infrastructure/startup_validation_code_context.py': '300908359a84bbbaa903495ebb0a27a30774ec18a3811cc00a2a02cef3dcd512'}
+REVIEWED_CAPABILITY_SCOPE_ORIGINS = {'src/engine/monitoring/policy_generation_code_handoff.py': '396b5dab90462247ba59f9c0fe2d7b57e46148f6934ca679febf0269cb691a40', 'src/engine/infrastructure/startup_validation_code_context.py': '006ee9f1f7e779826bc7d83983e8ab1da7eb1948a4c6c952e708abfedbd93c54'}
+REVIEWED_CAPABILITY_SCOPE_PROFILE = {**REVIEWED_HOLDING_SOURCE_PROFILE, **REVIEWED_CAPABILITY_SCOPE_HASHES}
+REVIEWED_CAPABILITY_SCOPE_VARIANTS = {
+    (key[0], REVIEWED_CAPABILITY_SCOPE_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/monitoring/policy_generation_code_handoff.py",
+        "selector_sha256": REVIEWED_CAPABILITY_SCOPE_HASHES["src/engine/monitoring/policy_generation_code_handoff.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_CAPABILITY_SCOPE_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_CAPABILITY_SCOPE_HASHES.get(os.path.normpath(name), sha) for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_HOLDING_SOURCE_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current) for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_CAPABILITY_SCOPE_ORIGINS[name]})
+    for name, current in REVIEWED_CAPABILITY_SCOPE_HASHES.items()
+}}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -13688,6 +13711,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_HOLDING_SOURCE_PROFILE
         prepared_variants = REVIEWED_HOLDING_SOURCE_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/monitoring/policy_generation_code_handoff.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_CAPABILITY_SCOPE_HASHES["src/engine/monitoring/policy_generation_code_handoff.py"]
+    ):
+        prepared_hashes = REVIEWED_CAPABILITY_SCOPE_PROFILE
+        prepared_variants = REVIEWED_CAPABILITY_SCOPE_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

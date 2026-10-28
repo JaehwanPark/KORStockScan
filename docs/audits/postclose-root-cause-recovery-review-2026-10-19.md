@@ -5126,3 +5126,14 @@ compile/diff and document parser are preserved in [integration evidence](../../t
 Against2d4892980, source7 files +508/-53, tests10 files +575/-17 and docs4 files
 +120/-0 before this result paragraph. Existing owners are extended; no new engine
 module, worker, automatic research dispatch or numerical policy is introduced.
+
+
+#### Capability consumer scope integration — 2026-10-28
+
+Final a2e31b43c native report checks found an unchanged entry_cancel_wait fixture rejected with `source_review_incomplete_change_inventory`: its complete review also contained rising/holding families changed in the successor. The immutable fixture and reports were valid; whole-current-inventory equality coupled unrelated consumers. The existing reader now authenticates every original reviewed file, commit, authority and evidence hash, then binds and returns only the requested family. Publication retains complete-current validation. Both initial read and end-of-observation revalidation use the same family. Missing, changed, unknown or unreviewed family generations remain rejected. Original receipts and the failed attempt remain intact.
+
+Replacement: existing `reviewed_source_transition` and its two observation calls consolidated under one scoped contract; no new module, worker, registry, policy or fallback. Independent preparation extends the complete integrated holding profile and preserves every historical profile. Changed common code requires new exact-generation fixtures for all four families; it does not grant runtime policy adoption or historical economic acceptance. Trailing normalized-input/replay and quantity successor evidence are reused only after their unchanged native code/input bindings are verified.
+
+Evidence: `tmp/rfhic-sell-timeout-20261028/holding-integrated/candidate-native-contracts-final.log` (original failure), `holding-integrated/capability-scope/` (cause regression, independent reader, successor candidate/P5/transition). HoldingProfitExitSourceContractRepair and DirectFamilyPreopenPolicyHandoff retain actual PID and exact-route natural acceptance; configured/research costs never become broker-confirmed economics.
+
+Baseline `a2e31b43c`; incremental non-test source +53/-5, tests +45/-15, docs +10/-0 before this count note. Growth is the scoped native contract, exact preserved preparation profile and causal negative/positive regressions; no new execution entrypoint. Native original failure and test intermediate failures are retained.

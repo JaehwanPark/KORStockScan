@@ -3122,6 +3122,18 @@ for _name, _sha in REVIEWED_HOLDING_SOURCE_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# Exact family-scoped capability reader; whole immutable inventories remain checked.
+REVIEWED_CAPABILITY_SCOPE_SOURCES = {'src/engine/monitoring/policy_generation_code_handoff.py': '3a41e689b7c59de0a35bc2b76bd43effca721399d4936e9f747392e4a0951892'}
+REVIEWED_CAPABILITY_SCOPE_ORIGINS = {'src/engine/monitoring/policy_generation_code_handoff.py': '396b5dab90462247ba59f9c0fe2d7b57e46148f6934ca679febf0269cb691a40'}
+for _name, _sha in REVIEWED_CAPABILITY_SCOPE_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_CAPABILITY_SCOPE_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

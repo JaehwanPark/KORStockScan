@@ -1866,7 +1866,7 @@ def test_source_review_discovers_every_affected_family_and_fails_closed(tmp_path
         assert result["reference"]["sha256"] == validation.file_sha(path)
 
 
-@pytest.mark.parametrize("damage", [None, "missing_review", "missing_old_fixture", "missing_new_fixture", "changed_report", "changed_source"])
+@pytest.mark.parametrize("damage", [None, "missing_review", "missing_old_fixture", "missing_new_fixture", "changed_report", "changed_source", "unrelated_consumer", "changed_consumer"])
 def test_reviewed_inventory_consumes_original_and_new_native_fixtures(tmp_path, monkeypatch, damage):
     handoff, old, new, body, seal_review = _source_review_case(tmp_path, monkeypatch)
     request = seal_review()
@@ -1900,9 +1900,24 @@ def test_reviewed_inventory_consumes_original_and_new_native_fixtures(tmp_path, 
         report.write_text("{}")
     elif damage == "changed_source":
         (new / "src/engine/shared.py").write_text("value = 3\n")
+    if damage in {"unrelated_consumer", "changed_consumer"}:
+        import shutil
+        consumer = tmp_path / "later-consumer"
+        shutil.copytree(new, consumer)
+        changed = "holding_vote" if damage == "unrelated_consumer" else family
+        (consumer / "src/engine" / (changed + ".py")).write_text("value = 3\n")
+        monkeypatch.setattr(generation, "ENGINE", consumer / "src/engine")
+        with pytest.raises(ValueError, match="source_review_incomplete_change_inventory"):
+            handoff.reviewed_source_transition(request)
+        if damage == "unrelated_consumer":
+            scoped = handoff.reviewed_source_transition(request, consumer_family=family)
+            assert set(scoped["pairs"]) == {family}
+            with pytest.raises(ValueError, match="source_review_incomplete_change_inventory"):
+                handoff.reviewed_source_transition(request, consumer_family=changed)
     before = report.read_bytes()
     result = handoff.current_fixture_observation(observed, data)
-    assert result["status"] == ("unverified" if damage else "verified"), result
+    invalid = damage not in {None, "unrelated_consumer"}
+    assert result["status"] == ("unverified" if invalid else "verified"), result
     assert report.read_bytes() == before
     assert result["source_state"] == "valid_empty" and result["comparison_state"] == "insufficient_sample"
     assert result.get("allowed_runtime_apply", False) is False
