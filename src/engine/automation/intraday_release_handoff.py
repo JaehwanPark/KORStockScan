@@ -12969,6 +12969,30 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Complete reviewed completion-report successor over the slot-return repair.
+# Historical issued profiles remain independently verifiable.
+REVIEWED_POSTCLOSE_COMPLETION_HASHES = {'deploy/run_postclose_finalization.sh': 'ea3f3bc7fb5cb50c6601de99ec3a92f100a3bdfe64a0d6f3a2afff8864ef44db', 'src/engine/automation/postclose_finalization_generation.py': 'a2a29adac3c9777bd6ffc26ae480b80e49a40cd19fc40ce8b0e5479a21f9e9d2', 'src/engine/error_detector.py': '8cafbf31719fa8cb4a52d887bf0d79a6506bf7c2c701535d771b798d3579b426', 'src/engine/runtime_approval_summary.py': '66440188ca5a2a0b1140f133dd106d75c629629d10ab22b5f83c6f8dc3f1cc16', 'src/engine/infrastructure/startup_validation_code_context.py': 'b4fa54f30db08e5ddd07d05ff068d8e8b409ad3c48ced7daa68cc90d740333cf'}
+REVIEWED_POSTCLOSE_COMPLETION_ORIGINS = {'deploy/run_postclose_finalization.sh': '3c8e94c94f259dc0717a649ff31bb51d56f2f00a59561ecff783b75875cd0267', 'src/engine/automation/postclose_finalization_generation.py': '0d70b7d26a768416c20b7345f47ac45155feda44469d3241930e48fa2f0e4c41', 'src/engine/error_detector.py': '42cd31da7a2c8267b584b2f0aa4fbe11d32e762ab08b283587a11ceb7157882e', 'src/engine/runtime_approval_summary.py': '8de2430637152fbc72c60d7f246273492754bcb922109e0f3d1afa88165e7d3a', 'src/engine/infrastructure/startup_validation_code_context.py': '1968a271f4d9ba79e9a4e2c77504116c63e5e51a9ec78d153f17620b77c42e57'}
+REVIEWED_POSTCLOSE_COMPLETION_PROFILE = {**REVIEWED_PRE_DELIVERY_PROFILE, **REVIEWED_POSTCLOSE_COMPLETION_HASHES}
+REVIEWED_POSTCLOSE_COMPLETION_VARIANTS = {
+    (key[0], REVIEWED_POSTCLOSE_COMPLETION_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/error_detector.py",
+        "selector_sha256": REVIEWED_POSTCLOSE_COMPLETION_HASHES["src/engine/error_detector.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_POSTCLOSE_COMPLETION_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_POSTCLOSE_COMPLETION_HASHES.get(os.path.normpath(name), sha) for name, sha in members.items()}
+            for origin, members in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_PRE_DELIVERY_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current) for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_POSTCLOSE_COMPLETION_ORIGINS[name]})
+    for name, current in REVIEWED_POSTCLOSE_COMPLETION_HASHES.items()
+}}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -13880,6 +13904,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_PRE_DELIVERY_PROFILE
         prepared_variants = REVIEWED_PRE_DELIVERY_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/error_detector.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_POSTCLOSE_COMPLETION_HASHES["src/engine/error_detector.py"]
+    ):
+        prepared_hashes = REVIEWED_POSTCLOSE_COMPLETION_PROFILE
+        prepared_variants = REVIEWED_POSTCLOSE_COMPLETION_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

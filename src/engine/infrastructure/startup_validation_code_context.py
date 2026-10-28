@@ -3199,6 +3199,19 @@ for _name, _sha in REVIEWED_PRE_DELIVERY_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# Completion reporting is separate from existing startup admission. These exact
+# reviewed sources retain the original execution and policy authority boundaries.
+REVIEWED_POSTCLOSE_COMPLETION_SOURCES = {'deploy/run_postclose_finalization.sh': 'ea3f3bc7fb5cb50c6601de99ec3a92f100a3bdfe64a0d6f3a2afff8864ef44db', 'src/engine/automation/postclose_finalization_generation.py': 'a2a29adac3c9777bd6ffc26ae480b80e49a40cd19fc40ce8b0e5479a21f9e9d2', 'src/engine/error_detector.py': '8cafbf31719fa8cb4a52d887bf0d79a6506bf7c2c701535d771b798d3579b426', 'src/engine/runtime_approval_summary.py': '66440188ca5a2a0b1140f133dd106d75c629629d10ab22b5f83c6f8dc3f1cc16'}
+REVIEWED_POSTCLOSE_COMPLETION_ORIGINS = {'deploy/run_postclose_finalization.sh': '3c8e94c94f259dc0717a649ff31bb51d56f2f00a59561ecff783b75875cd0267', 'src/engine/automation/postclose_finalization_generation.py': '0d70b7d26a768416c20b7345f47ac45155feda44469d3241930e48fa2f0e4c41', 'src/engine/error_detector.py': '42cd31da7a2c8267b584b2f0aa4fbe11d32e762ab08b283587a11ceb7157882e', 'src/engine/runtime_approval_summary.py': '8de2430637152fbc72c60d7f246273492754bcb922109e0f3d1afa88165e7d3a'}
+for _name, _sha in REVIEWED_POSTCLOSE_COMPLETION_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_POSTCLOSE_COMPLETION_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.
