@@ -272,6 +272,10 @@ def _final_entry_machine_inputs(
             fields["entry_machine_input_canonical_revalidation_ms"] = round(
                 (time.perf_counter() - revalidate_started) * 1000, 3
             )
+        if refresh_fields.get("entry_ai_final_canonical_revalidation_deferred"):
+            fields["entry_machine_input_prepared_snapshot_age_ms"] = context.get(
+                "market_snapshot_revalidation", {}
+            ).get("elapsed_ms")
         phase = "completed_candle_publication"
         ready = wait_for_completed_entry_candle(
             context, ws, budget=entry_budget, fields=fields

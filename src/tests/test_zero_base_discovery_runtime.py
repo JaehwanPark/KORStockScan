@@ -252,6 +252,102 @@ def _panel(_token):
     }
 
 
+@pytest.mark.parametrize(
+    "policy,expected", [("current", "000002"), ("service_wait", "000001")]
+)
+def test_runtime_allocation_reaches_durable_dispatch(tmp_path, monkeypatch, policy, expected):
+    import json
+    from src.scanners import zero_base_discovery_runtime as module
+
+    bus = Bus()
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "q.json",
+        allocation_policy=policy,
+    )
+    monkeypatch.setattr(module, "MAX_CLAIMS_PER_CYCLE", 1)
+
+    def observe(code, at):
+        runtime.queue.observe(
+            code=code, route="krx_nxt_integrated", observed_epoch=at,
+            source_sha256="a" * 64, source_scope="observed_panel",
+            received_epoch=at + 1, discovery_volume=10, market="KOSPI",
+            source_kind="activity",
+        )
+
+    observe("000001", T0)
+    old = runtime.queue._candidates[("000001", "krx_nxt_integrated")]
+    old.claim_count, old.last_claim_epoch, old.next_due_epoch = 3, T0 + 1, T0 + 5
+    # Record eligibility while the physical worker is unavailable. Discovery
+    # time alone must not be interpreted as service wait.
+    bus.callbacks[PROBE_REQUEST_EVENT] = []
+    runtime.dispatch_due_probes(now_epoch=T0 + 10)
+    observe("000002", T0 + 20)
+
+    def admitted(payload):
+        persisted = json.loads(runtime.state_path.read_text())
+        row = next(r for r in persisted["candidates"] if r["code"] == payload["claim"]["code"])
+        assert row["in_flight"] is True and row["claim_count"] > 0
+
+    bus.callbacks[PROBE_REQUEST_EVENT] = [admitted]
+    runtime.dispatch_due_probes(now_epoch=T0 + 30)
+    events = [p for e, p in bus.events if e == PROBE_REQUEST_EVENT]
+    assert [p["claim"]["code"] for p in events] == [expected]
+    assert runtime.queue.in_flight_count() == 1
+    assert module.MAX_CONCURRENT_PROBES == 5
+
+
+@pytest.mark.parametrize("policy", [None, [], {}, "unknown"])
+def test_runtime_unknown_allocation_rejected_before_subscription(tmp_path, policy):
+    bus = Bus()
+    before = dict(bus.callbacks)
+    with pytest.raises(ValueError, match="allocation_policy"):
+        ZeroBaseDiscoveryRuntime(
+            event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "q.json",
+            allocation_policy=policy,
+        )
+    assert bus.callbacks == before
+    assert not (tmp_path / "q.json").exists()
+
+
+def test_restored_queue_cannot_activate_candidate_allocation(tmp_path):
+    import json
+    from src.scanners.zero_base_discovery_queue import DiscoveryQueue
+
+    path = tmp_path / "q.json"
+    snapshot = DiscoveryQueue("2026-09-28").snapshot()
+    snapshot["allocation_policy"] = "service_wait"
+    path.write_text(json.dumps(snapshot))
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=Bus(), session_date="2026-09-28", state_path=path
+    )
+    assert runtime.allocation_policy == "current"
+
+
+@pytest.mark.parametrize("policy", ["current", "eligible_wait", "service_wait"])
+def test_candidate_allocation_writer_failure_preserves_admission(tmp_path, monkeypatch, policy):
+    bus = Bus()
+    runtime = ZeroBaseDiscoveryRuntime(
+        event_bus=bus, session_date="2026-09-28", state_path=tmp_path / "q.json",
+        allocation_policy=policy,
+    )
+    row = _panel(None)["observations"][0]
+    runtime.queue.observe(**{k: row[k] for k in (
+        "code", "route", "observed_epoch", "source_sha256", "source_scope",
+        "source_kind", "name", "market", "venue",
+    )}, received_epoch=T0 + 1)
+    before = runtime.queue.snapshot()
+
+    def fail():
+        raise OSError("fixture persist failure")
+
+    monkeypatch.setattr(runtime, "_persist", fail)
+    with pytest.raises(OSError, match="fixture persist failure"):
+        runtime.dispatch_due_probes(now_epoch=T0 + 2)
+    assert runtime.queue.snapshot() == before
+    assert runtime.queue._eligible_since == {}
+    assert not any(e == PROBE_REQUEST_EVENT for e, _ in bus.events)
+
+
 def _target_readiness(stamp, codes):
     owner = dict(
         runtime_generation="fixture",

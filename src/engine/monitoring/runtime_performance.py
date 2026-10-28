@@ -1587,9 +1587,18 @@ def record_native_preclaim_gate(*, stock, code, ws_data, reason, now, metrics=No
                     ),
                     reason=reason or "strength_gate_continued",
                     gate_action=(
-                        "source_quality_block"
+                        (
+                            "baseline_block"
+                            if reason == "extreme_sell_dominant"
+                            else "source_quality_block"
+                        )
                         if reason
                         else "continue_to_remaining_guards"
+                    ),
+                    blocker_role=(
+                        "market_state"
+                        if reason == "extreme_sell_dominant"
+                        else "source_quality" if reason else "none"
                     ),
                     observed_epoch=now,
                     source_observed_epoch=stamp,

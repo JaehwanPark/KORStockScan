@@ -89,6 +89,7 @@ def classify_ai_input_blocker(blocker: Any) -> str:
         return "missing_source"
     if value.endswith(("_stale", "_future", "_unknown_age")) or value in {
         "source_time_skew",
+        "entry_machine_input_deadline_expired",
     }:
         return "freshness_or_timing"
     if any(

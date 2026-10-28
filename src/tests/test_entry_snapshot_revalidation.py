@@ -629,6 +629,7 @@ def test_watching_final_acquisition_recovers_prepared_stale_input_without_io(
     assert handlers._build_tick_source_quality_log_fields(fields) == fields
 
 
+@pytest.mark.parametrize("defer_canonical", [False, True])
 @pytest.mark.parametrize(
     "route_state",
     [
@@ -645,6 +646,7 @@ def test_watching_final_acquisition_recovers_prepared_stale_input_without_io(
 def test_watching_final_refresh_reuses_only_prepared_exact_route(
     monkeypatch,
     route_state,
+    defer_canonical,
 ):
     prepared = _ws(NOW - 0.1)
     prepared.update(
@@ -751,6 +753,7 @@ def test_watching_final_refresh_reuses_only_prepared_exact_route(
                 ws_data,
                 recent_ticks,
                 candle_context,
+                _defer_canonical_revalidation=defer_canonical,
             ),
         )
         assert "entry_machine_input_error" not in machine_fields
@@ -760,6 +763,59 @@ def test_watching_final_refresh_reuses_only_prepared_exact_route(
             assert fields["entry_ai_final_snapshot_revalidation_error"] == (
                 "prepared_entry_route_partition_epoch_invalid"
             )
+
+    # The callback may defer the expensive canonical rebuild only to its
+    # final owner. The actual freeze must still reject every bad route row.
+    from src.engine import ai_engine_openai as engine_module
+
+    *_, frozen, machine_fields = engine_module._final_entry_machine_inputs(
+        prepared,
+        [],
+        context,
+        refresher=lambda ws, ticks, ctx: handlers._refresh_prepared_entry_inputs(
+            "123456", ws, ticks, ctx,
+            _defer_canonical_revalidation=defer_canonical,
+        ),
+    )
+    assert (not machine_fields.get("entry_machine_input_error") and
+            snapshot_module.ai_input_preflight(frozen)["source_allowed"]) is (
+        route_state == "fresh"
+    )
+
+
+@pytest.mark.parametrize("defer_canonical,expected_builds", [(False, 2), (True, 1)])
+def test_final_freeze_owns_one_canonical_build_without_mutating_input(
+    monkeypatch, defer_canonical, expected_builds
+):
+    from src.engine import ai_engine_openai as engine_module
+    from src.engine.scalping import entry_candle_context as candles
+
+    ws, context = _ws(NOW - 0.1), _context()
+    before = deepcopy((ws, context))
+    monkeypatch.setattr(handlers.time, "time", lambda: NOW)
+    monkeypatch.setattr(handlers, "WS_MANAGER", SimpleNamespace(get_latest_data=lambda _: ws))
+    monkeypatch.setenv("KORSTOCKSCAN_SCALP_PRE_SUBMIT_QUOTE_REFRESH_ENABLED", "true")
+    native = candles.revalidate_entry_candle_snapshot
+    calls = []
+
+    def counted(*args, **kwargs):
+        calls.append(kwargs.get("_owned_inputs", False))
+        return native(*args, **kwargs)
+
+    monkeypatch.setattr(handlers, "revalidate_entry_candle_snapshot", counted)
+    monkeypatch.setattr(candles, "revalidate_entry_candle_snapshot", counted)
+    *_, frozen, fields = engine_module._final_entry_machine_inputs(
+        ws, [], context,
+        refresher=lambda a, b, c: handlers._refresh_prepared_entry_inputs(
+            "123456", a, b, c, _defer_canonical_revalidation=defer_canonical
+        ),
+        deadline_epoch=NOW + 1,
+    )
+    assert "entry_machine_input_error" not in fields
+    assert len(calls) == expected_builds and calls[-1] is True
+    assert (ws, context) == before
+    frozen["ai_market_snapshot_v1"]["sources"]["bbo"]["value"]["best_bid"] = 1
+    assert (ws, context) == before
 
 
 def test_watching_final_refresh_rebinds_krx_after_integrated_aggregate(

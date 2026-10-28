@@ -5480,3 +5480,68 @@ corrected to the immutable3171f2a92 bytes. Compile, diff and document parser
 PASS. Delta from3171f2a92: non-test source +52/-0; tests +52/-27;
 docs +44/-1 after this result. Growth is the strict counter contract and complete
 reviewed source inventory; original implementations remain single owners.
+
+### Regular delivery integration with incumbent holding/P5 — 2026-10-28
+
+The user authorized integration of7022d9972 into the actual selected138443c8d,
+keeping allocation=current and the incumbent auxiliary policy. The pinned Main
+was4183243/start80802539; source27/target28. No Q1/Q2/R1 or prompt membership
+selection, validity extension, provider/order call or safety relaxation is part
+of this work. The existing five-second/1200ms and partial-SELL/custody repairs stay.
+
+Review resolved overlapping preclaim rank code by retaining the incumbent's
+immutable pre-mutation rank snapshot and carrying the candidate's explicit
+allocation-policy argument. Restored queue/env metadata cannot opt into Q1/Q2.
+The eight reviewed entry handler functions match7022 bytes; all other functions,
+classes and module statements are unchanged from138443c8d. The final-freeze owner
+performs canonical validation once while direct refresh callers retain it.
+Market-state veto and actual source failure get their own original attribution;
+the final decision, due time and native hard guards remain in place.
+
+Native handoff and independent preparation retain both complete issued profiles
+and add the exact combined generation. Unknown, missing, dirty, mixed and
+committed-different source cases stay rejected. The P5 invocation-diagnostics
+repair, original RFHIC two-gap identities, historical quantity nulls and current
+source detection remain. No production module, worker, wrapper or ledger was added.
+Replacement: intermediate duplicate canonical build removed from the final-freeze
+callback only; existing final/direct validators retained; source/market diagnostic
+classification corrected; rank snapshot retained, optional policy dispatch extended.
+
+The same change-scoped inventory has61 individual consumers, including the
+independent P5 diagnostic reader, each policy-load child, report dispatch and the
+new local-refresh/canonical, preclaim-role, durable allocation/rank and expiry
+consumers. Quantity reader/code generation is identical, so its sealed original
+report, historical projection and prepared reference are read-only revalidated.
+Trailing's full-handler/AI code contract changes and requires native currentness
+regeneration from the preserved source27 input, without changing original reports,
+policy or economic nulls. Disabled optional weakness research remains operator_paused;
+there is no installer/schedule reactivation during this deployment.
+
+Validation evidence is `tmp/regular-delivery-integrated-20261028/`.
+Runtime producer/consumer2417 cases and complete-profile143 cases passed. Initial
+independent-reader failures from integration-test variable names were repaired;
+the original failure output is retained. Its additional old P5 expectation was
+corrected to the already-issued P5 generation, without changing the production
+reader. Targeted rechecks, holding/transition tests, compile/diff and document parser
+are recorded before candidate publication. Source/test growth is the complete
+reviewed inventories, explicit opt-in dispatch and meaningful failure coverage;
+separate counts are in `change-size-accounting.json`.
+
+Deployment acceptance requires active-parent parity/handoff, fresh candidate P5,
+existing ordered transition and selected P5, exact successor PID policy consumption,
+current native observer then health. Original unsuccessful attempts remain.
+Existing MainEntrySourceTerminalRepair1022/MachinePatternOpportunityResearch1023
+own a bounded post-start REGULAR SOR/_AL observation through15:30: first/reobservation
+allocation, original claim deadline, guard time versus waiting, and pre-AI expiry
+per exact source/PID. No sample means OPEN, never zero delay or economic improvement.
+The10/29 PRE08:05-08:20 and REGULAR09:05-09:25 windows remain distinct. Holding source
+closure and source28 postclose/next Main retain their own existing owners.
+
+Final targeted closure:runtime2417, complete-profile143, holding/startup/ordered
+transition1663 PASS. Independent preparation1087 cases are covered by995 original
+passes plus92 corrected cases (the four inherited P5 expectations passed their
+final8-case family recheck); no unchanged whole-suite retry was used. Compile of
+all15 changed Python files, scoped diff and print-only document parser PASS.
+Baseline138443c8d:non-test source+196/-40, tests+343/-48; docs are the existing
+owners' scoped integration record. No unresolved finding in this changed scope;
+final candidate/selected/PID/natural/economic states still require their own evidence.

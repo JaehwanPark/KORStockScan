@@ -45,7 +45,15 @@ class ZeroBaseDiscoveryRuntime:
         session_date: str,
         state_path: Path,
         claim_receipt_emitter=None,
+        allocation_policy="current",
     ):
+        # Explicit offline/candidate configuration only. Neither a restored
+        # queue nor WS metadata may select a different service order.
+        if type(allocation_policy) is not str or allocation_policy not in {
+            "current", "eligible_wait", "service_wait"
+        }:
+            raise ValueError("zero_base_allocation_policy_invalid")
+        self.allocation_policy = allocation_policy
         self.event_bus = event_bus
         self.state_path = Path(state_path)
         self.claim_receipt_emitter = claim_receipt_emitter
@@ -376,6 +384,7 @@ class ZeroBaseDiscoveryRuntime:
             deferred_active_codes=active_codes,
             product_check=discovery_product_filter(self.queue.session_date),
             borrow_idle_short_slot=True,
+            allocation_policy=self.allocation_policy,
             activity_claims_per_gainer=(
                 7
                 if regime == session_contract.MARKET_SESSION_REGIME_KRX_NXT_AFTERMARKET
@@ -508,7 +517,7 @@ class ZeroBaseDiscoveryRuntime:
                             "zero_base_admission_coverage": "dispatch_samples_only",
                             "zero_base_admission_rank_schema": "preclaim_rank_inputs_v1",
                             "zero_base_admission_claim_sequence_before": before_admission._claim_sequence,
-                            "zero_base_admission_allocation_policy": "current",
+                            "zero_base_admission_allocation_policy": self.allocation_policy,
                         },
                     )
                     if selected

@@ -4014,10 +4014,13 @@ def _scanner_watch_zero_context_fields(
 
 
 def _strength_momentum_zero_context_fields(
-    momentum_gate: dict | None, source_quality_block_reason: str | None
+    momentum_gate: dict | None, source_quality_block_reason: str | None,
+    market_state_block_reason: str | None = None,
 ) -> dict:
     gate = momentum_gate or {}
-    reason_text = str(source_quality_block_reason or gate.get("reason") or "")
+    reason_text = str(
+        source_quality_block_reason or market_state_block_reason or gate.get("reason") or ""
+    )
     stale = (
         reason_text in {"stale_ws_snapshot", "trade_tick_quiet"}
         or "stale" in reason_text
@@ -33384,7 +33387,10 @@ def _pre_submit_refresh_real_ws_snapshot(
     return refreshed, fields
 
 
-def _refresh_prepared_entry_inputs(code, ws_data, recent_ticks, candle_context):
+def _refresh_prepared_entry_inputs(
+    code, ws_data, recent_ticks, candle_context, *,
+    _defer_canonical_revalidation=False,
+):
     """Rebind prepared entry input to local WS only; never relax source gates."""
     snapshot = candle_context.get("ai_market_snapshot_v1")
     snapshot = snapshot if isinstance(snapshot, dict) else {}
@@ -33495,12 +33501,18 @@ def _refresh_prepared_entry_inputs(code, ws_data, recent_ticks, candle_context):
             ws_data = selected_ws
             # Do not resurrect old REST tape when the new WS frame lacks it.
             recent_ticks = list(ws_data.get("recent_trade_ticks") or [])
-        candle_context = revalidate_entry_candle_snapshot(
-            candle_context, ws_data, now_ts=time.time()
-        )
-        fields["entry_ai_final_prepared_snapshot_age_ms"] = candle_context.get(
-            "market_snapshot_revalidation", {}
-        ).get("elapsed_ms")
+        if _defer_canonical_revalidation:
+            # Only the final input-freeze callback uses this path. Its owner
+            # detaches these inputs and performs canonical revalidation once.
+            # Local quote, route and epoch checks above still run here.
+            fields["entry_ai_final_canonical_revalidation_deferred"] = True
+        else:
+            candle_context = revalidate_entry_candle_snapshot(
+                candle_context, ws_data, now_ts=time.time()
+            )
+            fields["entry_ai_final_prepared_snapshot_age_ms"] = candle_context.get(
+                "market_snapshot_revalidation", {}
+            ).get("elapsed_ms")
     except (AttributeError, KeyError, TypeError, ValueError, OverflowError) as exc:
         # Canonical preflight remains the rejection owner. Never reuse a
         # previously allowed snapshot after a route/clock/contract error.
@@ -44099,7 +44111,7 @@ def _retry_entry_ai_submit_authority_before_block(
                 stock, code, facts.pop("observation_ws_data", retry_ws_data), **facts
             ),
             entry_input_refresher=lambda ws, ticks, context: _refresh_prepared_entry_inputs(
-                code, ws, ticks, context
+                code, ws, ticks, context, _defer_canonical_revalidation=True
             ),
             prompt_profile="watching",
             metadata_extra={
@@ -55614,6 +55626,14 @@ def _strength_momentum_source_quality_block_reason(
         pass
     if reason == "insufficient_history":
         return "insufficient_history"
+    return ""
+
+
+def _strength_momentum_market_state_block_reason(result: dict | None) -> str:
+    """Preserve the incumbent market veto without calling it missing source."""
+    if not _rule_bool("SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED", True):
+        return ""
+    result = result if isinstance(result, dict) else {}
     buy_ratio = _safe_float(result.get("window_buy_ratio"), 0.0)
     exec_buy_ratio = _safe_float(result.get("window_exec_buy_ratio"), 0.0)
     net_buy_qty = _safe_int(result.get("window_net_buy_qty"), 0)
@@ -55746,6 +55766,7 @@ def _strength_momentum_stability_recheck_decision(
     quality_fields: dict | None,
     *,
     source_quality_block_reason: str = "",
+    market_state_block_reason: str = "",
     now_ts: float | None = None,
 ) -> dict:
     """Defer transient scanner strength blocks until the WS tick window is stable."""
@@ -55766,6 +55787,7 @@ def _strength_momentum_stability_recheck_decision(
         "reason": "not_pending",
         "strength_momentum_reason": reason or "-",
         "source_quality_block_reason": str(source_quality_block_reason or "-"),
+        "market_state_block_reason": str(market_state_block_reason or "-"),
         "recheck_after_epoch": "not_applicable_recheck_after_epoch",
         "recheck_delay_sec": 0,
         "recheck_attempt_count": _safe_int(
@@ -55867,6 +55889,9 @@ def _strength_momentum_stability_recheck_decision(
     attempt_count = _safe_int(stock.get("entry_strength_momentum_recheck_count"), 0)
     if attempt_count >= max_attempts:
         base["reason"] = "max_attempts_reached"
+        return base
+    if market_state_block_reason and not source_reason:
+        base["reason"] = "market_state_block"
         return base
     if (
         source_reason
@@ -65510,7 +65535,7 @@ def _resolve_scanner_async_entry_ai(
                 thaw_scanner_async_value(prepared.get("recent_candles") or []),
                 entry_economics_observer=observe_economics,
                 entry_input_refresher=lambda ws, ticks, context: _refresh_prepared_entry_inputs(
-                    code, ws, ticks, context
+                    code, ws, ticks, context, _defer_canonical_revalidation=True
                 ),
                 entry_input_deadline_epoch=async_context.deadline_epoch,
                 entry_input_deadline_perf=async_context.deadline_perf,
@@ -66033,6 +66058,12 @@ def _handle_watching_strategy_branch(
                                 ws_data, momentum_gate
                             )
                         )
+                        market_state_block_reason = (
+                            _strength_momentum_market_state_block_reason(momentum_gate)
+                        )
+                        preclaim_block_reason = (
+                            source_quality_block_reason or market_state_block_reason
+                        )
                         strength_gate_quality_fields = (
                             _pre_ai_blocked_gate_quality_fields(
                                 gate_name="strength_momentum",
@@ -66048,6 +66079,7 @@ def _handle_watching_strategy_branch(
                                 momentum_gate,
                                 strength_gate_quality_fields,
                                 source_quality_block_reason=source_quality_block_reason,
+                                market_state_block_reason=market_state_block_reason,
                                 now_ts=now_ts,
                             )
                         )
@@ -66106,6 +66138,7 @@ def _handle_watching_strategy_branch(
                                 reason=momentum_gate.get("reason"),
                                 source_quality_block_reason=source_quality_block_reason
                                 or "-",
+                                market_state_block_reason=market_state_block_reason or "-",
                                 risk_state=pending_context.get("risk_state"),
                                 recheck_reason=stability_recheck.get("reason"),
                                 recheck_after_epoch=stability_recheck.get(
@@ -66133,7 +66166,7 @@ def _handle_watching_strategy_branch(
                                 **pre_ai_ws_refresh_fields,
                             )
                             if (
-                                source_quality_block_reason
+                                preclaim_block_reason
                                 or not opening_rotation_handoff_defers_baseline
                             ):
                                 return False
@@ -66164,8 +66197,7 @@ def _handle_watching_strategy_branch(
                             _resolve_scanner_rising_strength_momentum_override(
                                 stock, momentum_gate
                             )
-                            if source_quality_block_reason
-                            in {"", "extreme_sell_dominant"}
+                            if not source_quality_block_reason
                             else {
                                 "allowed": False,
                                 "skip_reason": "source_quality_hard_block",
@@ -66274,17 +66306,31 @@ def _handle_watching_strategy_branch(
                                 "scanner_rising_override": True,
                             }
                         else:
+                            strength_baseline_would_block = bool(
+                                not observe_only
+                                and not _rule_bool(
+                                    "SCALP_PRE_AI_SOFT_GATE_ENABLED", True
+                                )
+                            )
                             gate_action = (
                                 "source_quality_block"
                                 if source_quality_block_reason
-                                else "risk_context_only"
+                                else (
+                                    "baseline_block"
+                                    if market_state_block_reason
+                                    or (
+                                        strength_baseline_would_block
+                                        and not opening_rotation_handoff_defers_baseline
+                                    )
+                                    else "risk_context_only"
+                                )
                             )
                             strength_context = _register_scalp_pre_ai_gate_context(
                                 stock,
                                 ws_data,
                                 "strength_momentum",
                                 {
-                                    "risk_state": source_quality_block_reason
+                                    "risk_state": preclaim_block_reason
                                     or "weak_momentum_context",
                                     "reason": momentum_gate.get("reason"),
                                     "threshold_family": "strength_momentum_soft_gate_p1",
@@ -66312,6 +66358,7 @@ def _handle_watching_strategy_branch(
                                 reason=momentum_gate.get("reason"),
                                 source_quality_block_reason=source_quality_block_reason
                                 or "-",
+                                market_state_block_reason=market_state_block_reason or "-",
                                 risk_state=strength_context.get("risk_state"),
                                 delta=f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
                                 buy_value=int(
@@ -66334,6 +66381,7 @@ def _handle_watching_strategy_branch(
                                 **_strength_momentum_zero_context_fields(
                                     momentum_gate,
                                     source_quality_block_reason,
+                                    market_state_block_reason,
                                 ),
                                 **strength_gate_quality_fields,
                                 **pre_ai_ws_refresh_fields,
@@ -66349,32 +66397,17 @@ def _handle_watching_strategy_branch(
                                     overlap_snapshot=overlap_snapshot,
                                 ),
                             )
-                            strength_baseline_would_block = bool(
-                                not observe_only
-                                and not _rule_bool(
-                                    "SCALP_PRE_AI_SOFT_GATE_ENABLED", True
-                                )
-                            )
                             _append_trade_quality_block_history(
                                 stock,
                                 stage="blocked_strength_momentum",
                                 risk_state=strength_context.get("risk_state"),
-                                gate_action=(
-                                    "source_quality_block"
-                                    if source_quality_block_reason
-                                    else (
-                                        "baseline_block"
-                                        if strength_baseline_would_block
-                                        and not opening_rotation_handoff_defers_baseline
-                                        else "risk_context_only"
-                                    )
-                                ),
+                                gate_action=gate_action,
                             )
-                            if source_quality_block_reason or (
+                            if preclaim_block_reason or (
                                 not opening_rotation_handoff_defers_baseline
                                 and strength_baseline_would_block
                             ):
-                                if source_quality_block_reason:
+                                if preclaim_block_reason:
                                     from src.engine.monitoring.runtime_performance import (
                                         record_native_preclaim_gate,
                                     )
@@ -66383,7 +66416,7 @@ def _handle_watching_strategy_branch(
                                         stock=stock,
                                         code=code,
                                         ws_data=ws_data,
-                                        reason=source_quality_block_reason,
+                                        reason=preclaim_block_reason,
                                         now=time.time(),
                                         metrics=momentum_gate,
                                     )
@@ -67013,7 +67046,7 @@ def _handle_watching_strategy_branch(
                                     **facts,
                                 ),
                                 entry_input_refresher=lambda ws, ticks, context: _refresh_prepared_entry_inputs(
-                                    code, ws, ticks, context
+                                    code, ws, ticks, context, _defer_canonical_revalidation=True
                                 ),
                                 prompt_profile="watching",
                                 metadata_extra={
@@ -67488,7 +67521,7 @@ def _handle_watching_strategy_branch(
                                     **facts,
                                 ),
                                 entry_input_refresher=lambda ws, ticks, context: _refresh_prepared_entry_inputs(
-                                    code, ws, ticks, context
+                                    code, ws, ticks, context, _defer_canonical_revalidation=True
                                 ),
                                 reversal_signal_claim=entry_recheck_claim,
                                 entry_input_deadline_epoch=__import__(
@@ -67724,7 +67757,7 @@ def _handle_watching_strategy_branch(
                                     **facts,
                                 ),
                                 entry_input_refresher=lambda ws, ticks, context: _refresh_prepared_entry_inputs(
-                                    code, ws, ticks, context
+                                    code, ws, ticks, context, _defer_canonical_revalidation=True
                                 ),
                                 reversal_signal_claim=entry_recheck_claim,
                                 entry_input_deadline_epoch=__import__(

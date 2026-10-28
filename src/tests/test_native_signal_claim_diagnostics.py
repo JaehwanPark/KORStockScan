@@ -405,8 +405,9 @@ def test_raw_selection_recent_limit_is_explicit_and_keeps_original_counter(nativ
     assert not any(r["claimed"] for r in state.ready)
 
 
+@pytest.mark.parametrize("market_block", [False, True])
 def test_actual_main_guard_reaches_native_lifecycle_writer(
-    native, monkeypatch, tmp_path
+    native, monkeypatch, tmp_path, market_block
 ):
     from dataclasses import replace
     from src.engine import sniper_state_handlers as H
@@ -432,10 +433,25 @@ def test_actual_main_guard_reaches_native_lifecycle_writer(
             SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED=True,
         ),
     )
+    momentum = dict(enabled=True, allowed=False, reason="insufficient_history")
+    if market_block:
+        # Original 005930 2026-10-28 10:50:36.670 guard input. The native
+        # identity below is isolated; no live actor/signal is manufactured.
+        momentum.update(
+            reason="below_strength_base",
+            window_sec=8,
+            elapsed_sec=5.201,
+            window_total_value=1925939,
+            window_buy_ratio=0.0257,
+            window_exec_buy_ratio=0.0258,
+            window_net_buy_qty=-7585,
+        )
+    reason = "extreme_sell_dominant" if market_block else "insufficient_history"
+    action = "baseline_block" if market_block else "source_quality_block"
     monkeypatch.setattr(
         H,
         "evaluate_scalping_strength_momentum",
-        lambda *_: dict(enabled=True, allowed=False, reason="insufficient_history"),
+        lambda *_: momentum,
     )
     monkeypatch.setattr(H, "arm_big_bite_if_triggered", lambda **_: (False, {}))
     monkeypatch.setattr(H, "confirm_big_bite_follow_through", lambda **_: (True, {}))
@@ -477,11 +493,17 @@ def test_actual_main_guard_reaches_native_lifecycle_writer(
             analyze_target=lambda *_a, **_kw: pytest.fail("guard must stop AI")
         ),
     )
-    assert (
-        dict(stages)["blocked_strength_momentum"]["gate_action"]
-        == "source_quality_block"
+    fields = dict(stages)["blocked_strength_momentum"]
+    assert fields["gate_action"] == action
+    assert fields["source_quality_block_reason"] == ("-" if market_block else reason)
+    assert fields["market_state_block_reason"] == (reason if market_block else "-")
+    assert row["main_preclaim_guard"]["reason"] == reason
+    assert row["main_preclaim_guard"]["gate_action"] == action
+    assert row["main_preclaim_guard"]["blocker_role"] == (
+        "market_state" if market_block else "source_quality"
     )
-    assert row["main_preclaim_guard"]["reason"] == "insufficient_history"
+    assert stock["trade_quality_block_history"][-1]["gate_action"] == action
+    assert stock["scalp_pre_ai_gate_context"]["strength_momentum"]["gate_action"] == action
     native[2].legacy.turn = {"event_id": "new-low"}
     observe(native, T + 0.4)
     monkeypatch.setattr(E, "DATA_DIR", tmp_path)
@@ -495,7 +517,8 @@ def test_actual_main_guard_reaches_native_lifecycle_writer(
     ]
     capsule = json.loads(records[-1]["fields"]["native_signal_lifecycle"])
     assert capsule["terminal"] == "invalidated_before_claim"
-    assert capsule["main_preclaim_guard"]["reason"] == "insufficient_history"
+    assert capsule["main_preclaim_guard"]["reason"] == reason
+    assert capsule["main_preclaim_guard"]["gate_action"] == action
     assert capsule["claimed"] is False and not native[2].ready[0]["claimed"]
 
 

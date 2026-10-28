@@ -2106,6 +2106,60 @@ def test_scanner_terminal_block_stale_source_quality_is_not_fresh_input():
     )
 
 
+@pytest.mark.parametrize(
+    "source_reason, enabled, changes, expected",
+    [
+        ("", True, {}, "extreme_sell_dominant"),
+        ("insufficient_history", True, {}, "extreme_sell_dominant"),
+        ("", False, {}, ""),
+        ("", True, {"window_total_value": 0}, ""),
+        ("", True, {"window_net_buy_qty": 0}, ""),
+        ("", True, {"window_buy_ratio": 0.3501}, ""),
+        ("", True, {"window_exec_buy_ratio": 0.3501}, ""),
+        (
+            "",
+            True,
+            {"window_buy_ratio": 0.35, "window_exec_buy_ratio": 0.35},
+            "extreme_sell_dominant",
+        ),
+    ],
+)
+def test_sell_dominance_preserves_veto_but_is_not_source_loss(
+    monkeypatch, source_reason, enabled, changes, expected
+):
+    monkeypatch.setattr(
+        handlers,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED=enabled,
+            SCALP_PRE_AI_MAX_WS_AGE_SEC=3.0,
+        ),
+    )
+    monkeypatch.setattr(handlers.time, "time", lambda: 100.0)
+    result = dict(
+        reason=source_reason,
+        window_total_value=1925939,
+        window_buy_ratio=0.0257,
+        window_exec_buy_ratio=0.0258,
+        window_net_buy_qty=-7585,
+    )
+    result.update(changes)
+    ws = {"last_ws_update_ts": 99.8, "strength_momentum_history": [{"ts": 99.8}]}
+    source = handlers._strength_momentum_source_quality_block_reason(ws, result)
+    market = handlers._strength_momentum_market_state_block_reason(result)
+    assert source == (source_reason if enabled else "")
+    assert market == expected
+    assert (source or market) == (
+        source_reason if enabled and source_reason else expected
+    )
+    if enabled:
+        ws["last_ws_update_ts"] = 90.0
+        assert (
+            handlers._strength_momentum_source_quality_block_reason(ws, result)
+            == "stale_ws_snapshot"
+        )
+
+
 def test_strength_momentum_source_quality_blocks_stale_tick_window(monkeypatch):
     rules = SimpleNamespace(
         SCALP_PRE_AI_SOURCE_QUALITY_BLOCK_ENABLED=True,

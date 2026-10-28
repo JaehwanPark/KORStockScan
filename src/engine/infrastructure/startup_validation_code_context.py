@@ -3290,6 +3290,32 @@ for _name, _sha in REVIEWED_P5_DIAGNOSTIC_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# BUY preclaim semantics only: market veto stays active, source failures remain
+# hard blocks. Exact shared-handler/diagnostic bytes need independent intake.
+REVIEWED_PRECLAIM_MARKET_SOURCES = {'src/engine/sniper_state_handlers.py': '95aa2214c1fe308dc8ebb57f028ac868d314a7df5934b18e338e0a9f0aa73483', 'src/engine/monitoring/runtime_performance.py': 'a38222e79f79e06e06331dc6057059e88191f4e1688b5fe0cf82e59cd2148cbd', 'src/engine/ai_engine_openai.py': '376b3ce6f8ae75a5f629904c7d0a8b08670d69514b37fc4fb7db19a7e43d21de', 'src/engine/scalping/ai_decision_trace.py': 'f1a072179283cba22d64cba81b435dee1becb4ed875666ec1911945ff5e7517a', 'src/engine/scalping/ai_market_snapshot.py': '577d610ae0ace22261e994f41217c8ed8cfe5162e296eca0231d426480c08db8', 'src/scanners/zero_base_discovery_runtime.py': 'b93ba0f45617fe7d95887f81b9adb6941b9b61f40d3191047addbdc5a287e393'}
+REVIEWED_PRECLAIM_MARKET_ORIGINS = {'src/engine/sniper_state_handlers.py': '0bb6cc87e8acead7c0161bfe3d4c3ed24aa92a440a9647fbb61b69ba33bf02dd', 'src/engine/monitoring/runtime_performance.py': '90d6d73bcbc758a880d631a5862f0f2b0ea6b6764255d4fa5a73e4ff47596d82', 'src/engine/ai_engine_openai.py': '4534fc7e63f3c9df0be4c82bc8c75af2bb4d02cc4f3673a31d64f54a79765429', 'src/engine/scalping/ai_decision_trace.py': 'b6e45faa04e0ae78a3ffe81a1b0a4d180f103401c9c8e1fadc5d8e76200fdd80', 'src/engine/scalping/ai_market_snapshot.py': '7afe284ac20ac0a8f91df336bafdffac91494150d3248db83adc95619c07864a', 'src/scanners/zero_base_discovery_runtime.py': '441f47be2b070d26f1210b81088a7e879c87060335e9f4bef6b2dc55851fafd4'}
+for _name, _sha in REVIEWED_PRECLAIM_MARKET_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_PRECLAIM_MARKET_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
+# Complete integration of reviewed delivery with the issued holding/P5 repair.
+# Exact predecessor pairs retain custody; no policy or timing guard changes.
+REVIEWED_DELIVERY_INTEGRATED_SOURCES = {'src/engine/sniper_state_handlers.py': '95aa2214c1fe308dc8ebb57f028ac868d314a7df5934b18e338e0a9f0aa73483', 'src/engine/monitoring/runtime_performance.py': 'a38222e79f79e06e06331dc6057059e88191f4e1688b5fe0cf82e59cd2148cbd', 'src/engine/ai_engine_openai.py': '376b3ce6f8ae75a5f629904c7d0a8b08670d69514b37fc4fb7db19a7e43d21de', 'src/engine/scalping/ai_decision_trace.py': 'f1a072179283cba22d64cba81b435dee1becb4ed875666ec1911945ff5e7517a', 'src/engine/scalping/ai_market_snapshot.py': '577d610ae0ace22261e994f41217c8ed8cfe5162e296eca0231d426480c08db8', 'src/scanners/zero_base_discovery_runtime.py': '15a4f7266f329fb12fe8fc600bc639e0592c11efcae90c3df9c87902dcb7133d'}
+REVIEWED_DELIVERY_INTEGRATED_ORIGINS = {'src/engine/sniper_state_handlers.py': '0bb6cc87e8acead7c0161bfe3d4c3ed24aa92a440a9647fbb61b69ba33bf02dd', 'src/engine/monitoring/runtime_performance.py': '90d6d73bcbc758a880d631a5862f0f2b0ea6b6764255d4fa5a73e4ff47596d82', 'src/engine/ai_engine_openai.py': '5482e28106659d646d29b9abcf3428ea7dfe989f07a1f36f59e4a4aaf8f6d2f4', 'src/engine/scalping/ai_decision_trace.py': 'f1a072179283cba22d64cba81b435dee1becb4ed875666ec1911945ff5e7517a', 'src/engine/scalping/ai_market_snapshot.py': '7afe284ac20ac0a8f91df336bafdffac91494150d3248db83adc95619c07864a', 'src/scanners/zero_base_discovery_runtime.py': '06eb8c05864ab691c86e15b320ae99a19fb782a78899ac70ea79191c64040c9d'}
+for _name, _sha in REVIEWED_DELIVERY_INTEGRATED_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_DELIVERY_INTEGRATED_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

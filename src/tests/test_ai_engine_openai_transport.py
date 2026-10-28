@@ -4696,6 +4696,8 @@ def test_machine_refresh_failure_preserves_exact_clock_cause(monkeypatch, tmp_pa
     assert row["entry_machine_input_error"] == error
     if deadline:
         assert row["machine_source_gap_kind"] == error
+        from src.engine.scalping.ai_market_snapshot import classify_ai_input_blocker
+        assert classify_ai_input_blocker(error) == "freshness_or_timing"
     else:
         assert row.get("machine_source_gap_kind") != "entry_machine_input_deadline_expired"
     if existing_blocker:

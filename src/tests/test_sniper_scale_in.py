@@ -24409,7 +24409,9 @@ def test_scalping_pre_ai_refresh_prevents_stale_strength_block(monkeypatch):
         by_stage["blocked_strength_momentum"]["pre_ai_ws_snapshot_refresh_reason"]
         == "latest_ws_snapshot_fresh"
     )
-    assert by_stage["blocked_strength_momentum"]["gate_action"] == "risk_context_only"
+    # Refresh clears source staleness; the enabled legacy veto still blocks.
+    assert by_stage["blocked_strength_momentum"]["gate_action"] == "baseline_block"
+    assert stock["trade_quality_block_history"][-1]["gate_action"] == "baseline_block"
 
 
 def test_scalping_entry_timeout_uses_strategy_profile_not_target_price(monkeypatch):

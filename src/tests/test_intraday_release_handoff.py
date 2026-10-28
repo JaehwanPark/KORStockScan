@@ -5424,7 +5424,9 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_P5_DIAGNOSTIC_PROFILE,
+        "current": handoff.REVIEWED_DELIVERY_INTEGRATED_PROFILE,
+        "p5_diagnostic": handoff.REVIEWED_P5_DIAGNOSTIC_PROFILE,
+        "preclaim_market": handoff.REVIEWED_PRECLAIM_MARKET_PROFILE,
         "holding_expiry": handoff.REVIEWED_HOLDING_EXPIRY_PROFILE,
         "consumed_buy_lineage": handoff.REVIEWED_BUY_LINEAGE_PROFILE,
         "consumed_completion": handoff.REVIEWED_POSTCLOSE_COMPLETION_PROFILE,
@@ -5524,6 +5526,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     {
                         "issuer_bytes_source": "29a3c1475",
                         "holding_expiry": "3171f2a92",
+                        "p5_diagnostic": "138443c8d",
+                        "preclaim_market": "7022d9972",
                         "consumed_buy_lineage": "d0790117a",
                         "quantity_source": "fef43a8c5",
                         "stopped_preparation": "f48dd058d",
@@ -7159,4 +7163,44 @@ def test_p5_diagnostic_complete_generation(tmp_path, family, dependency, fault):
 def test_p5_diagnostic_keeps_issued_integration(tmp_path, family):
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, None, "holding_expiry"
+    )
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("fault", [None, "missing", "dirty", "committed_change", "parent_mix"])
+def test_preclaim_market_complete_candidate_and_negatives(tmp_path, family, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "current", "src/engine/sniper_state_handlers.py"
+    )
+
+
+@pytest.mark.parametrize("dependency", sorted(handoff.REVIEWED_PRECLAIM_MARKET_HASHES))
+@pytest.mark.parametrize("fault", ["missing", "dirty"])
+def test_preclaim_market_dependency_census(tmp_path, dependency, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, "holding_vote", fault, "current", dependency
+    )
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+def test_preclaim_market_preserves_issued_predecessor(tmp_path, family):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, None, "consumed_buy_lineage"
+    )
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("generation", ["p5_diagnostic", "preclaim_market"])
+def test_delivery_integration_preserves_both_issued_predecessors(tmp_path, family, generation):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, None, generation
+    )
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("dependency", sorted(handoff.REVIEWED_DELIVERY_INTEGRATED_HASHES))
+@pytest.mark.parametrize("fault", [None, "missing", "dirty", "committed_change", "parent_mix"])
+def test_delivery_integration_complete_generation(tmp_path, family, dependency, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "current", dependency
     )
