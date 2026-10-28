@@ -5,6 +5,46 @@ import pytest
 from src.engine import sniper_trade_review_report as report_mod
 
 
+@pytest.mark.parametrize("status", ["HOLDING", "SELL_ORDERED", "WATCHING"])
+@pytest.mark.parametrize("stage", ["exit_signal", "sell_order_sent", "sell_order_failed", "sell_partial_fill_progress"])
+def test_exit_intent_or_partial_fill_cannot_fabricate_completed_trade(monkeypatch, status, stage):
+    monkeypatch.setattr(report_mod, "find_gatekeeper_snapshot_for_trade", lambda *_: None)
+    trade = dict(id=49562, code="036930", rec_date="2026-10-28", status=status,
+                 buy_price=185300, buy_qty=1, buy_time="2026-10-28 15:04:32",
+                 sell_price=None, sell_time=None, profit_rate=None)
+    event = report_mod.HoldingEvent("2026-10-28 19:59:59", "TEST", "036930", stage,
+                                   dict(id="49562", curr_price=187000, profit_rate="0.92"), "original")
+    row = report_mod._build_trade_row(trade, [event])
+    assert row["status"] == status
+    assert row["sell_time"] in (None, "")
+    assert row["profit_rate"] is None
+    assert row["realized_pnl_krw"] is None
+    assert row["result_label"] not in {"익절", "손절", "본전"}
+    assert event.fields["curr_price"] == 187000
+
+
+def test_native_completed_event_still_restores_revived_trade():
+    trade = dict(id=42, code="123456", status="WATCHING", buy_price=10000, buy_qty=1)
+    event = report_mod.HoldingEvent("2026-09-23 09:10:00", "TEST", "123456", "sell_completed",
+                                   dict(id="42", sell_price=10100, profit_rate="0.77"), "original")
+    row = report_mod._normalize_trade_with_events(trade, [event])
+    assert row["status"] == "COMPLETED"
+    assert row["sell_price"] == 10100
+    assert row["sell_time"] == event.timestamp
+
+
+@pytest.mark.parametrize("value, expected", [(None, None), ("", None), ("unknown", None),
+                                             (float("nan"), None), (float("inf"), None),
+                                             ("0.5", 0.5), (0, 0)])
+def test_open_trade_preserves_optional_unrealized_profit_without_realizing_it(value, expected):
+    row = report_mod._normalize_trade_with_events(
+        dict(status="HOLDING", buy_price=10000, buy_qty=1, profit_rate=value), [],
+    )
+    assert row["status"] == "HOLDING"
+    assert row["profit_rate"] == expected
+    assert row["realized_pnl_krw"] is None
+
+
 @pytest.fixture(autouse=True)
 def _isolate_saved_structured_partition(monkeypatch, request):
     """Unit builders must not absorb the host's preserved trading archive."""

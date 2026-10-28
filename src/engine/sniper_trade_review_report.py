@@ -1432,7 +1432,6 @@ def _normalize_trade_with_events(trade: dict, events: list[HoldingEvent]) -> dic
     status = str(normalized.get("status") or "").upper()
 
     has_sell_completed = any(event.stage == "sell_completed" for event in events)
-    has_exit_signal = any(event.stage == "exit_signal" for event in events)
     has_sell_time = bool(_parse_dt(sell_time))
 
     if buy_price <= 0:
@@ -1461,7 +1460,7 @@ def _normalize_trade_with_events(trade: dict, events: list[HoldingEvent]) -> dic
         restored_sell_price = _safe_int(
             _first_non_empty_event_field(
                 events,
-                stages={"sell_completed", "exit_signal"},
+                stages={"sell_completed"},
                 keys=("sell_price", "curr_price"),
                 reverse=True,
             )
@@ -1472,7 +1471,7 @@ def _normalize_trade_with_events(trade: dict, events: list[HoldingEvent]) -> dic
     if not has_sell_time:
         restored_sell_time = _first_non_empty_event_field(
             events,
-            stages={"sell_completed", "exit_signal"},
+            stages={"sell_completed"},
             keys=("timestamp",),
             reverse=True,
         )
@@ -1480,18 +1479,21 @@ def _normalize_trade_with_events(trade: dict, events: list[HoldingEvent]) -> dic
             sell_time = str(restored_sell_time)
             has_sell_time = bool(_parse_dt(sell_time))
 
-    # 스캘핑 revive 설계에서는 원 거래 row가 WATCHING으로 되돌아가도,
-    # sell_time 또는 sell_completed 로그가 있으면 종료 거래로 보는 편이 복기 목적에 맞다.
-    if has_sell_completed or has_sell_time or (has_exit_signal and sell_price > 0):
+    # A revived row can retain a completed execution, but an exit decision,
+    # submitted order or partial fill is not a completed position.
+    if has_sell_completed or has_sell_time:
         status = "COMPLETED"
 
-    if abs(profit_rate) <= 0 and buy_price > 0 and sell_price > 0:
+    if status != "COMPLETED":
+        observed_profit = _safe_float(normalized.get("profit_rate"), float("nan"))
+        profit_rate = observed_profit if math.isfinite(observed_profit) else None
+    elif abs(profit_rate) <= 0 and buy_price > 0 and sell_price > 0:
         profit_rate = round(((sell_price - buy_price) / buy_price) * 100, 2)
     elif abs(profit_rate) <= 0:
         restored_profit_rate = _safe_float(
             _first_non_empty_event_field(
                 events,
-                stages={"sell_completed", "exit_signal"},
+                stages={"sell_completed"},
                 keys=("profit_rate",),
                 reverse=True,
             )
@@ -1499,7 +1501,11 @@ def _normalize_trade_with_events(trade: dict, events: list[HoldingEvent]) -> dic
         if abs(restored_profit_rate) > 0:
             profit_rate = round(restored_profit_rate, 2)
 
-    pnl_krw = _calculate_realized_pnl_krw(buy_price, sell_price, buy_qty)
+    pnl_krw = (
+        _calculate_realized_pnl_krw(buy_price, sell_price, buy_qty)
+        if status == "COMPLETED"
+        else None
+    )
     entry_mode = str(normalized.get("entry_mode") or "").strip().lower()
     if not entry_mode:
         restored_entry_mode = _first_non_empty_event_field(
@@ -1516,7 +1522,7 @@ def _normalize_trade_with_events(trade: dict, events: list[HoldingEvent]) -> dic
             "buy_qty": buy_qty,
             "sell_price": sell_price,
             "sell_time": sell_time,
-            "profit_rate": round(profit_rate, 2),
+            "profit_rate": round(profit_rate, 2) if profit_rate is not None else None,
             "realized_pnl_krw": pnl_krw,
             "entry_mode": entry_mode,
         }
