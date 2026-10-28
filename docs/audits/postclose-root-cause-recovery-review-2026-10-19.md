@@ -5438,3 +5438,45 @@ Final combined complete-profile/negative/predecessor regression272 PASS;
 538.65seconds wall time. Earlier failed endpoint attempts and intentionally
 interrupted overbroad runs are retained, not counted as closure. Re-review has
 no unresolved in-scope source finding; deployment/PID/natural states remain separate.
+
+
+#### P5 diagnostic consumer repair and reference publication completion
+
+The first3171f2a92 P5 attempt c9aca4a0178e480199b8aebb15bb3a4e failed before
+selection: native preparation itself returned PASS, but its final diagnostic
+reader rejected four newly emitted DigestSession invocation counters. The
+observer-only test inventory omitted this direct process-boundary consumer.
+The existing P5 reader now explicitly validates those four integer counters;
+unknown keys, negative values, booleans and missing native evidence still fail.
+The real DigestSession/native CLI regression fails on the original reader.
+Both independent source-custody readers include this changed consumer, retaining
+the issued3171 profile. No producer calculation, policy or runtime guard changes.
+The common consumer inventory includes this diagnostic issuer/reader across
+candidate, selected P5 and final PID evidence; no new validator or wrapper.
+
+A separate preparation invocation published only a quantity monitor proof and
+omitted its code-specific prepared reference. The fallback correctly retained
+the original9c6d04d generation. The native refresh publisher, using the unchanged
+31a85e88 report and publish_current=false, issued the exact reader reference;
+its consumer now has findings[] and retains historical49013/49266/49362 with
+original IDs, hashes and nulls. The failed attempt and original committed pointer
+remain preserved. No pointer was manually edited or policy reselected.
+
+Reuse disposition after the P5-only repair: holding/observer/expiry tests and
+unchanged source27 quantity/trailing generations are read-only revalidated.
+Changed P5/source profiles get targeted native process and complete-candidate
+negative tests. Final commit parity/handoff/P5 are newly issued, followed by
+selected P5, actual PID, current observer and health. The original native
+trailing currentness computation took280.30s, peak RSS183672KiB; quantity prepared
+reference issuance took59.76s. The earlier monitor-only attempt exceeded610s
+and is preserved as an incomplete invocation, not a successful final consumer.
+Replacement: existing P5 diagnostic contract extended; prior source profiles
+retained for issued predecessors; new production module/worker/CLI none.
+
+P5 diagnostic follow-up validation:694 startup/ordered-transition/digest tests,
+53 current-generation/independent-custody cases and3 exact predecessor cases
+PASS. The3 initial predecessor-test failures were an absent fixture-origin map,
+corrected to the immutable3171f2a92 bytes. Compile, diff and document parser
+PASS. Delta from3171f2a92: non-test source +52/-0; tests +52/-27;
+docs +44/-1 after this result. Growth is the strict counter contract and complete
+reviewed source inventory; original implementations remain single owners.

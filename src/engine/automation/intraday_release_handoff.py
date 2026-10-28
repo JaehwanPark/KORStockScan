@@ -13103,6 +13103,31 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+
+# Retain the issued integration profile; add its strict P5 diagnostic reader.
+REVIEWED_P5_DIAGNOSTIC_HASHES = {'src/engine/automation/main_startup_validation.py': 'bfc7e9a9c425f7a0a13ede4f5333046e73f02589ab4f03a5e95065185561f929', 'src/engine/infrastructure/startup_validation_code_context.py': '7c512ea8a1497743b89c5854f59f187a3a72e082ae7a967475aa2610f5f11a00'}
+REVIEWED_P5_DIAGNOSTIC_ORIGINS = {'src/engine/automation/main_startup_validation.py': 'ffc3433a9b8ef4a79f46562cecb4de59ed8a8b2a09ace5bb50027bb99f545c8f', 'src/engine/infrastructure/startup_validation_code_context.py': '197fcd28a92381d05bcd677a7be02df8893b3af8e3fafef4625d261074f839e6'}
+REVIEWED_P5_DIAGNOSTIC_PROFILE = {**REVIEWED_HOLDING_EXPIRY_PROFILE, **REVIEWED_P5_DIAGNOSTIC_HASHES}
+REVIEWED_P5_DIAGNOSTIC_VARIANTS = {
+    (key[0], REVIEWED_P5_DIAGNOSTIC_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/automation/main_startup_validation.py",
+        "selector_sha256": REVIEWED_P5_DIAGNOSTIC_HASHES["src/engine/automation/main_startup_validation.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_P5_DIAGNOSTIC_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_P5_DIAGNOSTIC_HASHES.get(os.path.normpath(name), sha) for name, sha in members.items()}
+            for origin, members in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_HOLDING_EXPIRY_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current) for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_P5_DIAGNOSTIC_ORIGINS[name]})
+    for name, current in REVIEWED_P5_DIAGNOSTIC_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -14044,6 +14069,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_HOLDING_EXPIRY_PROFILE
         prepared_variants = REVIEWED_HOLDING_EXPIRY_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/automation/main_startup_validation.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_P5_DIAGNOSTIC_HASHES["src/engine/automation/main_startup_validation.py"]
+    ):
+        prepared_hashes = REVIEWED_P5_DIAGNOSTIC_PROFILE
+        prepared_variants = REVIEWED_P5_DIAGNOSTIC_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

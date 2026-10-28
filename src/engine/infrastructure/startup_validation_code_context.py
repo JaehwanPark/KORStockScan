@@ -3277,6 +3277,19 @@ for _name, _sha in {**REVIEWED_HOLDING_PROJECTION_SOURCES, **REVIEWED_OBSERVER_I
     _history.update((_old, _sha) for _old in _origins)
 
 
+
+# P5 consumes the full DigestSession diagnostic schema across a process boundary.
+REVIEWED_P5_DIAGNOSTIC_SOURCES = {'src/engine/automation/main_startup_validation.py': 'bfc7e9a9c425f7a0a13ede4f5333046e73f02589ab4f03a5e95065185561f929'}
+REVIEWED_P5_DIAGNOSTIC_ORIGINS = {'src/engine/automation/main_startup_validation.py': 'ffc3433a9b8ef4a79f46562cecb4de59ed8a8b2a09ace5bb50027bb99f545c8f'}
+for _name, _sha in REVIEWED_P5_DIAGNOSTIC_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_P5_DIAGNOSTIC_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

@@ -5424,7 +5424,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_HOLDING_EXPIRY_PROFILE,
+        "current": handoff.REVIEWED_P5_DIAGNOSTIC_PROFILE,
+        "holding_expiry": handoff.REVIEWED_HOLDING_EXPIRY_PROFILE,
         "consumed_buy_lineage": handoff.REVIEWED_BUY_LINEAGE_PROFILE,
         "consumed_completion": handoff.REVIEWED_POSTCLOSE_COMPLETION_PROFILE,
         "consumed_report_origin": handoff.REVIEWED_REPORT_ORIGIN_PROFILE,
@@ -5522,6 +5523,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     "show",
                     {
                         "issuer_bytes_source": "29a3c1475",
+                        "holding_expiry": "3171f2a92",
                         "consumed_buy_lineage": "d0790117a",
                         "quantity_source": "fef43a8c5",
                         "stopped_preparation": "f48dd058d",
@@ -7141,4 +7143,20 @@ def test_entry_expiry_preserves_issued_buy_lineage(tmp_path, family):
 def test_holding_expiry_complete_generation(tmp_path, family, dependency, fault):
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, fault, "current", dependency
+    )
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("dependency", sorted(handoff.REVIEWED_P5_DIAGNOSTIC_HASHES))
+@pytest.mark.parametrize("fault", [None, "missing", "dirty", "committed_change", "parent_mix"])
+def test_p5_diagnostic_complete_generation(tmp_path, family, dependency, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "current", dependency
+    )
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+def test_p5_diagnostic_keeps_issued_integration(tmp_path, family):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, None, "holding_expiry"
     )

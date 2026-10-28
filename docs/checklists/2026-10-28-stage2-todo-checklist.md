@@ -43,6 +43,7 @@
 ## 실행 항목
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-29`, `Slot: POSTCLOSE`, `TimeWindow: 2026-10-28 20:05~2026-10-29 08:05`, `Track: RuntimeStability`)
+  - 10/28 통합 P5 보완:3171f2a92 정지 전 P5에서 새 invocation counter4개와 진단 reader 계약 누락을 확인했다. 실제 native CLI 회귀와 후보/독립 원천 결속을 보완하며 원 실패 영수증을 보존한다. 수량 코드별 prepared 참조는 native 발행 후 findings[]; 최종 후보/선택 P5와 실제 PID·observer·health는 승인 범위에서 계속 검증. [원인과 처리](../audits/postclose-root-cause-recovery-review-2026-10-19.md#p5-diagnostic-consumer-repair-and-reference-publication-completion).
   - 10/28 BUY 계보 인계:770b26078의 active-parent와 source27/target28를 고정하고87fc887bd 통합 complete profile·독립 준비 독자 검증 PASS. 후보/선택 후P5→native ordered transition→실제PID·정책/observer/health 검증은 분리 기록한다. 기존 장후 source28→10/29 전체 수용 창은 유지. [통합 리뷰](../audits/postclose-root-cause-recovery-review-2026-10-19.md#partial-sell-buy-lineage-integration-review--2026-10-28).
   - 10/28 완료 표시 통합:0d2ec67e7의 실행/실제 기동/원천·비용·의미 검증/전체 완료 분리를668 전달 수리와 함께 최신 native 코드 profile·독립 준비 reader로 결속한다. 원source27 봉인 보고서는 표시만을 위해 재생성하지 않는다. 현재 원천 결손·정상 대기·역사 null은 native reader 판정과 owner를 유지하며 다음 source28 정규 장후→10/29 Main의 무개입 수용은 OPEN.
   - 완료 판정 수리: 실행·실제 기동과 원천/비용/의미 검증을 분리하고 현재 미결 또는 coverage 미확인 상태의 전체 성공 표시를 차단한다. 클린 커밋의 통합·최소 재생성은 기존 배포 담당이 수행한다. 다음 수용에서 controller 실행 완료와 final detector/Main health의 `postclose_completion`을 함께 확인하고, 역사 제외/null·기동 안전계약 및 원 미결을 보존한다. [검토](../audits/postclose-root-cause-recovery-review-2026-10-19.md#postclose-completion-assessment-separation-2026-10-28).

@@ -635,6 +635,10 @@ finally:
                 "reused_reads",
                 "reused_bytes",
                 "semantic_reused_reads",
+                "invocation_full_reads",
+                "invocation_full_bytes",
+                "invocation_reused_reads",
+                "invocation_reused_bytes",
                 "admitted_native_proofs",
                 "admitted_native_bytes",
                 "cache_status",
@@ -662,6 +666,10 @@ finally:
             raise ValueError("diagnostic_contract")
         for key in (
             "semantic_reused_reads",
+            "invocation_full_reads",
+            "invocation_full_bytes",
+            "invocation_reused_reads",
+            "invocation_reused_bytes",
             "admitted_native_proofs",
             "admitted_native_bytes",
         ):

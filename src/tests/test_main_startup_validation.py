@@ -254,6 +254,11 @@ def test_native_preparation_context_keeps_cli_full_scope_and_cold_invocation_bou
         assert io["stats"]["cache_status"] == "invocation_memory_only"
         assert io["stats"]["full_reads"] == io["stats"]["reused_reads"] == 1
         assert io["stats"]["semantic_reused_reads"] == 0
+        # DigestSession emits these for every role, including postclose P5.
+        # Exercise its real process/CLI transfer, not a synthetic diagnostic.
+        for key in ("invocation_full_reads", "invocation_full_bytes",
+                    "invocation_reused_reads", "invocation_reused_bytes"):
+            assert io["stats"][key] == 0
         assert (
             io["stats"]["full_bytes"] == io["stats"]["reused_bytes"] == 2 * 1024 * 1024
         )
@@ -480,7 +485,9 @@ def test_native_preparation_rejects_missing_context_diagnostics(tmp_path, monkey
 
 
 @pytest.mark.parametrize(
-    "key", ["semantic_reused_reads", "admitted_native_proofs", "admitted_native_bytes"]
+    "key", ["semantic_reused_reads", "admitted_native_proofs", "admitted_native_bytes",
+            "invocation_full_reads", "invocation_full_bytes",
+            "invocation_reused_reads", "invocation_reused_bytes", "unknown_counter"]
 )
 @pytest.mark.parametrize("counter", [0, 7, -1, True, "0", None])
 def test_native_preparation_validates_native_reuse_counters(
@@ -502,7 +509,7 @@ def test_native_preparation_validates_native_reuse_counters(
         return result
 
     monkeypatch.setattr(validation, "_run_native_validation", invalid)
-    if type(counter) is int and counter >= 0:
+    if key != "unknown_counter" and type(counter) is int and counter >= 0:
         result = validation._native_preparation_check(code, DAY, "2026-10-16")
         assert result["native_validation_io"]["stats"][key] == counter
     else:
