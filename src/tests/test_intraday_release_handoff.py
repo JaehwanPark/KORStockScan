@@ -5424,7 +5424,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_REPORT_ORIGIN_PROFILE,
+        "current": handoff.REVIEWED_PRE_DELIVERY_PROFILE,
         "issuer_bytes_source": handoff.REVIEWED_ISSUER_BYTES_PROFILE,
         "inventory_origin_source": handoff.REVIEWED_INVENTORY_ORIGIN_PROFILE,
         "quantity_source": handoff.REVIEWED_QUANTITY_SOURCE_PROFILE,
@@ -7053,3 +7053,21 @@ def test_carried_owner_rejects_incomplete_successor(tmp_path, family, dependency
 @pytest.mark.parametrize('fault', [None,'missing','dirty','committed_change','parent_mix'])
 def test_report_origin_rejects_incomplete_successor(tmp_path, family, dependency, fault):
     test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault,'current',dependency)
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("fault", [None, "missing", "dirty", "committed_change", "parent_mix"])
+def test_pre_delivery_complete_candidate_and_negatives(tmp_path, family, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "current", "src/scanners/scalping_scanner.py"
+    )
+
+
+
+@pytest.mark.parametrize("dependency", sorted(handoff.REVIEWED_PRE_DELIVERY_HASHES))
+@pytest.mark.parametrize("fault", ["missing", "dirty"])
+def test_pre_delivery_dependency_census_is_complete(tmp_path, dependency, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, "holding_vote", fault, "current", dependency
+    )
+

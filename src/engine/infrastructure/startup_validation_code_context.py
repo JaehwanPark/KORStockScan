@@ -3179,6 +3179,26 @@ for _name, _sha in REVIEWED_REPORT_ORIGIN_SOURCES.items():
         _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
     _history.update((_old, _sha) for _old in _origins)
 
+# PRE physical-release wake and opt-in offline allocation comparison. The
+# independent reader admits these exact source generations only; no policy
+# membership, residence, retry deadline or provider authority is changed.
+REVIEWED_PRE_DELIVERY_SOURCES = {
+    "src/scanners/scalping_scanner.py": "84452ea2809ba2f2df523866e166dadf4b8d82bc66cbebc8270c126de8267150",
+    "src/scanners/zero_base_discovery_queue.py": "164533023032985e914eb25aa71aea97a9736072efdb82450c42c1f36affe95e",
+}
+REVIEWED_PRE_DELIVERY_ORIGINS = {
+    "src/scanners/scalping_scanner.py": "eb938c01d837d52973f7d47b59f96da1d338b2df9be8025c18d7c2f936546e16",
+    "src/scanners/zero_base_discovery_queue.py": "47da6fad4d1f301e99da12f38505a193ce6b2f9bbfc122cb338503bf4b177d3e",
+}
+for _name, _sha in REVIEWED_PRE_DELIVERY_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_PRE_DELIVERY_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

@@ -7700,6 +7700,11 @@ def test_live_submit_split_branch_binds_or_releases_reservation(
     env = {
         **vars(handlers),
         "stock": stock,
+        # These locals are initialized before the extracted pre-broker slice
+        # in the actual caller. This fixture has no frozen native source;
+        # retain that absence through the real optional trailing capture.
+        "native_original": None,
+        "machine_action_receipt": None,
         "code": "000001",
         "strategy": "SCALPING",
         "ws_data": {},

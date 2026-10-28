@@ -12928,6 +12928,47 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_REPORT_ORIGIN_HASHES.items()
 }}
 
+# Complete slot-return successor over the selected carried-SELL/report-origin generation.
+# Research-only input modules are not startup dependencies. The changed
+# runtime queue keeps its default ordering and all physical admission guards.
+REVIEWED_PRE_DELIVERY_HASHES = {
+    "src/scanners/scalping_scanner.py": "84452ea2809ba2f2df523866e166dadf4b8d82bc66cbebc8270c126de8267150",
+    "src/scanners/zero_base_discovery_queue.py": "164533023032985e914eb25aa71aea97a9736072efdb82450c42c1f36affe95e",
+    "src/engine/infrastructure/startup_validation_code_context.py": "1968a271f4d9ba79e9a4e2c77504116c63e5e51a9ec78d153f17620b77c42e57",
+}
+REVIEWED_PRE_DELIVERY_ORIGINS = {
+    "src/scanners/scalping_scanner.py": "eb938c01d837d52973f7d47b59f96da1d338b2df9be8025c18d7c2f936546e16",
+    "src/scanners/zero_base_discovery_queue.py": "47da6fad4d1f301e99da12f38505a193ce6b2f9bbfc122cb338503bf4b177d3e",
+    "src/engine/infrastructure/startup_validation_code_context.py": "9c6b34bbce98c8dc06e777fc7bf66f6a4bdc383d142aa83b390bb7b788415d9c",
+}
+REVIEWED_PRE_DELIVERY_PROFILE = {
+    **REVIEWED_REPORT_ORIGIN_PROFILE, **REVIEWED_PRE_DELIVERY_HASHES
+}
+REVIEWED_PRE_DELIVERY_VARIANTS = {
+    (key[0], REVIEWED_PRE_DELIVERY_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/scanners/scalping_scanner.py",
+        "selector_sha256": REVIEWED_PRE_DELIVERY_HASHES["src/scanners/scalping_scanner.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_PRE_DELIVERY_HASHES},
+        "contract_extensions": {
+            origin: {
+                name: REVIEWED_PRE_DELIVERY_HASHES.get(os.path.normpath(name), digest)
+                for name, digest in paths.items()
+            }
+            for origin, paths in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_REPORT_ORIGIN_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current)
+        for old in {
+            value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair
+        } | {REVIEWED_PRE_DELIVERY_ORIGINS[name]}
+    ) for name, current in REVIEWED_PRE_DELIVERY_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -13833,6 +13874,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_REPORT_ORIGIN_PROFILE
         prepared_variants = REVIEWED_REPORT_ORIGIN_VARIANTS
+    if (
+        (source := candidate_bytes("src/scanners/scalping_scanner.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_PRE_DELIVERY_HASHES["src/scanners/scalping_scanner.py"]
+    ):
+        prepared_hashes = REVIEWED_PRE_DELIVERY_PROFILE
+        prepared_variants = REVIEWED_PRE_DELIVERY_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present
