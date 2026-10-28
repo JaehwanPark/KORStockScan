@@ -907,3 +907,6 @@ when all match, retain the declared origin and attest it in Git. A family actual
 computed with different workflow code retains the verified workflow origin.
 Parent and isolated child repeat the same choice; changed scope/source, unknown
 code in both explicit origins and altered attestations still fail.
+
+
+The held-position smart SELL successor carries the verified HOLDING fact through all original adapter branches. Its complete native entry-code profile and independent preparation reader bind both changed sources together and retain issued predecessor generations. Missing, dirty, mixed or symlinked members remain invalid; the existing market-close, custody, route, quantity and order guards remain authoritative. Fresh affected report-capability fixtures, native active-parent parity and candidate/selected P5 are required before acceptance. This code repair does not replace original unresolved-terminal evidence. [Review](audits/postclose-root-cause-recovery-review-2026-10-19.md#postclose-monitor-source28-holding-context-repair-2026-10-28).

@@ -3329,7 +3329,26 @@ for _name, _sha in REVIEWED_ENTRY_LIFETIME_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# The reviewed smart SELL successor carries a literal held-position fact.
+# The native preparation reader admits both changed consumers together, while
+# every issued predecessor and all policy/custody/source checks remain intact.
+REVIEWED_HELD_SELL_SOURCES = {'src/engine/kiwoom_orders.py': '1e957677478847e69931f903b91058836c56b3604eba2bdcd6dccc966a226188', 'src/engine/sniper_state_handlers.py': 'e8284be9145b83822d35585b19154fbc723f22cdf4c1a4050b92dc04c2e02226'}
+REVIEWED_HELD_SELL_ORIGINS = {'src/engine/kiwoom_orders.py': '75df3ff7d8adfedd9e14ca0fb0d57675dd1279f12d52ff1d9b6c931746cee5a7', 'src/engine/sniper_state_handlers.py': '95aa2214c1fe308dc8ebb57f028ac868d314a7df5934b18e338e0a9f0aa73483'}
+for _name, _sha in REVIEWED_HELD_SELL_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_HELD_SELL_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
+    if current == REVIEWED_HELD_SELL_SOURCES.get(relative):
+        for name, expected in REVIEWED_HELD_SELL_SOURCES.items():
+            path = ROOT / name
+            if path.is_symlink() or not path.is_file() or _sha(path) != expected:
+                return False
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.
     if REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current) or (

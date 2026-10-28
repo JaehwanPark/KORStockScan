@@ -3845,7 +3845,10 @@ def test_entry_member_handoff_survives_candidate_to_selected_phase(tmp_path, mon
 
 def test_entry_member_carry_profile_is_complete_and_preserves_issued_predecessor():
     name = 'src/engine/infrastructure/startup_validation_code_context.py'
-    assert H.REVIEWED_ENTRY_MEMBER_CARRY_PROFILE[name] == C._sha(ROOT / name)
+    import subprocess
+    import hashlib
+    issued = subprocess.check_output(["git", "-C", str(ROOT), "show", "c780d4679:" + name])
+    assert H.REVIEWED_ENTRY_MEMBER_CARRY_PROFILE[name] == hashlib.sha256(issued).hexdigest()
     assert H.REVIEWED_ENTRY_LIFETIME_PROFILE[name] != H.REVIEWED_ENTRY_MEMBER_CARRY_PROFILE[name]
     assert set(H.REVIEWED_ENTRY_MEMBER_CARRY_PROFILE) == set(H.REVIEWED_ENTRY_LIFETIME_PROFILE)
     assert {k for k in H.REVIEWED_ENTRY_MEMBER_CARRY_PROFILE if H.REVIEWED_ENTRY_MEMBER_CARRY_PROFILE[k] != H.REVIEWED_ENTRY_LIFETIME_PROFILE[k]} == {name}
@@ -3854,3 +3857,33 @@ def test_entry_member_carry_profile_is_complete_and_preserves_issued_predecessor
         assert row['selector_path'] == name
         assert row['selector_sha256'] == H.REVIEWED_ENTRY_MEMBER_CARRY_PROFILE[name]
         assert row['dependencies'][name] == H.REVIEWED_ENTRY_MEMBER_CARRY_PROFILE[name]
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "dirty", "parent_mix", "symlink"])
+@pytest.mark.parametrize("relative", sorted(C.REVIEWED_HELD_SELL_SOURCES))
+def test_held_sell_independent_reader_requires_complete_native_pair(tmp_path, monkeypatch, fault, relative):
+    import subprocess
+    for name in C.REVIEWED_HELD_SELL_SOURCES:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((ROOT / name).read_bytes())
+    monkeypatch.setattr(C, "ROOT", tmp_path)
+    damaged = next(name for name in C.REVIEWED_HELD_SELL_SOURCES if name != relative)
+    path = tmp_path / damaged
+    if fault == "missing":
+        path.unlink()
+    elif fault == "dirty":
+        path.write_bytes(path.read_bytes() + b"\n")
+    elif fault == "parent_mix":
+        path.write_bytes(subprocess.check_output([
+            "git", "-C", str(ROOT), "show", "c780d4679:" + damaged,
+        ]))
+    elif fault == "symlink":
+        original = tmp_path / "outside.py"
+        original.write_bytes(path.read_bytes())
+        path.unlink()
+        path.symlink_to(original)
+    assert C.reviewed_preparation_pair(
+        relative, C.REVIEWED_HELD_SELL_ORIGINS[relative],
+        C.REVIEWED_HELD_SELL_SOURCES[relative],
+    ) is (fault is None)

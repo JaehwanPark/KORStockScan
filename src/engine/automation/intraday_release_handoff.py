@@ -13243,6 +13243,35 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Complete smart SELL context successor; select one exact combined reader
+# generation and preserve all existing lifetime/member-carry predecessors.
+REVIEWED_HELD_SELL_HASHES = {'src/engine/kiwoom_orders.py': '1e957677478847e69931f903b91058836c56b3604eba2bdcd6dccc966a226188', 'src/engine/sniper_state_handlers.py': 'e8284be9145b83822d35585b19154fbc723f22cdf4c1a4050b92dc04c2e02226', 'src/engine/infrastructure/startup_validation_code_context.py': 'ba69b9a6a3c53d516a35b0728eff6cc6c2501f1b1ef948bb2eb85c67418b3001'}
+REVIEWED_HELD_SELL_ORIGINS = {'src/engine/kiwoom_orders.py': '75df3ff7d8adfedd9e14ca0fb0d57675dd1279f12d52ff1d9b6c931746cee5a7', 'src/engine/sniper_state_handlers.py': '95aa2214c1fe308dc8ebb57f028ac868d314a7df5934b18e338e0a9f0aa73483', 'src/engine/infrastructure/startup_validation_code_context.py': 'f1296def3418ab84626cf3a0ced93eaea52f59418e4853923f2ea7a131aeee99'}
+REVIEWED_HELD_SELL_PROFILE = {
+    **REVIEWED_ENTRY_MEMBER_CARRY_PROFILE, **REVIEWED_HELD_SELL_HASHES,
+}
+REVIEWED_HELD_SELL_VARIANTS = {
+    (key[0], REVIEWED_HELD_SELL_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_sha256": REVIEWED_HELD_SELL_HASHES[value["selector_path"]],
+        "dependencies": {**value["dependencies"], **REVIEWED_HELD_SELL_HASHES},
+        "contract_extensions": {
+            origin: {
+                name: REVIEWED_HELD_SELL_HASHES.get(os.path.normpath(name), sha)
+                for name, sha in members.items()
+            } for origin, members in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_ENTRY_MEMBER_CARRY_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (origin, current) for origin in {
+            value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair
+        } | {REVIEWED_HELD_SELL_ORIGINS[name]}
+    ) for name, current in REVIEWED_HELD_SELL_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -14217,6 +14246,13 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_ENTRY_MEMBER_CARRY_PROFILE
         prepared_variants = REVIEWED_ENTRY_MEMBER_CARRY_VARIANTS
+    if any(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == sha
+        for name, sha in REVIEWED_HELD_SELL_HASHES.items()
+    ):
+        prepared_hashes = REVIEWED_HELD_SELL_PROFILE
+        prepared_variants = REVIEWED_HELD_SELL_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

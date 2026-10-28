@@ -5424,7 +5424,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_ENTRY_LIFETIME_PROFILE,
+        "current": handoff.REVIEWED_HELD_SELL_PROFILE,
+        "member_carry": handoff.REVIEWED_ENTRY_MEMBER_CARRY_PROFILE,
         "consumed_delivery_integration": handoff.REVIEWED_DELIVERY_INTEGRATED_PROFILE,
         "p5_diagnostic": handoff.REVIEWED_P5_DIAGNOSTIC_PROFILE,
         "preclaim_market": handoff.REVIEWED_PRECLAIM_MARKET_PROFILE,
@@ -5525,6 +5526,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     str(canonical),
                     "show",
                     {
+                        "member_carry": "c780d4679",
                         "consumed_delivery_integration": "f4cdac806",
                         "issuer_bytes_source": "29a3c1475",
                         "holding_expiry": "3171f2a92",
@@ -7227,3 +7229,15 @@ def test_entry_lifetime_every_discovered_dependency_is_required(tmp_path, depend
 @pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
 def test_entry_lifetime_keeps_issued_delivery_predecessor(tmp_path, family):
     test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, family, None, "consumed_delivery_integration")
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("dependency", sorted(handoff.REVIEWED_HELD_SELL_HASHES))
+@pytest.mark.parametrize("fault", [None, "missing", "dirty", "committed_change", "parent_mix"])
+def test_held_sell_complete_candidate_and_native_negative_cases(tmp_path, family, dependency, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, family, fault, "current", dependency)
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+def test_held_sell_preserves_issued_member_carry(tmp_path, family):
+    test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, family, None, "member_carry")
