@@ -2048,3 +2048,87 @@ def test_request_scoring_rejects_selector_advance_before_publication(tmp_path, m
             scope_candidates={'other_non_fixed|REGULAR|LT_20000|SOR':['A09']},confirm=R.SCORING_AUTHORITY,
             origin_root=tmp_path,origin_commit='a'*40)
     assert not R.scoring_intent_path(tmp_path).exists()
+
+
+def _materialized_scoring_fixture(data, monkeypatch):
+    from src.engine.scalping import continuous_reversal_postclose as P
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.infrastructure import runtime_release_router as router
+    day = "2026-10-27"
+    parent, _ = postclose_fixture(monkeypatch)
+    parent.update(bundle_sha256="e" * 64, target_date=day)
+    parent["continuous_reversal"]["operating_manifest"]["registration_receipts"] = [request()]
+    monkeypatch.setattr(R, "pending", lambda *a: None)
+    native_preparation_files(data, day)
+    source = P.seal(dict(normalized_sources=dict(partitions=[dict(day=day, venue="SOR", session="SOR_REGULAR")])))
+    source_path = data / "source.json"
+    P.write(source_path, source)
+    monkeypatch.setattr(N, "validate", lambda *a, **k: True)
+    monkeypatch.setattr(V, "_attested_activation_parent", lambda *a, **k: parent)
+    monkeypatch.setattr(P, "ensure_population", lambda *a, **k: source)
+    monkeypatch.setattr(P, "population_receipt", lambda *a: dict(path=str(source_path), sha256=P.file_hash(source_path)))
+    monkeypatch.setattr(router, "selected_release", lambda *_: (data, "a" * 40))
+    P.write(N.root(data) / "current.json", dict(bundle_sha256=parent["bundle_sha256"]))
+    intent = R.request_scoring(data, publication=day,
+        scope_candidates={"other_non_fixed|REGULAR|LT_20000|SOR": ["A09"]},
+        origin_root=data, origin_commit="a" * 40, confirm=R.SCORING_AUTHORITY)
+    bound = R.fulfill_scoring(data, day, day)
+    return day, intent, bound
+
+
+@pytest.mark.parametrize("damage", [None, "binding", "recipe", "code", "archive_missing", "archive_changed", "unmaterialized", "future_pending", "corrupt", "symlink", "live_reference"])
+def test_deployment_distinguishes_exact_materialization_from_pending_approval(tmp_path, monkeypatch, damage):
+    from src.engine.scalping import continuous_reversal_postclose as P
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+    day, intent, bound = _materialized_scoring_fixture(tmp_path, monkeypatch)
+    path = R.scoring_intent_path(tmp_path)
+    original = path.read_bytes()
+    materialized = R.scoring_path(tmp_path)
+    archived = next(Path(r["path"]) for r in bound["source_receipts"] if r["sha256"] == P.file_hash(path))
+    monkeypatch.setattr(V, "contract_modules", lambda: [])
+    if damage in ("binding", "recipe", "code"):
+        key = {"binding": "source_first_intent_sha256", "recipe": "parent_bundle_sha256", "code": "preparation_reader_code_sha256"}[damage]
+        P.write(materialized, P.seal(dict(bound, **{key: "f" * 64})))
+    elif damage == "archive_missing": archived.unlink()
+    elif damage == "archive_changed": archived.write_bytes(archived.read_bytes() + b" ")
+    elif damage == "unmaterialized": materialized.unlink()
+    elif damage == "future_pending":
+        P.write(path, P.seal(dict(intent, publication_date="2026-10-28", target_date="2026-10-29")))
+    elif damage == "live_reference":
+        replaced = [dict(r, path=str(path)) if r["path"] == str(archived) else r for r in bound["source_receipts"]]
+        P.write(materialized, P.seal(dict(bound, source_receipts=replaced)))
+    elif damage == "corrupt": materialized.write_text("invalid")
+    elif damage == "symlink":
+        target = tmp_path / "outside.json"
+        target.write_bytes(materialized.read_bytes())
+        materialized.unlink()
+        materialized.symlink_to(target)
+    if damage is not None:
+        with pytest.raises((ValueError, OSError)) as failure:
+            R.pending_scoring_code_check(tmp_path, day)
+        if damage in ("binding", "recipe", "code"):
+            assert "fulfillment_binding_invalid" in str(failure.value)
+        elif damage == "archive_changed":
+            assert "fulfillment_evidence_changed" in str(failure.value)
+        elif damage in ("unmaterialized", "future_pending"):
+            assert "pending_scoring_code_changed" in str(failure.value)
+    else:
+        result = R.pending_scoring_code_check(tmp_path, day)
+        assert result["request_state"] == "materialized"
+        assert result["materialized_sha256"] == P.file_hash(materialized)
+        assert result["sha256"] == P.file_hash(path)
+    if damage != "future_pending": assert path.read_bytes() == original
+
+
+def test_materialized_scoring_bytes_remain_in_real_deployment_cas(tmp_path, monkeypatch):
+    from src.engine.automation import ordered_intraday_deploy as D
+    day, _, _ = _materialized_scoring_fixture(tmp_path / "data", monkeypatch)
+    driver = object.__new__(D.Deployment)
+    driver.workspace, driver.day = tmp_path, day
+    driver._assert_failed_transition_unchanged = lambda: None
+    driver.pending_scoring = R.pending_scoring_code_check(tmp_path / "data", day)
+    path = R.scoring_path(tmp_path / "data")
+    path.write_bytes(path.read_bytes() + b" ")
+    with pytest.raises(ValueError, match="deployment_pending_scoring_changed"):
+        driver.assert_unchanged()

@@ -345,17 +345,46 @@ def request_scoring(data_root, *, publication, scope_candidates, confirm, origin
 
 
 def pending_scoring_code_check(data_root, publication):
-    """Include an unconsumed recipe in the deployment's pre-drain census."""
+    """Keep pending approval and its exact materialization in deployment CAS."""
     from src.engine.scalping import continuous_reversal_policy_v6 as V
     from src.engine.automation import postclose_summary_handoff as H
+    from src.engine.infrastructure import runtime_release_router as router
 
     path = scoring_intent_path(data_root)
-    if not path.exists():
+    if not path.exists() and not path.is_symlink():
         return dict(path=str(path), sha256=None)
-    raw = path.read_bytes()
-    value = _validate_scoring_intent(json.loads(raw))
+    value, raw = router._startup_receipt(path)
+    value = _validate_scoring_intent(value)
     result = dict(path=str(path), sha256=hashlib.sha256(raw).hexdigest())
-    if value["publication_date"] >= publication:
+    materialized = scoring_path(data_root)
+    result.update(materialized_path=str(materialized), materialized_sha256=None)
+    fulfilled = False
+    if materialized.exists() or materialized.is_symlink():
+        bound, bound_raw = router._startup_receipt(materialized)
+        validate_scoring(bound)
+        result["materialized_sha256"] = hashlib.sha256(bound_raw).hexdigest()
+        if bound["publication_date"] == value["publication_date"]:
+            # Materialization adds source evidence; it never changes approval.
+            # Its original intent remains immutable custody, not a new pending
+            # consumer. This proves neither source validity nor machine completion.
+            metadata = {"schema", "artifact_content_sha256", "activation_parent_origin", "code_handoff"}
+            if (bound.get("source_first_intent_sha256") != value["artifact_content_sha256"]
+                    or any(bound.get(k) != v for k, v in value.items() if k not in metadata)):
+                raise ValueError("deployment_scoring_fulfillment_binding_invalid")
+            expected_archive = (N.root(Path(data_root).resolve()) / "source-first-preparations"
+                                / value["artifact_content_sha256"] / "evidence"
+                                / (result["sha256"] + ".json"))
+            original = [r for r in bound["source_receipts"]
+                        if r["sha256"] == result["sha256"] and r["path"] == str(expected_archive)]
+            if not original or expected_archive.resolve() != expected_archive:
+                raise ValueError("deployment_scoring_fulfillment_evidence_missing")
+            # The native source reader also preserves verified archive aliases.
+            # Matching the original raw SHA proves identical intent bytes.
+            if not N.source_receipt_matches(original[0], data_root=Path(data_root).resolve()):
+                raise ValueError("deployment_scoring_fulfillment_evidence_changed")
+            fulfilled = True
+    result["request_state"] = "materialized" if fulfilled else "pending"
+    if value["publication_date"] >= publication and not fulfilled:
         code = {Path(m.__file__).name:P.file_hash(m.__file__) for m in V.contract_modules()}
         if (value["contract_file_sha256"] != code
                 or value["preparation_reader_code_sha256"] != P.file_hash(H.__file__)):

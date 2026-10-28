@@ -438,6 +438,15 @@ own newer source. A materialized scoring contract or started stage prohibits
 this transfer. Registration, source fulfillment, policy selection and actual
 Main consumption remain separate; the handoff starts no Main or order.
 
+Deployment distinguishes pending approval from exact native materialization.
+A same-date materialization must retain every approval field and bind the
+original intent's raw bytes in its native content-addressed evidence archive.
+Both live intent and materialization bytes remain in every deployment CAS.
+Missing, conflicting, corrupt or foreign evidence fails closed; an unmaterialized
+current/future approval still requires its exact consumer code. This custody
+classification proves neither source validity nor completed machine calculation
+or Main consumption, and does not permit rewriting the original approval.
+
 ## Observer verification and Sentinel I/O custody
 
 The approved I/O release uses `REVIEWED_IO_OBSERVER_SOURCES` for the exact original-to-reviewed bootstrap bytes. Only the historical health observer context enables process-local successful delay-generation reuse. Public preparation, startup, policy publication and live guards retain native full verification. Inventory signatures include source/code/date/pointer and canonical evidence shards; noncanonical trees remain fully verified. One in-flight observer validates a generation, failures remain failures during finite retry backoff, and no old success may authorize a changed generation.
