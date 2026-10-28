@@ -47,6 +47,11 @@ def test_controller_never_reruns_common_tuning_or_wrapper(monkeypatch, tmp_path)
 
     assert report["status"] == "summary_verified"
     assert report["whole_native_chain_done_claimed"] is False
+    assert report["completion_assessment"]["overall_success"] is False
+    assert (
+        report["completion_assessment"]["source_cost_semantic_status"]
+        == "pending_final_detector"
+    )
     assert report["full_wrapper_rerun_used"] is False
     assert report["common_tuning_recovery_retired"] is True
     assert report["actions"] == [
@@ -112,6 +117,8 @@ def test_controller_does_not_promote_main_scope_to_whole_chain_done(
         "2026-09-19", require_independent_producers=True
     )
     assert report["status"] == "done"
+    assert report["completion_assessment"]["execution_status"] == "complete"
+    assert report["completion_assessment"]["overall_success"] is False
     monkeypatch.setattr(
         mod,
         "current_strict_receipt_issues",

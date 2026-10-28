@@ -2389,6 +2389,9 @@ def build_runtime_approval_summary(
     report = {
         "schema_version": 3,
         "report_type": "runtime_approval_summary",
+        "status_scope": "direct_evidence_only",
+        "overall_success": False,
+        "source_cost_semantic_status": "pending_final_detector",
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "status": status,
@@ -2490,6 +2493,7 @@ def build_runtime_approval_summary(
         "",
         f"- status: `{report['status']}`",
         f"- direct evidence: `{report['direct_evidence_state']}`",
+        "- overall completion: `not_claimed`; source/cost/semantic validation: `pending_final_detector`",
         f"- economic state: `{report['economic_state']}`",
         f"- PREOPEN consumption: `{report['preopen_consumption_state']}`",
         "- authority: family-owned direct evidence summary only",

@@ -820,3 +820,260 @@ def test_sqlite_diagnostic_context_cannot_hide_or_replace_original_failure(conte
     assert result.severity == "fail"
     assert result.details["error"] == "original database failure"
     assert result.details["sqlite_errorcode"] is None
+
+
+@pytest.fixture
+def postclose_health():
+    from src.engine.error_detector import REQUIRED_DETECTOR_IDS
+
+    source, target = "2026-10-23", "2026-10-26"
+    ids = sorted(REQUIRED_DETECTOR_IDS)
+    report = dict(
+        schema_version=REPORT_SCHEMA_VERSION,
+        report_type=REPORT_TYPE,
+        target_date=target,
+        timestamp=target + "T08:00:00+09:00",
+        mode="full",
+        run_id="cron-completion-test",
+        runtime_effect=False,
+        runtime_mutation="none",
+        runtime_mutation_scope="trading_strategy_runtime",
+        operational_mutation_authority=list(OPERATIONAL_MUTATION_AUTHORITY),
+        operational_mutations=[],
+        operational_mutation_count=0,
+        summary_severity="pass",
+        expected_detector_count=len(ids),
+        expected_detector_ids=ids,
+        initialized_detector_count=len(ids),
+        initialized_detector_ids=ids,
+        initialization_failure_count=0,
+        detector_count=len(ids),
+        results=[
+            dict(
+                detector_id=name,
+                severity="pass",
+                summary="native contract pass",
+                details={},
+            )
+            for name in ids
+        ],
+        startup_consumption=dict(
+            status="ready",
+            target_date=target,
+            reason="current_pid_consumption_complete",
+            pid=123,
+            start_ticks="456",
+            manifest_sha256="a" * 64,
+            git_commit="b" * 40,
+            release_root="/fixture/release",
+        ),
+        detector_code_provenance=dict(
+            selected_release_consumed=True,
+            selected_commit="b" * 40,
+            selected_root="/fixture/release",
+        ),
+        startup_observer=dict(
+            status="attempted",
+            target_date=target,
+            pid=123,
+            producer_exit=0,
+            observer_exit=0,
+        ),
+    )
+    rows = {r["detector_id"]: r for r in report["results"]}
+    rows["cron_completion"]["details"] = dict(
+        postclose_finalization_source_date=source,
+        postclose_finalization_status="pass",
+    )
+    rows["artifact_freshness"]["details"] = dict(
+        completed_semantic_source=dict(
+            status="receipt_selected",
+            source_date=source,
+            findings=[],
+            generation="c" * 64,
+        ),
+        functional_semantic_coverage=dict(status="pass", findings=[]),
+        semantic_alerts=[],
+        semantic_observations=[
+            dict(
+                stage="postclose_handoff",
+                semantics=dict(
+                    status="done",
+                    source_date=source,
+                    bound_target_date=target,
+                    findings=[],
+                    report_sha256="c" * 64,
+                ),
+            )
+        ],
+        semantic_source_bindings=[
+            dict(stage="postclose_handoff", source_date=source, generation="c" * 64)
+        ],
+    )
+    for stage in (
+        "initial_quantity",
+        "main_stop_confirmation",
+        "main_auxiliary_policy",
+        "main_machine_policy",
+    ):
+        rows["artifact_freshness"]["details"]["semantic_observations"].append(
+            dict(
+                stage=stage,
+                semantics=dict(
+                    source_date=source, status="verified_carried", findings=[]
+                ),
+            )
+        )
+    return report, rows
+
+
+def test_published_health_separates_cost_gap_from_successful_startup(
+    postclose_health, tmp_path
+):
+    from copy import deepcopy
+
+    report, rows = postclose_health
+    details = rows["artifact_freshness"]["details"]
+    details["semantic_alerts"] = [
+        dict(
+            stage="initial_quantity",
+            source_date="2026-10-23",
+            reason="initial_quantity_economic_source_gap",
+            generation="d" * 64,
+        )
+    ]
+    details["initial_quantity_semantics"] = dict(
+        economic_sample_status="cost_eligible",
+        eligible=33,
+        total=37,
+        excluded=[
+            dict(record_id=49362, actual_cost=None),
+            dict(record_id=49415, actual_cost=None),
+        ],
+        historical_record_ids=[49013, 49266],
+    )
+    rows["artifact_freshness"]["severity"] = report["summary_severity"] = "warning"
+    original = deepcopy(report)
+    engine = ErrorDetectionEngine.__new__(ErrorDetectionEngine)
+    engine.dry_run = False
+    path = engine.write_report(report, tmp_path / "health.json")
+    published = json.loads(path.read_text())
+    result = published.pop("postclose_completion")
+    assert published == original  # Nulls, warnings and historical disposition survive.
+    assert result["execution_status"] == result["startup_status"] == "complete"
+    assert result["source_cost_semantic_status"] == "incomplete"
+    assert result["overall_success"] is False
+    assert result["current_findings"] == details["semantic_alerts"]
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "cost_gap",
+        "generation",
+        "missing_coverage",
+        "missing_alerts",
+        "health_only",
+        "missing_detector",
+        "pending_self_audit",
+        "startup_date",
+        "startup_pid",
+        "observer",
+        "resource_warning",
+        "missing_startup",
+        "missing_quantity",
+        "future_quantity",
+        "filtered_finding",
+        "release_mismatch",
+        "malformed_coverage",
+        "malformed_finding",
+    ],
+)
+def test_completion_requires_independent_native_proofs(postclose_health, fault):
+    from src.engine.error_detector import postclose_completion_assessment
+
+    report, rows = postclose_health
+    details = rows["artifact_freshness"]["details"]
+    # Authenticated historical exclusions are already separated by the native
+    # reader; age or an exclusion count is never interpreted here.
+    details["historical_diagnostics"] = [dict(record_id=49013, actual_cost=None)]
+    if fault == "cost_gap":
+        details["semantic_alerts"] = [
+            dict(reason="initial_quantity_economic_source_gap")
+        ]
+    elif fault == "generation":
+        details["completed_semantic_source"]["generation"] = "e" * 64
+    elif fault == "missing_coverage":
+        details.pop("functional_semantic_coverage")
+    elif fault == "missing_alerts":
+        details.pop("semantic_alerts")
+    elif fault == "health_only":
+        report["mode"] = "health_only"
+    elif fault == "missing_detector":
+        report["results"].pop()
+    elif fault == "pending_self_audit":
+        rows["cron_completion"]["details"]["postclose_finalization_status"] = fault
+    elif fault == "startup_date":
+        report["startup_consumption"]["target_date"] = "2026-10-23"
+    elif fault == "startup_pid":
+        report["startup_consumption"]["pid"] = 0
+    elif fault == "observer":
+        report["startup_observer"]["observer_exit"] = 1
+    elif fault == "resource_warning":
+        rows["resource_usage"]["severity"] = report["summary_severity"] = "warning"
+    elif fault == "missing_startup":
+        report.pop("startup_consumption")
+    elif fault == "missing_quantity":
+        details["semantic_observations"].pop(1)
+    elif fault == "future_quantity":
+        details["semantic_observations"][1]["semantics"]["source_date"] = "2026-10-26"
+    elif fault == "release_mismatch":
+        report["detector_code_provenance"]["selected_commit"] = "f" * 40
+    elif fault == "malformed_coverage":
+        details["functional_semantic_coverage"] = ["pass"]
+    elif fault == "malformed_finding":
+        details["semantic_observations"][1]["semantics"]["findings"] = [{}]
+    elif fault == "filtered_finding":
+        details["semantic_observations"][1]["semantics"]["findings"] = [
+            "new_cost_revision"
+        ]
+    result = postclose_completion_assessment(report)
+    assert result["overall_success"] is (fault is None)
+    assert result["runtime_effect"] is result["allowed_runtime_apply"] is False
+    assert result["natural_acceptance_status"] == "not_assessed"
+    assert details["historical_diagnostics"][0]["actual_cost"] is None
+    if fault in {
+        None,
+        "pending_self_audit",
+        "startup_date",
+        "startup_pid",
+        "observer",
+        "resource_warning",
+        "missing_startup",
+    }:
+        assert result["source_cost_semantic_status"] == "complete"
+
+
+@pytest.mark.parametrize(
+    "status,findings",
+    [
+        ("historical_diagnostic", ["initial_quantity_economic_source_gap"]),
+        ("valid_empty", []),
+        ("verified_carried", ["economics_null"]),
+    ],
+)
+def test_completion_preserves_native_historical_null_and_valid_carry(
+    postclose_health, status, findings
+):
+    from src.engine.error_detector import postclose_completion_assessment
+
+    report, rows = postclose_health
+    observation = rows["artifact_freshness"]["details"]["semantic_observations"][1][
+        "semantics"
+    ]
+    observation.update(status=status, findings=findings, actual_cost=None)
+    result = postclose_completion_assessment(report)
+    assert result["source_cost_semantic_status"] == "complete"
+    assert result["overall_success"] is True
+    assert observation["actual_cost"] is None

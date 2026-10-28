@@ -43,6 +43,7 @@
 ## 실행 항목
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-29`, `Slot: POSTCLOSE`, `TimeWindow: 2026-10-28 20:05~2026-10-29 08:05`, `Track: RuntimeStability`)
+  - 완료 판정 수리: 실행·실제 기동과 원천/비용/의미 검증을 분리하고 현재 미결 또는 coverage 미확인 상태의 전체 성공 표시를 차단한다. 클린 커밋의 통합·최소 재생성은 기존 배포 담당이 수행한다. 다음 수용에서 controller 실행 완료와 final detector/Main health의 `postclose_completion`을 함께 확인하고, 역사 제외/null·기동 안전계약 및 원 미결을 보존한다. [검토](../audits/postclose-root-cause-recovery-review-2026-10-19.md#postclose-completion-assessment-separation-2026-10-28).
   - 10/28 복구 완주: source27 계산/EOD 원본을 보존하고 필요한 summary·strict·controller·최종화만 갱신했다. 선택29a3c1475, 후보/선택 후 P5 PASS; 정규 PREOPEN07:38:40 성공, Main2852722/start78626491/동일 cwd와 실제 v6 bundle4abcce10 소비07:55:59·bootstrap PID PASS를 확인했다. current observer는 첫 own full sweep07:56:13 이전 게시됐고 첫 health07:56:29 FAIL0이다. observer의 partial/unobservable·정책 소비 증명 미포함·시장/route 자연 표본 부재는 별도 coverage 제한으로 보존한다. [근거](../audits/postclose-root-cause-recovery-review-2026-10-19.md#scheduled-preopen-and-main-consumption--2026-10-28).
   - 다음 수용: source28 정규 장후20:05→10/29 PREOPEN07:35→Main07:55·actual policy/PID·current observer/첫 full health까지 추가 수동 보정 없는 완주를 같은 owner에서 확인한다. source27은 recovered completion이며 무개입 수용으로 소급하지 않는다. 원6개 미결·약세 operator_paused·비용 null/제외와 보호 원천을 유지한다.
   - 잔여: 초기수량49362/49415의 원천·비용 세대 변경은 현재 경고,49013/49266은 승인된 역사 진단으로 보존한다. tmp는 보호 원천 포함 용량 경고이나 growth 경고는 없고 디스크 여유를 확인했다. 임의 기본값·분류 강제·원천 삭제나 경고 임계값 변경으로 닫지 않는다.

@@ -481,14 +481,16 @@ from src.engine.automation.postclose_finalization_generation import capture_fina
 receipt = capture_final_detector_receipt(
     Path(sys.argv[1]), sys.argv[2], started_after_ns=int(sys.argv[3])
 )
-print(receipt["run_id"], receipt["report_sha256"])
+completion = receipt["postclose_completion"]
+print(receipt["run_id"], receipt["report_sha256"],
+      completion["source_cost_semantic_status"], completion["overall_status"])
 PY
 )" || {
     echo "[FAIL] postclose_finalization target_date=${TARGET_DATE} reason=final_detector_receipt_invalid"
     exit 1
   }
-  read -r detector_run_id detector_report_sha256 <<< "$detector_receipt"
-  detector_generation_fields=" detector_run_id=${detector_run_id} detector_report_sha256=${detector_report_sha256}"
+  read -r detector_run_id detector_report_sha256 semantic_status overall_status <<< "$detector_receipt"
+  detector_generation_fields=" detector_run_id=${detector_run_id} detector_report_sha256=${detector_report_sha256} source_cost_semantic_status=${semantic_status} overall_status=${overall_status}"
 fi
 if [[ -n "$finalization_generation" ]]; then
   current_generation="$(env PYTHONPATH=. "$VENV_PY" - "$PROJECT_DIR" "$TARGET_DATE" "$REBIND_COMPLETED" <<'PY'
@@ -513,5 +515,5 @@ else
   finalization_generation_fields=""
 fi
 detector_finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-echo "[DONE] postclose_finalization target_date=${TARGET_DATE} cleanup=done detector=done${finalization_generation_fields}${detector_generation_fields} finished_at=${detector_finished_at}"
-echo "[DONE] postclose_final_detector target_date=${TARGET_DATE} finalization=done detector=done${finalization_generation_fields}${detector_generation_fields} finished_at=${detector_finished_at}"
+echo "[DONE] postclose_finalization target_date=${TARGET_DATE} cleanup=done detector=done completion_scope=execution_only${finalization_generation_fields}${detector_generation_fields} finished_at=${detector_finished_at}"
+echo "[DONE] postclose_final_detector target_date=${TARGET_DATE} finalization=done detector=done completion_scope=execution_only${finalization_generation_fields}${detector_generation_fields} finished_at=${detector_finished_at}"

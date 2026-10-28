@@ -48,6 +48,10 @@
 4. **복구와 자연 완주 분리:** 정규 실행이 추가 수동 보정 없이 실제 기동까지 끝난 경우와 실패 후 승인된 수리·재생성으로 복구한 경우를 기존 감사/체크리스트에 구분한다. 복구 성공으로 최초 실패를 지우지 않으며, 수정본의 다음 정규 장후→Main 기동을 같은 owner의 자연 수용으로 확인한다. 이미 검증된 역사적 결손/null·유효 carry·정상 대기는 현재 실행 결함과 구분하고, 새 결손·상충은 계속 탐지한다. 주문·체결·양수 EV는 운영 완주의 추가 조건이 아니다.
 5. **대기와 인계:** 다음 실행창이 아직 오지 않았으면 자연 수용은 OPEN으로 유지하고 현재 체크리스트의 기존 stable ID에 source/target date, Due/Slot/TimeWindow, 남은 consumer와 판정 조건을 기록한다. 지속 모니터링은 실제 종료조건까지 이어가며, 사용자 지정 종료나 세션 인계 시에도 이 범위를 보존한다. `not_yet_due`는 전체 작업 완료가 아니다. 이미 유효한 승인 범위를 유지하고 새 권한이 필요한 정확한 행위만 차단 사유로 남긴다.
 
+완료 판정은 **실행 / 실제 기동 / 원천·비용·의미 검증 / 전체 완료**를 분리한다. strict `pass`, controller `done`, finalization `[DONE]`은 각각 기존 실행·기동 안전계약의 영수증이며 전체 정상 완료 표시로 사용하지 않는다. controller의 `completion_assessment`는 최종 detector 검증 전임을 표시한다. 최종화 wrapper는 실행 완료 marker에 `completion_scope=execution_only`, `source_cost_semantic_status`, `overall_status`를 함께 남긴다. WARNING을 이유로 기존 정리·PREOPEN·기동 admission 계약을 강화하거나 우회하지 않는다.
+
+최종 detector 및 Main health의 기존 게시 owner `ErrorDetectionEngine.write_report`는 같은 sweep의 native 결과로 `postclose_completion`을 계산한다. 정확한 source/controller 세대, full 검사 coverage, 현재 semantic finding, 다음 target의 실제 PID 소비와 observer 결과를 대사한다. 현재 결손이 남으면 `incomplete`, 분류·coverage·세대 증명이 없으면 `unverified`로 보존하고 전체 성공을 표시하지 않는다. 검증된 역사 제외/null은 기존 native reader의 분류를 그대로 보존하며 오래된 날짜·제외 수·일부 비용 적격 표본만으로 면제하지 않는다. 원천 검증이 완료돼도 기동 전에는 전체 완료가 아니며, 전체 완료라도 무개입 수용·실현경제성을 입증하지 않는다. 이 projection은 원본 상태·경보·기동 안전계약을 수정하지 않는다. 봉인된 과거 보고서를 새 표시만을 위해 덮어쓰지 않고, 이후 정규 게시나 승인된 최소 재생성에서 소비한다.
+
 다음 날짜 체크리스트의 direct-family 생성기는 source-date에 남은 의미적 원천 진단 OPEN을 기존 stable ID로 이관한다. 대상 owner 집합은 기존 `build_next_stage2_checklist._carry_open_semantic_owners`가 소유한다. 원 Acceptance·실패 이력을 보존하고 대상 날짜의 기존 완료·수동 처분을 우선하며, 완료/부재 항목을 비용 결손만으로 다시 열지 않는다. 중복 owner·일정 누락·읽는 동안 원문 변경은 게시 전에 실패한다. 이관은 진단 담당의 연결이며 원천 복구·경제성·PREOPEN/PID 완료가 아니다. 이미 strict/PID에 결속된 운영 문서의 교체는 release-routing 보존 절차를 따른다.
 
 ## 2. 권한 경계

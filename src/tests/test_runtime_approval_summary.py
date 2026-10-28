@@ -239,6 +239,9 @@ def test_summary_completes_direct_evidence_without_fabricating_economics(
     report = mod.build_runtime_approval_summary(target)
 
     assert report["status"] == mod.DIRECT_EVIDENCE_COMPLETE
+    assert report["status_scope"] == "direct_evidence_only"
+    assert report["overall_success"] is False
+    assert report["source_cost_semantic_status"] == "pending_final_detector"
     assert report["direct_evidence_state"] == "complete"
     assert report["economic_state"] == "not_applicable"
     assert report["daily_threshold_cycle_retired"] is True
