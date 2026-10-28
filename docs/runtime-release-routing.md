@@ -174,6 +174,14 @@ bash deploy/run_runtime_release.sh --check-cron
 
 Use the actual target date instead of the example. A plan check proves routing, not future policy approval, WS health or a running PID.
 
+Owned scheduled route failures before wrapper admission are appended as
+`[ROUTE_FAILURE]` records to that existing owner's log, with requested date,
+router source, PID and bounded reason. Preserve stderr and nonzero exit; a log
+record does not create a START/completion marker or retry the job. Print-only
+plans remain read-only, and a refused evidence write remains visible on stderr.
+Install the exact reviewed workspace router only at the idle, locked transition
+boundary after comparing its incumbent bytes.
+
 ## Scheduled scope and maintenance
 
 Eight cron entrypoints use the selection: 07:35 PREOPEN threshold, 07:55 main start, 20:05 EOD, 20:10 postclose/controller/tuning, 20:50 archive and 05:35 next-KRX-session finalization. Main and archive wrappers validate the exact-date EOD terminal before resource-heavy work. The finalizer resolves the immediately prior KRX trading date from the effective date, skips non-trading effective dates, stops predecessor waiting at 06:00 and bounds cleanup/detector completion by 06:50, leaving 30 minutes before the 07:20 PREOPEN scanner. The 21:05 paired replay wrapper is manual compatibility; the main wrapper owns the current auxiliary calculation. The cron check requires all eight installed owners. Existing environment values, log ownership/redirection and wrapper locks are preserved. Existing 07:30/20:10 stop behavior is unchanged; routing is not a redesign of shutdown semantics. Other Main intraday observer/scanner jobs retain their separate owners. Dedicated retired services, timers and IPO auto-order cron are removed.
@@ -215,6 +223,12 @@ A preserved intraday PREOPEN scope keeps its original label. P5 may delegate the
 The parent records successful native bundle loading and semantic validation boundaries: an intraday preserved generation can validate an already-read bundle. A rejected native validation never contributes a successful closure, and the original source, inventory and isolation checks remain required.
 
 The child requires unprivileged Linux Landlock and seccomp, closes inherited control descriptors and permits writes only in its private run directory. Native source/code/policy validation remains mandatory. A denied side effect, invalid or incomplete consumer, identity mismatch, timeout, changed input or surviving worker fails the validation; exit zero alone is insufficient. Results live under `data/report/main_startup_validation/<target>/<run-id>/final.json`. They always retain `actual_pid_consumed=false`, `allowed_runtime_apply=false` and `runtime_effect=false` and never replace the operating bootstrap/PID or observer receipts.
+
+For indexed stop inputs, establish the native readonly SQLite reader before
+sealing physical source/database/WAL identities. SQLite can create an empty WAL
+on the first readonly open; subsequent index, WAL and source changes still fail
+the original binding and isolated consumer checks. This is an O(1) metadata
+preparation step, with no raw scan, retry or mutation of a generation.
 
 Before deployment, invoke the same module from the clean reviewed candidate with `--workspace <canonical-workspace> --target-date <date> --candidate-root <that-candidate-root>`. The candidate must already have the normal shared mounts and source validation. This does not publish a selector or issue an operating code handoff. Parent validation preserves the exact original prepared-policy code lineage, including authenticated historical origin receipts, then seals the reviewed source delta for a read-only child context. The context cannot be installed outside OS isolation and has no operating authority. Day-specific PREOPEN activation and real Main PID consumption retain their existing owners and checks. See the [plan and implementation boundaries](proposals/main-policy-load-and-exit-validation-plan-2026-10-18.md).
 

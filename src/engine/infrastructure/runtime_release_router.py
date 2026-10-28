@@ -1614,6 +1614,24 @@ def native_custody_environment(workspace: Path) -> dict[str, str]:
     return values
 
 
+def _record_owned_route_failure(workspace, operation, target_date, error):
+    """Preserve pre-wrapper failures in the existing scheduled owner's log."""
+    owner = OWNED[operation][1]
+    path = Path(workspace) / "logs" / (owner + ".log")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o640)
+    with os.fdopen(fd, "a") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError("route_failure_log_not_regular")
+        body = dict(operation=operation, target_date=target_date,
+                    recorded_at_kst=datetime.now(ZoneInfo("Asia/Seoul")).isoformat(),
+                    router_source=str(Path(__file__).resolve()), pid=os.getpid(),
+                    error_type=type(error).__name__, reason=str(error)[:1200], exit_code=2)
+        stream.write("[ROUTE_FAILURE] " + json.dumps(body, ensure_ascii=True) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("operation", nargs="?", choices=OPERATIONS)
@@ -1777,6 +1795,11 @@ def main() -> int:
             ).returncode
         os.execvpe(plan["command"][0], plan["command"], env)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        if args.operation in OWNED and not args.print_plan:
+            try:
+                _record_owned_route_failure(workspace, args.operation, args.target_date, exc)
+            except (OSError, ValueError) as evidence_error:
+                print("runtime_route_failure_evidence_unavailable:" + type(evidence_error).__name__, file=sys.stderr)
         print(f"runtime_release_route_blocked: {exc}", file=sys.stderr)
         return 2
     finally:

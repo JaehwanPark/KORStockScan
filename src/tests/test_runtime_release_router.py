@@ -2186,3 +2186,36 @@ def test_native_main_rejects_unforwardable_database_configuration(
         router.make_plan(
             tmp_path, tmp_path / "release", "a" * 40, "start", "2026-10-26"
         )
+
+
+@pytest.mark.parametrize("mode", ["scheduled", "plan", "symlink"])
+def test_pre_wrapper_route_failure_is_preserved_without_hiding_failure(tmp_path, monkeypatch, capsys, mode):
+    workspace = tmp_path / "workspace"
+    source = workspace / "src/engine/infrastructure/runtime_release_router.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("fixture")
+    monkeypatch.setattr(router, "__file__", str(source))
+    monkeypatch.setenv("KORSTOCKSCAN_BROKER_ACCOUNT_KEY", "private-fixture-account")
+    monkeypatch.setattr(router, "selected_release", lambda *_: (_ for _ in ()).throw(ValueError("release_git_commit_mismatch")))
+    monkeypatch.setattr(sys, "argv", ["router", "controller", "2026-10-28"] + (["--print-plan"] if mode == "plan" else []))
+    log = workspace / "logs/postclose_done_controller_cron.log"
+    protected = tmp_path / "protected"
+    if mode == "symlink":
+        protected.write_text("unchanged")
+        log.parent.mkdir(parents=True)
+        log.symlink_to(protected)
+    assert router.main() == 2
+    assert "runtime_release_route_blocked: release_git_commit_mismatch" in capsys.readouterr().err
+    if mode == "scheduled":
+        raw = log.read_text()
+        assert raw.startswith("[ROUTE_FAILURE] ")
+        value = json.loads(raw.removeprefix("[ROUTE_FAILURE] "))
+        assert value["operation"] == "controller" and value["target_date"] == "2026-10-28"
+        assert value["reason"] == "release_git_commit_mismatch" and value["exit_code"] == 2
+        assert "private-fixture-account" not in raw and "[START]" not in raw
+    elif mode == "plan":
+        assert not log.exists()
+    else:
+        assert protected.read_text() == "unchanged"
+    assert not (workspace / "data/runtime/operator_startup_hold.json").exists()
+    assert not (workspace / "restart.flag").exists()
