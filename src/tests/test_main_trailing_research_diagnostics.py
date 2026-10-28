@@ -222,3 +222,143 @@ def test_native_actual_cost_is_available_only_before_research_cutoff(
         == (available == "2026-10-08T09:00:01+09:00")
         for row in outcomes
     )
+
+
+def joint_path():
+    from src.tests.test_scalp_trailing_mechanical_strength import (
+        _snapshot,
+        _depth,
+        _trade,
+    )
+
+    p = position()
+    p.update(qty=1, buy_basis_krw=96200.0)
+    depths, trades, events = [], [], []
+    for seq, bid in enumerate((96800, 96900, 96800, 96700, 96600, 96400, 96200), 1):
+        stamp = p["entry_at"] + seq / 10
+        d = _depth(seq, int(stamp * 1000), 10 + seq * 10, 10)
+        d["bid_levels"][0]["price"] = bid
+        d["ask_levels"][0]["price"] = bid + 100
+        depths.append(d)
+        t = _trade(
+            seq, int(stamp * 1000), "BUY" if seq < 3 else "SELL", 10 if seq < 3 else 100
+        )
+        t["price"] = 97000 if seq == 2 else bid
+        trades.append(t)
+        ws = _snapshot(list(depths), list(trades))
+        from src.engine.scalping.universal_trailing_replay import quote_projection
+
+        events.append(
+            quote_projection(
+                ws,
+                known_at=stamp,
+                event_at=stamp,
+                route="KRX",
+                item="123456",
+                transport_epoch=1,
+                sequence=seq,
+                bid=bid,
+                ask=bid + 100,
+                bid_qty=10 + seq * 10,
+                peak=97000 if seq >= 2 else 96800,
+                quantity=1,
+                coverage_complete=True,
+                entry_cost_model=p["cost_model"],
+            )
+        )
+    return p, events
+
+
+def test_joint_study_computes_floor_and_strength_release_without_live_policy():
+    p, events = joint_path()
+    result = diagnostic._observation(p, iter(events), vector(), p["entry_at"] + 1)[
+        "joint_trailing_observation"
+    ]
+    assert result["hypothesis_count"] == 72
+    assert result["evaluations"] <= 72 * len(events)
+
+    def selected(floor, release):
+        return next(
+            r
+            for r in result["hypotheses"]
+            if r["start_delta_pct"] == 0
+            and r["weak_multiplier"] == 1
+            and r["strong_multiplier"] == 1
+            and r["net_floor_pct"] == floor
+            and r["release"] == release
+        )
+
+    parent = selected(None, "incumbent")["crossing"]
+    flow = selected(None, "flow_and_tape_two")["crossing"]
+    floor = selected(0.0, "incumbent")["crossing"]
+    assert parent["bid"] == 96200
+    assert flow["bid"] == 96600 and flow["strength"] == "WEAK"
+    assert floor["bid"] == 96400 and floor["trigger"] == "net_floor_breach"
+    # A cost floor does not promise breakeven: the next tick can undershoot it.
+    assert floor["observed_quote_net_pct"] < 0
+    assert parent["observed_quote_net_pct"] == pytest.approx(-0.23)
+    assert result["primary_ev"] is None and result["selected_candidate"] is None
+    assert result["allowed_runtime_apply"] is False
+
+
+@pytest.mark.parametrize(
+    "fault", ["hash", "route", "clock", "cost", "quantity", "gap", "add"]
+)
+def test_joint_study_censors_invalid_evidence_and_missing_cost(fault):
+    p, events = joint_path()
+    if fault == "cost":
+        p["cost_model"] = {}
+    if fault == "hash":
+        for e in events:
+            e["source_sha256"] = "0" * 64
+    if fault == "route":
+        p["route"] = "nxt_only"
+    if fault == "clock":
+        events = list(reversed(events))
+    if fault == "quantity":
+        p["qty"] = 1000
+    if fault == "gap":
+        events.insert(1, {"status": "source_gap", "reason": "historical_missing"})
+    if fault == "add":
+        events.insert(1, {"kind": "ADD"})
+    result = diagnostic._observation(p, iter(events), vector(), p["entry_at"] + 1)[
+        "joint_trailing_observation"
+    ]
+    crossings = [r["crossing"] for r in result["hypotheses"] if r["crossing"]]
+    if fault in ("hash", "route", "cost", "add", "quantity"):
+        assert all(c["observed_quote_net_pct"] is None for c in crossings)
+    else:
+        assert result["gaps"]
+    assert result["actual_profit_verified"] is False
+
+
+def test_joint_consumer_publishes_bounded_rows_under_native_tree(tmp_path):
+    source, output = sharded(tmp_path)
+    owner.run(
+        source / "manifest.json", input_root=source, output_root=output, dry_run=False
+    )
+    result = diagnostic.build(
+        source / "manifest.json",
+        input_root=source,
+        report_path=output / "research_2026-10-08.json",
+    )
+    from src.engine.lifecycle import research_storage as storage
+
+    rows = list(storage.iter_tree(output, result["joint_trailing_observations_ref"]))
+    assert rows and all(r["hypothesis_count"] == 72 for r in rows)
+    assert all(
+        "joint_trailing_observation" not in r for r in result["position_observations"]
+    )
+
+
+def test_joint_cost_projection_accepts_native_numeric_serialization():
+    from copy import deepcopy
+
+    p, events = joint_path()
+    expected = diagnostic._observation(p, iter(events), vector(), p["entry_at"] + 1)
+    p = deepcopy(p)
+    p["qty"], p["buy_basis_krw"] = str(p["qty"]), str(p["buy_basis_krw"])
+    for key in ("buy_cost_krw", "sell_cost_rate"):
+        p["cost_model"][key] = str(p["cost_model"][key])
+    actual = diagnostic._observation(p, iter(events), vector(), p["entry_at"] + 1)
+    assert actual == expected

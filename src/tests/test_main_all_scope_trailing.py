@@ -1380,3 +1380,33 @@ def test_malformed_actual_cost_scope_is_excluded_without_aborting_population():
     )
     assert results["common_ids"] == ["healthy"]
     assert results["excluded_ids"] == ["main:1"]
+
+
+def test_incomplete_quote_keeps_bounded_native_history_without_replay_admission():
+    original = quote(1, "2026-10-08T09:00:01")
+    gap = replay.quote_projection(
+        original["ws_data"],
+        known_at=original["known_at"],
+        event_at=original["event_at"],
+        route="KRX",
+        item="123456",
+        transport_epoch=1,
+        sequence=1,
+        bid=original["bid"],
+        ask=original["ask"],
+        bid_qty=10,
+        peak=101,
+        quantity=10,
+        coverage_complete=False,
+    )
+    assert gap["kind"] == "GAP" and gap["coverage_complete"] is False
+    assert gap["reason"] == "shared_quote_coverage_unverified"
+    assert replay.expand_ws(gap["ws_data"])["recent_depth_ticks_by_route"]
+    assert replay.decode_quote(replay.encode_quote(gap)) == gap
+    coverage = replay.ObservationCoverage()
+    coverage.required = True
+    coverage.quote(gap)
+    assert coverage.invalid
+    from src.engine.automation.main_trailing_research_diagnostics import _verified_touch
+
+    assert not _verified_touch(gap, position(), position()["entry_at"], gap["known_at"])

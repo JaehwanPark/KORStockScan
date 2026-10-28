@@ -30562,6 +30562,7 @@ def _main_stop_quote_context(
             == str(nxt_quality.get("nxt_trailing_bid_guard_ws_0d_route") or "")
         )
     else:
+        depth_ask, depth_bid = _get_best_levels_from_ws(depth_row or {})
         bid_identity_proven = bool(
             quote_receipt.get("source_type") in {"0B", "0D"}
             and quote_receipt.get("item")
@@ -30573,8 +30574,13 @@ def _main_stop_quote_context(
             and depth_receipt.get("transport_epoch")
             == quote_receipt.get("transport_epoch")
             and _safe_float(depth_receipt.get("observed_epoch"), 0.0)
-            == _safe_float(quote_receipt.get("observed_epoch"), -1.0)
+            == quote_received_at
             and depth_row is not None
+            and depth_bid == executable_bid
+            and depth_ask == _safe_int(quote_receipt.get("best_ask"), -1)
+            and quote_received_at
+            <= _safe_float(quote_receipt.get("observed_epoch"), -1.0)
+            <= now_ts
         )
     config = QuoteConsistencyConfig.from_env()
     quote_max_age_sec = (
@@ -30612,7 +30618,18 @@ def _main_stop_quote_context(
         at=now_ts,
         bid=executable_bid,
         bid_qty=executable_bid_qty,
-        quote=quote_receipt,
+        quote=(
+            {
+                **quote_receipt,
+                "source_type": "0D",
+                "observed_epoch": quote_received_at,
+                "route_sequence": depth_row.get("route_sequence"),
+            }
+            if bid_identity_proven
+            and depth_row is not None
+            and bid_source != "fresh_rest_executable_bid"
+            else quote_receipt
+        ),
         complete=grid_source_complete,
         market=market_type,
         evaluator=evaluator,
@@ -65222,19 +65239,6 @@ def _resolve_scanner_async_entry_ai(
             )
 
             retain_initial_native_result(result)
-        from src.engine.scalping.trailing_situation_policy import (
-            freeze_shared_entry_context,
-        )
-
-        original_context = resolved["prepared_context"]
-        if _safe_int(stock.get("buy_qty"), 0) <= 0:
-            # A later ADD evaluation cannot replace a missing original-entry
-            # context and retrospectively classify a legacy holding.
-            stock["trailing_entry_context"] = freeze_shared_entry_context(
-                original_context.get("candle_context"),
-                original_context.get("ws_data") or {},
-                anchor_at=result.completed_epoch,
-            )
         return resolved
 
     if coordinator.is_pending(
@@ -70962,6 +70966,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
     )
     native_refresh_kwargs = {}
+    native_original = None
     if strategy == "SCALPING" and not opening_rotation_active:
         try:
             native_original = _initial_native_result_for_send(stock, code)
@@ -75005,9 +75010,20 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         if _safe_int(stock.get("buy_qty"), 0) <= 0:
             from src.engine.scalping.trailing_entry_research_source import (
                 capture as capture_trailing_plan,
+                freeze_initial_context,
                 runtime_account_scope,
             )
 
+            # Both the direct native-result handoff and the deferred async
+            # path converge here before BUY. ADD cannot rewrite this context.
+            from src.engine.scalping.scanner_async_eval import ASYNC_CONSUMPTION
+
+            stock["trailing_entry_context"] = freeze_initial_context(
+                native_original
+                or (ASYNC_CONSUMPTION.get() or {}).get("original_result"),
+                machine_action_receipt or {},
+                known_at=cap_observed_at,
+            )
             trailing_plan_source = capture_trailing_plan(
                 symbol=code,
                 position_key=_scalp_holding_source_position_key(stock, code),

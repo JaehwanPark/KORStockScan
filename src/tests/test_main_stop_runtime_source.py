@@ -427,7 +427,10 @@ def native_preset_case(monkeypatch, *, fault=None, legacy=False):
         observed_epoch=at,
         best_bid=9700,
         best_bid_qty=20,
-        orderbook={"bids": [{"price": 9700, "volume": 20}]},
+        orderbook={
+            "bids": [{"price": 9700, "volume": 20}],
+            "asks": [{"price": 9810, "volume": 20}],
+        },
     )
     ws = dict(
         code="005930",

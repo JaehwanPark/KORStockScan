@@ -185,6 +185,63 @@ def clear(stock):
         stock.pop(key, None)
 
 
+def freeze_initial_context(original, action_receipt, *, known_at):
+    """Freeze the exact admitted result at the common initial-plan producer."""
+    from .scanner_async_eval import thaw_scanner_async_value
+    from .trailing_situation_policy import freeze_shared_entry_context
+
+    try:
+        if (
+            original is None
+            or original.ai_payload.get("evaluation_attempt_id")
+            != action_receipt.get("evaluation_attempt_id")
+            or not action_receipt.get("evaluation_attempt_id")
+            or epoch(original.completed_epoch) > epoch(known_at)
+        ):
+            raise ValueError("initial_entry_result_unbound")
+        prepared = original.prepared_context
+        candle = prepared.get("candle_context") or {}
+        ws = prepared.get("ws_data") or {}
+        return freeze_shared_entry_context(
+            {
+                key: thaw_scanner_async_value(candle.get(key))
+                for key in ("strategy_completed_bars", "market_data_route")
+            },
+            {
+                key: ws.get(key)
+                for key in ("best_bid", "best_ask", "session_vwap", "vwap")
+            },
+            anchor_at=original.completed_epoch,
+        )
+    except (ValueError, TypeError, KeyError, AttributeError, OverflowError) as exc:
+        return dict(status="classification_source_gap", reason=str(exc)[:160])
+
+
+def _buy_ordering_clock(stock, bought, plan_at, known_at):
+    """Keep FID908 seconds and packet ingress distinct; never invent precision."""
+    if stock.get("broker_execution_receive_time_source") == "websocket_packet_ingress":
+        received = epoch(stock.get("broker_execution_received_at"))
+        observed = epoch(stock.get("broker_execution_observed_at"))
+        if (
+            observed != bought
+            or not bought <= received <= known_at
+            or plan_at > received
+            or (
+                plan_at > bought
+                and (
+                    stock.get("broker_execution_time_source") != "official_fid_908"
+                    or not float(bought).is_integer()
+                    or not bought <= plan_at < bought + 1
+                )
+            )
+        ):
+            raise ValueError("trailing_plan_buy_clock_conflict")
+        return received
+    if plan_at > bought:
+        raise ValueError("trailing_plan_buy_clock_unproven")
+    return None
+
+
 def install(stock, receipt):
     clear(stock)
     if receipt.get("receipt_sha256"):
@@ -225,11 +282,17 @@ def holding_link(
             position_key != binding["position_key"]
             or not _sha(buy_fill_identity)
             or binding["plan"] != stock.get("_trailing_entry_plan_receipt_sha256")
-            or not epoch(binding["plan_known_at"]) <= bought <= epoch(known_at)
+            or not bought <= epoch(known_at)
         ):
             raise ValueError("trailing_plan_holding_identity")
         generation = (buy_fill_identity, bought)
         if binding.get("generation") is None:
+            binding["first_buy_received_at"] = _buy_ordering_clock(
+                stock, bought, epoch(binding["plan_known_at"]), epoch(known_at)
+            )
+            binding["first_buy_occurrence_clock"] = stock.get(
+                "broker_execution_time_source"
+            )
             binding["generation"] = generation
         elif tuple(binding["generation"]) != generation:
             raise ValueError("trailing_plan_holding_generation_changed")
@@ -247,6 +310,13 @@ def holding_link(
             automatic_management_allowed=automatic_management_allowed,
             **AUTHORITY,
         )
+        if binding.get("first_buy_received_at") is not None:
+            link.update(
+                schema="main_trailing_plan_holding_link_v3",
+                first_buy_received_at=binding["first_buy_received_at"],
+                first_buy_ordering_clock="websocket_packet_ingress",
+                first_buy_occurrence_clock=binding["first_buy_occurrence_clock"],
+            )
         link["sha256"] = digest(link)
         return link
     except (ValueError, TypeError, KeyError, OverflowError):
@@ -261,6 +331,7 @@ def validate_holding_link(link, *, receipt, quote):
         not in {
             "main_trailing_plan_holding_link_v1",
             "main_trailing_plan_holding_link_v2",
+            "main_trailing_plan_holding_link_v3",
         }
         or link.get("sha256")
         != digest({k: v for k, v in link.items() if k != "sha256"})
@@ -277,10 +348,26 @@ def validate_holding_link(link, *, receipt, quote):
             )
         )
         or epoch(link.get("known_at")) != epoch(quote.get("known_at"))
-        or not epoch(receipt["known_at"])
-        <= epoch(link.get("first_buy_at"))
-        <= epoch(link["known_at"])
+        or not epoch(link.get("first_buy_at")) <= epoch(link["known_at"])
     ):
+        raise ValueError("trailing_plan_holding_link_invalid")
+    if link["schema"] == "main_trailing_plan_holding_link_v3":
+        _buy_ordering_clock(
+            dict(
+                broker_execution_receive_time_source=link.get(
+                    "first_buy_ordering_clock"
+                ),
+                broker_execution_received_at=link.get("first_buy_received_at"),
+                broker_execution_observed_at=link["first_buy_at"],
+                broker_execution_time_source=link.get("first_buy_occurrence_clock"),
+            ),
+            epoch(link["first_buy_at"]),
+            epoch(receipt["known_at"]),
+            epoch(link["known_at"]),
+        )
+        if link.get("first_buy_ordering_clock") != "websocket_packet_ingress":
+            raise ValueError("trailing_plan_buy_clock_unproven")
+    elif epoch(receipt["known_at"]) > epoch(link["first_buy_at"]):
         raise ValueError("trailing_plan_holding_link_invalid")
     return link
 
@@ -292,7 +379,10 @@ def equivalent_holding_link(link, *, receipt, position, original, source):
     equivalent to the original position. Missing historical v2 context is a
     research gap, never permission to reuse a different AI question.
     """
-    if link.get("schema") != "main_trailing_plan_holding_link_v2":
+    if link.get("schema") not in {
+        "main_trailing_plan_holding_link_v2",
+        "main_trailing_plan_holding_link_v3",
+    }:
         raise ValueError("cf_holding_context_unobserved")
     if (
         not _sha(receipt.get("account_scope_sha256"))

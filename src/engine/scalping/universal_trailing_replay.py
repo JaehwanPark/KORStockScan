@@ -478,7 +478,7 @@ def _quote_projection(
     """Reuse Main's supplied snapshot; no WS getter or independent sampling."""
     import json
 
-    if not isinstance(ws_data, dict) or coverage_complete is not True:
+    if not isinstance(ws_data, dict):
         return {"status": "source_gap", "reason": "shared_quote_coverage_unverified"}
     view = compact_ws(ws_data)
     depths = _route_depths(view, route, item, transport_epoch)
@@ -496,11 +496,11 @@ def _quote_projection(
     except (ValueError, TypeError, OverflowError):
         return {"status": "source_gap", "reason": "shared_quote_serialization_invalid"}
     quote = dict(
-        kind="QUOTE",
+        kind="QUOTE" if coverage_complete is True else "GAP",
         event_at=event_at,
         known_at=known_at,
         source_kind="tick_depth",
-        coverage_complete=True,
+        coverage_complete=coverage_complete is True,
         route=route,
         item=item,
         transport_epoch=transport_epoch,
@@ -523,6 +523,10 @@ def _quote_projection(
         },
     )
     quote["entry_cost_model"] = entry_cost_model
+    if coverage_complete is not True:
+        # Retain available native history for diagnosis without admitting it
+        # as a complete executable path or inventing the missing interval.
+        quote.update(status="source_gap", reason="shared_quote_coverage_unverified")
     quote["source_sha256"] = digest(quote)
     try:
         encoded = json.dumps(

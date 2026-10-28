@@ -8,6 +8,7 @@ incomplete observed price paths are separately labeled diagnostics.
 from collections import Counter, defaultdict
 from pathlib import Path
 import hashlib
+from itertools import product
 
 from src.engine.lifecycle import research_storage as storage
 from src.engine.lifecycle.holding_window_generation import byte_generation
@@ -22,6 +23,214 @@ from src.engine.scalping.universal_trailing_replay import (
 from .main_trailing_all_scope_research import _sealed, _source_path, code_contract
 
 SCHEMA = "main_trailing_execution_diagnostics_v1"
+
+
+class JointTrailingObservation:
+    """One M1 pass feeds 72 fixed hypotheses; observed crossings, not fills.
+
+    No fitted winner, provider, new raw scan or runtime policy is produced.
+    A net floor arms only after an executable bid reached it; ticks/gaps can
+    overshoot it. Missing history permanently censors whole-path inference.
+    """
+
+    def __init__(self, position, parent, *, usable, classifier_config=None):
+        self.position, self.parent, self.usable = position, parent, usable
+        self.config = classifier_config or {}
+        self.m1, self.alternative, self.adverse = {}, False, 0
+        self.previous, self.market = None, None
+        self.gaps, self.work = Counter(), 0
+        if position.get("source_gap"):
+            self.gaps["position_source_gap"] += 1
+        self.rows = [
+            dict(
+                start_delta_pct=s,
+                weak_multiplier=w,
+                strong_multiplier=t,
+                net_floor_pct=f,
+                release=r,
+                armed=False,
+                floor_armed=False,
+                crossing=None,
+            )
+            for s, w, t, f, r in product(
+                (-0.2, 0.0, 0.2),
+                (0.5, 1.0),
+                (0.5, 1.0),
+                (None, 0.0, 0.2),
+                ("incumbent", "flow_and_tape_two"),
+            )
+        ]
+
+    def observe(self, event, *, verified):
+        from src.engine.scalping.trailing_mechanical_strength import classify_ws_history
+        from src.engine.scalping.trailing_exit_decision import (
+            evaluate_trailing_take_profit,
+        )
+
+        if event.get("kind") == "ADD":
+            self.usable = False
+            self.gaps["add_requires_separate_generation"] += 1
+            return
+        if (
+            event.get("kind") not in {"QUOTE", "GAP"}
+            and event.get("status") != "source_gap"
+        ):
+            return
+        if not verified:
+            self.gaps["unverified_quote_or_interval"] += 1
+            return
+        known = event["known_at"]
+        if self.previous is not None and known < self.previous:
+            self.gaps["clock_regression"] += 1
+            return
+        if known - (self.previous or self.position["entry_at"]) > 2:
+            self.gaps["unobserved_interval"] += 1
+        self.previous = known
+        market = market_type_at(known)
+        if market not in self.parent:
+            self.gaps["market_unobserved"] += 1
+            return
+        if market != self.market:
+            self.alternative, self.adverse, self.market = False, 0, market
+        try:
+            strength, self.m1 = classify_ws_history(
+                expand_ws(event["ws_data"]),
+                self.m1,
+                now_ms=int(known * 1000),
+                max_quote_age_ms=int(event["max_quote_age_sec"] * 1000),
+                market=market,
+                config=self.config.get(market),
+            )
+        except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+            self.gaps["classifier_source_invalid"] += 1
+            return
+        for obs in strength.new_observations:
+            if obs["at_ms"] < self.position["entry_at"] * 1000:
+                continue
+            ofi, qi, tape = (
+                number(obs.get(k))
+                for k in ("ofi_proxy", "queue_imbalance", "signed_trade_qty")
+            )
+            if any(v is None for v in (ofi, qi, tape)):
+                self.alternative, self.adverse = False, 0
+            elif obs["reason"] == "book_and_trade_support":
+                self.alternative, self.adverse = True, 0
+            elif self.alternative and ofi < 0 and tape < 0:
+                self.adverse += 1
+                if self.adverse >= 2:
+                    self.alternative, self.adverse = False, 0
+            else:
+                self.adverse = 0
+        if strength.state == "UNKNOWN":
+            self.gaps["classifier_unknown"] += 1
+            self.alternative, self.adverse = False, 0
+            return
+        if not self.usable:
+            return
+        p = self.position
+        cost = p["cost_model"]
+        qty, basis = number(p["qty"]), number(p["buy_basis_krw"])
+        buy_cost, sell_rate = number(cost["buy_cost_krw"]), number(
+            cost["sell_cost_rate"]
+        )
+
+        def net(price, slippage=0):
+            return 100 * (
+                (
+                    price * qty * (1 - slippage / 10000) * (1 - sell_rate)
+                    - buy_cost
+                    - basis
+                )
+                / basis
+            )
+
+        peak, bid = number(event.get("trade_peak_price")), number(event.get("bid"))
+        if peak is None or peak <= 0 or bid is None or bid <= 0:
+            self.gaps["price_unobserved"] += 1
+            return
+        parent = self.parent[market]
+        profit, peak_profit = net(bid), round(net(peak), 2)
+        for row in self.rows:
+            if row["crossing"] is not None:
+                continue
+            start = max(
+                0.1,
+                round(parent["SCALP_TRAILING_START_PCT"] + row["start_delta_pct"], 6),
+            )
+            strong = (
+                strength.strong if row["release"] == "incumbent" else self.alternative
+            )
+            decision = evaluate_trailing_take_profit(
+                peak_price=peak,
+                executable_bid=bid,
+                peak_profit_pct=peak_profit,
+                start_pct=start,
+                strong=strong,
+                weak_limit_pct=parent["SCALP_TRAILING_LIMIT_WEAK"]
+                * row["weak_multiplier"],
+                strong_limit_pct=parent["SCALP_TRAILING_LIMIT_STRONG"]
+                * row["strong_multiplier"],
+                already_armed=row["armed"],
+            )
+            row["armed"] = decision.armed
+            floor = row["net_floor_pct"]
+            breach = (
+                row["floor_armed"] and profit <= floor if floor is not None else False
+            )
+            if floor is not None and decision.armed and profit > floor:
+                row["floor_armed"] = True
+            self.work += 1
+            if not (decision.triggered or breach):
+                continue
+            sufficient = number(event["bid_qty"]) >= qty
+            row["crossing"] = dict(
+                known_at=known,
+                event_at=event["event_at"],
+                market=market,
+                bid=bid,
+                source_sha256=event["source_sha256"],
+                start_pct=start,
+                width_pct=decision.threshold_pct,
+                strength="STRONG" if strong else "WEAK",
+                trigger="net_floor_breach" if breach else "peak_drawdown",
+                full_visible_depth=sufficient,
+                observed_quote_net_pct=profit if sufficient else None,
+                slippage_sensitivity_pct={
+                    str(b): net(bid, b) if sufficient else None for b in (0, 30, 100)
+                },
+                path_censored=bool(self.gaps),
+            )
+
+    def result(self):
+        return dict(
+            schema="main_joint_trailing_observation_v1",
+            sampling_contract="observed_quote_snapshots_not_each_buffered_depth_event",
+            hypotheses=self.rows,
+            hypothesis_count=len(self.rows),
+            evaluations=self.work,
+            gaps=dict(self.gaps),
+            cost_model_usable=self.usable,
+            complete_lifecycle_verified=False,
+            primary_ev=None,
+            selected_candidate=None,
+            actual_profit_verified=False,
+            runtime_effect=False,
+            allowed_runtime_apply=False,
+            metric_contract=dict(
+                metric_role="observed_price_sensitivity",
+                decision_authority="report_only",
+                window_policy="frozen_observed_quotes_only",
+                sample_floor="no_selection_from_diagnostic_samples",
+                primary_decision_metric="source_bound_observed_crossing",
+                source_quality_gate="same_position_route_epoch_clock_hash_depth_and_frozen_cost",
+                forbidden_uses=[
+                    "runtime_apply",
+                    "actual_pnl",
+                    "first_crossing_in_missing_interval",
+                    "holdout_claim",
+                ],
+            ),
+        )
 
 
 def _verified_touch(event, position, entry, cutoff):
@@ -93,7 +302,7 @@ def _verified_touch(event, position, entry, cutoff):
         return False
 
 
-def _observation(position, events, parent, cutoff):
+def _observation(position, events, parent, cutoff, *, classifier_config=None):
     """Describe verified observed quotes; never assert missing path outcomes."""
     qty = number(position.get("qty"))
     basis = number(position.get("buy_basis_krw"))
@@ -121,11 +330,21 @@ def _observation(position, events, parent, cutoff):
     peak_net, bid_net = None, None
     first, last, previous, reached = None, None, None, False
     lifecycle_changed = False
+    joint = JointTrailingObservation(
+        position, parent, usable=usable, classifier_config=classifier_config
+    )
     for event in events:
         counts["events"] += 1
         if not isinstance(event, dict):
             reasons["event_not_object"] += 1
+            joint.gaps["event_not_object"] += 1
             continue
+        verified = (
+            entry is not None and _verified_touch(event, position, entry, cutoff)
+            if event.get("kind") == "QUOTE"
+            else False
+        )
+        joint.observe(event, verified=verified)
         if event.get("kind") == "ADD":
             lifecycle_changed = True
             reasons["add_observation_requires_separate_generation"] += 1
@@ -137,7 +356,7 @@ def _observation(position, events, parent, cutoff):
         if available is not None and available > cutoff:
             reasons["quote_after_cutoff"] += 1
             continue
-        if entry is None or not _verified_touch(event, position, entry, cutoff):
+        if not verified:
             reasons["quote_source_or_entry_unverified"] += 1
             continue
         if previous is not None and available < previous:
@@ -185,6 +404,7 @@ def _observation(position, events, parent, cutoff):
         actual_profit_verified=False,
         model_cost_usable=bool(usable),
         lifecycle_changed=lifecycle_changed,
+        joint_trailing_observation=joint.result(),
     )
 
 
@@ -193,16 +413,21 @@ def build(manifest_path, *, input_root, report_path):
     from src.engine.lifecycle.research_disk_budget import use
 
     output = Path(report_path).resolve().parent
-    with use(output), storage.index(output / "scratch") as allocated_index:
+    with (
+        use(output),
+        storage.index(output / "scratch") as allocated_index,
+        storage.index(output / "scratch") as joint_index,
+    ):
         return _build(
             manifest_path,
             input_root=input_root,
             report_path=report_path,
             allocated_index=allocated_index,
+            joint_index=joint_index,
         )
 
 
-def _build(manifest_path, *, input_root, report_path, allocated_index):
+def _build(manifest_path, *, input_root, report_path, allocated_index, joint_index):
     root, report_path = Path(input_root).resolve(), Path(report_path).resolve()
     output = report_path.parent
     before = byte_generation(report_path)
@@ -306,12 +531,28 @@ def _build(manifest_path, *, input_root, report_path, allocated_index):
             input_ids.add(identity)
             if position["evidence_kind"] == "actual_entry_alternative_exit":
                 continue
-            observation = _observation(
-                position,
-                storage.iter_tree(root, partition["paths"][identity]),
-                parent,
-                manifest["as_of"],
-            )
+            from src.engine.lifecycle.research_input_budget import Claim
+
+            with Claim(128 * 1024):
+                observation = _observation(
+                    position,
+                    storage.iter_tree(root, partition["paths"][identity]),
+                    parent,
+                    manifest["as_of"],
+                    classifier_config=manifest["approved_parent_receipt"].get(
+                        "classifier_parameters"
+                    ),
+                )
+                storage.put(
+                    joint_index,
+                    identity,
+                    dict(
+                        identity=identity,
+                        symbol=position.get("symbol"),
+                        evidence_kind=position["evidence_kind"],
+                        **observation.pop("joint_trailing_observation"),
+                    ),
+                )
             observations.append(
                 dict(
                     identity=identity,
@@ -367,6 +608,9 @@ def _build(manifest_path, *, input_root, report_path, allocated_index):
             for k, n in sorted(observed.items())
         ],
         position_observations=observations,
+        joint_trailing_observations_ref=storage.write_tree(
+            output, (value for _, value, _ in storage.records(joint_index))
+        ),
         exit_only_comparisons=metrics,
         holding_allocated_cost_rows_ref=storage.write_tree(
             output, (value for _, value, _ in storage.records(allocated_index))

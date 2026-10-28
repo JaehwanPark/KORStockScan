@@ -171,3 +171,68 @@ Premarket `_NX`/nxt_only/NXT, Regular `_AL`/integrated/SOR/cohort KRX, Aftermark
 ### Integrated runtime acceptance (2026-10-23 15:30)
 
 승인된c4a177cb8은 선행 정책 수리를 포함한6d8891ac3으로15:30:40 배포·재기동 완료했다. Main3299469/start38150614의 native 정책 소비와candidate/selected P5가 통과했다. 변경된 trailing/수량 code의 native 근거도 재검증했다. 앞선 배포 전 OPEN 중 승인·선택·PID 항목은 이 후속 증거로 종료하고,256초과 자연 관측→native SELL 종료→장후 재생/경제성은 기존 holding owner에서 유지한다. [통합 배포·잔여 수용·검증 시간](postclose-root-cause-recovery-review-2026-10-19.md#holding-stream-integration-deployment-and-quantity-validation-timing-2026-10-23). 원9e820 대비 source13파일+433/-35, tests10파일+301/-15, 배포 전 docs3파일+180/-0이며 본 완료 기록은 별도 문서 추가다.
+
+## 8. 2026-10-28 안랩 진입 연결·재생 원천 수리와 공동 연구
+
+### 판정과 사건 범위
+
+사용자가 요청한 진입 원천 연결, 재생 호가 결손 보완과 시작률·반납폭·비용 반영 보호·강세 해제 공동 연구를 구현하고 두 차례 코드 리뷰의 발견 사항을 보완했다. 기준 commit은 `1756de1d9d7943739d539d5207cc55484185bff5`다. [기존 현재 owner](../checklists/2026-10-28-stage2-todo-checklist.md)는 `HoldingProfitExitSourceContractRepair`이며 새 작업 ID를 만들지 않았다. 이 절은 소스 구현과 격리 연구의 결과다. 배포, 정책 발행, 선택 release 변경, 재기동, 외부 원천 호출 또는 주문을 수행하지 않았다. 앞 절의10/23 배포 수용은 이번 수정의 수용이 아니다.
+
+안랩053800/record49559는5주 계획 중 probe1주만96,200원에 체결되고4주는 미제출됐다. BUY 수신08:17:18.738107→SELL 수신08:17:47.663135, 보유28.925028초다. 장전 정책 cohort PREMARKET, 데이터053800_NX/nxt_only, 요청 NXT, native 체결 영수증의 실제 거래소 NXT를 각각 구별했다. 사건 release `29a3c14758f2f7935fc811b8b49719314bb0702c`, PID2852722/start78626491은 역사 신원이며 현재 실행을 주장하지 않는다.
+
+최고 체결가97,000원에서 비용 반영 peak 약+0.60%로 시작률0.4%를 넘었고, bid96,200원에서 반납률0.824742%가 STRONG 폭0.8%를 넘었다. 동일 매수·매도가의−0.23%는 설정 비용률0.0023을 반영한 결과이며 실제 브로커 비용 순익은 null이다. 실제 경로는 `scalp_trailing_take_profit`이다. AI 투표0건/INSUFFICIENT가 매도를 유예하지 않았고, soft-stop60초 유예는 이 경로에 적용되지 않았다. [원 사건 분석](../../tmp/ahnlab-immediate-exit-review-20261028/analysis.json), [원본 범위](../../tmp/ahnlab-immediate-exit-review-20261028/source-review.json).
+
+### 최초 결함과 생산자·소비자 보완
+
+| 최초 원인 | 기존 소유자에서의 보완 | 소비·잔여 경계 |
+| --- | --- | --- |
+| 계획 known_at08:17:18.1840398이 초 단위 FID908 체결08:17:18보다 뒤라는 비교로 원 진입 연결을 폐기 | `trailing_entry_research_source`의 v3 연결에 원 체결시각과 첫 native packet ingress08:17:18.738107을 별도 보존. 동일 초·공식 시각·동일 BUY generation·계획≤수신≤관측 조건 검증 | `validate_holding_link`와 assembler의 기존 독자가 v3를 소비한다. v1/v2 역사 독자와 계좌·수량·비용·custody·CF 동등성 검증은 유지. 소수점 체결시각을 만들지 않는다. |
+| 직접 native 결과 인계가 async 완료 분기의 진입 context 생성 지점을 우회하여 원 계획의 entry_context=null | 초기 주문 공통 계획 생성 지점으로 생성 책임을 통합. 정확한 evaluation_attempt_id, 결과 완료시각, 이미 확보된 completed bars·호가·VWAP만 사용 | 기존 capture→계획→보유 연결/상황 pin 소비를 유지. ADD가 최초 진입을 덮어쓰지 않는다. 원 사건의 소실 context는 소급 생성하지 않는다. |
+| 최신0B의 BBO 시각과 별도0D depth 시각을 같아야 한다고 판단 | 공통 호가 context에서 item·route·epoch·양쪽 BBO 일치와0D 자체 freshness를 검증. 실제 `orderbook` 형식은 기존 공통 판독기로 읽고, 연구 quote의 시각·route_sequence를 실제0D에 결속 | 일반/fast 경로가 같은 context를 소비한다. 다른 route·epoch, 가격 불일치, stale/future·수량 결손은 계속 거부한다. 실행 호가 또는 매도 guard를 완화하지 않는다. |
+| coverage=false이면 이미 확보한 bounded history까지 즉시 폐기 | 기존 `universal_trailing_replay` projection이 확보된 history를 `kind=GAP`, `coverage_complete=false`로 보존 | 기존 codec→source assembler→연구 독자를 사용한다. 상세 자료 보존과 완전 재생 적격은 별개이며 GAP은 정상 QUOTE로 수용되지 않는다. |
+
+원101개 transition은 정상 quote62개, `bid_identity_missing`36개, `bid_clock_missing`3개다.36개는0B/0D clock 비교 결함의 대상이지만, 당시 폐기된 상세 입력이 없으므로36개를 복구된 정상 quote로 세지 않았다. 향후 수집의 오분류와 진단 자료 폐기를 보완했다. 원284행은 확보 시 raw offset/size/SHA로 대사됐으며 원본은 변경하지 않았다.
+
+키움 wire parser·필드·구독은 수정하지 않았다. `broker_execution_time_source`, `broker_execution_received_at`, `broker_execution_receive_time_source`, route별0D `orderbook`은 이미 존재하는 생산자 필드를 실제 소비 지점까지 확인했다. 보유 연결 v3의 reader를 함께 갱신했다. 신규 외부 원천, 생산자 없는 임의 지표 또는 확보 불가능한 실제 대체체결을 요구하지 않는다. 실제 비용·원 당시 AI 판단·누락 구간 최초 교차는 미확인으로 남긴다.
+
+### 공동 연구 설계와 실행 결과
+
+기존 수동 연구 소비자인 `automation/main_trailing_research_diagnostics`를 확장했다. 새 런타임 classifier나 자동 정책 발행기를 추가하지 않았다. 입력은 봉인된 quote, 원 parent 값·classifier, frozen 비용 모델이며 native M1을 snapshot당 한 번 계산해72개 가설에 공유한다. 같은 경로에서 아래 축을 함께 비교한다.
+
+| 축 | 고정 탐색 범위 | 인과·비용 경계 |
+| --- | --- | --- |
+| 시작률 | 시장 parent 대비−0.2/0/+0.2%p, 최소0.1% | 이 사건 parent0.4%에서는0.2/0.4/0.6%. 각 가설의 arm 상태를 별도 보존 |
+| 반납폭 | weak·strong 각각 parent의0.5/1배 | 이 사건 weak0.2/0.4%, strong0.4/0.8%. 공통 pure trailing 판정 재사용 |
+| 비용 반영 보호 | 없음 / 순수익0% / +0.2% | trailing arm 이후 실제 관측 bid 순수익이 보호선을 먼저 넘은 경우만 보호 활성화. 다음 tick의 하향 돌파는 음수 체결 지점도 허용 |
+| 강세 해제 | 원 M1 / 매도 OFI와 signed tape가2회 연속 불리하면 해제 | 후자는 양의 queue imbalance만으로 강세를 계속 유지하는 경우를 비교하는 연구 가설. 실제 정책은 그대로 유지 |
+
+72=`3×2×2×3×2`이며, 모든 조합에0/30/100bp 슬리피지 민감도를 기록한다. 실제 전량 체결을 가정하지 않고 visible bid 수량이 부족하면 가격 순익도 null이다. ADD는 같은 원가·수량 가설의 진행을 중단한다. 누락·해시·route·clock·classifier 불명은 censor하며, 출력은 **관측 snapshot에서의 조건 충족**이다. buffered depth 이벤트 전부의 최초 교차나 완전 경로 재생이라고 부르지 않는다.
+
+안랩 원본을 이용한 [수정 전 실패→v3 독자 수용 및 공동 결과](../../tmp/ahnlab-trailing-source-repair-20261028/incident-reviewed.json)에서는 초 단위 원 체결시각을 그대로 유지하면서 연결 실패가 해결됨을 재현했다. 연구의 진입 가용 시점은 첫 packet 수신시각으로 보수적으로 고정했고, 이를 체결 발생시각으로 바꾸지 않았다. 원 quote의 봉인된 parent·classifier hash를 대사했으며62개 정상 quote만 계산에 사용했다.
+
+| 안랩 비교 조건 | 관측된 청산 조건 시각 KST | bid | 설정 비용 반영률 | 30bp 불리한 체결 민감도 |
+| --- | --- | ---: | ---: | ---: |
+| 원0.4/0.4/0.8·원 강세·보호 없음 |08:17:46.435 |96,200 |−0.2300% |−0.5293% |
+| 같은 수치·매도 흐름2회 강세 해제 |08:17:41.509 |96,600 |+0.1848% |−0.1157% |
+| 같은 수치·원 강세·순수익0% 보호 |08:17:42.872 |96,400 |−0.0226% |−0.3225% |
+| 같은 수치·원 강세·순수익+0.2% 보호 |08:17:41.509 |96,600 |+0.1848% |−0.1157% |
+
+**더 이른 관측 지점은 있으나 수익 우위는 미입증이다.** 0% 보호도 tick 도약 때문에 손익분기를 보장하지 않는다. 모든 비교는 결손이 포함된 단일 사건이고 실제 대체 주문·체결이 아니다. 반납폭만 줄이기보다 executable bid의 비용 반영 수익과 강세 유지 조건을 함께 연구해야 한다는 원인 가설을 지지한다.
+
+과거 확대 연구는 가족 refresh 시작2026-09-29부터10/27까지 원 입력 generation `351d0b861be6216a3967e85941720dbfe43014d74101d7e1030ebf1e42889fa1`을 사용했다. [사전 가설·입력 봉인](../../tmp/ahnlab-trailing-source-repair-20261028/joint-forward-window-reviewed/registration.json), [결과](../../tmp/ahnlab-trailing-source-repair-20261028/joint-forward-window-reviewed/research.json). 입력 manifest SHA `6888d362580dccc59bfc3108abe15a202e14e3061c8599658156677d293e214a`와 원 연구 보고서 SHA `669f23315a22471e443a9c57fff44928c51b4bfa04bc7e0511d400b852f5b7cf`를 보존했다. 과거 보고서가 현재 변경 코드의 검증을 통과했다고 주장하지 않는다.
+
+실제 완료37건 중 custody 제외24건, 자동관리13건의18,324행을 한 번 읽었다. 검증 quote4,716개, 비용·수량 generation 조건을 끝까지 유지한7건, 가설 평가116,736회다.13건 중 원 기준과 비교 가능한 관측 교차는295310/49402 한 건이며 이 건도 censored다. 나머지12건을 손실·실패·무효 전략으로 세지 않는다. 이 자료는 독립 holdout이 아니며 EV·실제 순익·선택 정책은 null, `allowed_runtime_apply=false`다. 거래 실적이 늘기만 기다려 해결할 문제와 수집·연결 결함을 구별했다. 이번 수리는 후자를 직접 보완한다.
+
+### 성능·리뷰·검증·잔여 수용
+
+운영 경로는 별도 WS getter·REST·AI·파일 읽기 없이 이미 확보한 context의 필요한 필드만 복사한다. 큰 prepared context 전체 해동을 제거했다. 기존 history120개·codec12KiB·공통 writer의 한도를 높이지 않았다. 연구는 source 한 번 읽기, 포지션당72개 상태, native resident-data claim128KiB와 기존 disk index/tree로 출력한다. 모든 포지션의72개 상세 결과를 메모리 summary에 누적하지 않는다.
+
+격리 확대 실행16.323초, 최대 RSS56,688KiB(약55.4MiB), 첫 포지션 이후 고수위 증가 없이 완료했다. 앞 실행의1,022,428KiB 측정도 원 결과에 보존했으며 동일 프로세스 조건의 성능 개선률로 사용하지 않는다. 안랩101행 공동 계산은 약0.089초다. [반복 비교 비용](../../tmp/ahnlab-trailing-source-repair-20261028/performance.json)의12회 중앙값은 기존 관측 요약28.22ms→새72개 가설 포함84.47ms다. 이 추가 계산은 격리 연구 비용이며 Main 주문 latency 개선을 주장하지 않는다.
+
+첫 리뷰에서 실제0D 생산자의 `orderbook`과 시험용 최상위 가격 필드 차이, canonical0D 시각에0B sequence가 남는 문제를 찾아 공통 판독기와0D sequence로 보완했다. 다음 리뷰에서 숫자 직렬화 비용 소비와 전체 context 해동 비용을 보완했다. 같은 초의 공식 시각/수신시각, future·wrong generation·route·epoch·BBO·stale, 원 바 해시, 비용 부재·수량 부족·ADD·GAP의 생산/소비 회귀를 확인했다. [최종 대상 회귀](../../tmp/ahnlab-trailing-source-repair-20261028/pytest-final.log)609 PASS, [추가 비용 소비자](../../tmp/ahnlab-trailing-source-repair-20261028/pytest-cost-consumer.log)37 PASS다.9개 Python compile, 최종 diff check, 새 문서 링크·현재 owner1개·print-only parser 결과는 [검증 원장](../../tmp/ahnlab-trailing-source-repair-20261028/validation.json)을 따른다. 범위 밖 병행 변경은 수정하지 않았다.
+
+대체·제거: async 전용 entry context 생성은 **consolidated**(공통 초기 계획으로 이동);0B/0D 동일시각 강제와 incomplete history 즉시 폐기는 **removed**; v1/v2 역사 독자·기존 주문/하드 안전장치·연구 selector는 **retained**(현재 또는 역사 소비자 존재). 새 engine module·실행 entrypoint·worker·cron·임시 wrapper·파일 이동은0이다. 소스4파일 +387/−33, 테스트5파일 +432/−1로, 명시적 clock 계약·bounded 공동 연구·음성 회귀 때문에 순증했다. 기존 병행 변경은 이 수치와 검토 범위에서 제외했다.
+
+의존성 disposition은 원 사건/raw·10/27 봉인 입력·원 연구 보고서 **reuse/read-only revalidate**, 새 가설 결과만 **regenerate**다. 원 입력/보고서/selector/bootstrap을 덮어쓰지 않았다. 수동 연구 호출과 테스트가 새 진단 tree의 소비자이며 자동 장후 dispatch나 정책 선택에 연결했다고 주장하지 않는다.
+
+후속은 같은 `HoldingProfitExitSourceContractRepair`에서 승인된 배포 이후 첫 자연 초기 진입의 plan→v3 link→quote/terminal→장후 assembler 수용을 확인한다. 검토 창은10/28 잔여 REG/16:00~20:00 통합 세션과, 미배포·미관측이면10/29 08:00~08:50 NXT PRE 및09:00~15:30 REG다. 배포가 이루어지지 않으면 해당 창은 수용 완료가 아니다. next postclose에서 v3 수용·GAP 보존·해시/epoch/시퀀스·진입 context 원천 결속과 CPU/queue lag/bytes를 검사하며 자연 주문을 만들지 않는다. 실제 비용과 독립 시간 분할 검증, 슬리피지 후 우위가 갖춰진 뒤 기존 정책 연구·선택 owner에서 승격을 별도 판단한다. 이번 코드 리뷰 종료와 미관측 자연 수용·경제성은 분리한다.

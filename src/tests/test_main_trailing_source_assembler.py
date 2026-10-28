@@ -2595,3 +2595,167 @@ def test_isolated_vote_reader_uses_identical_bounded_raw_semantics(
     with path.open("a") as handle:
         handle.write(json.dumps(row) + "\n")
     assert source.historical_vote_generation(path, DAY) != expected
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [None, "no_ingress", "future_ingress", "wrong_fill", "late_plan", "wrong_clock"],
+)
+def test_same_second_plan_uses_native_ingress_without_rewriting_fill_clock(
+    tmp_path, monkeypatch, fault
+):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from src.engine.scalping import trailing_entry_research_source as bridge
+
+    receipt, _, _ = _issued_trailing_receipt(tmp_path / "source", monkeypatch)
+    bought = datetime(2026, 10, 28, 8, 17, 18, tzinfo=ZoneInfo("Asia/Seoul"))
+    known = bought.timestamp() + 1.450387
+    receipt["known_at"] = bought.timestamp() + (
+        1.1840398 if fault == "late_plan" else 0.1840398
+    )
+    receipt["receipt_sha256"] = bridge.digest(
+        {k: v for k, v in receipt.items() if k != "receipt_sha256"}
+    )
+    stock = dict(
+        buy_time=bought,
+        buy_qty=1,
+        buy_price=96200,
+        broker_execution_receive_time_source="websocket_packet_ingress",
+        broker_execution_time_source="official_fid_908",
+        broker_execution_received_at=bought.timestamp()
+        + (0.738107 if fault != "future_ingress" else 2),
+        broker_execution_observed_at=bought.timestamp()
+        + (1 if fault == "wrong_fill" else 0),
+    )
+    if fault == "no_ingress":
+        stock.pop("broker_execution_receive_time_source")
+    if fault == "wrong_clock":
+        stock["broker_execution_time_source"] = "inferred_clock"
+    bridge.install(stock, receipt)
+    link = bridge.holding_link(
+        stock,
+        position_key=receipt["position_key"],
+        buy_fill_identity="e" * 64,
+        known_at=known,
+    )
+    if fault:
+        assert link is None
+        return
+    assert link["schema"] == "main_trailing_plan_holding_link_v3"
+    assert link["first_buy_at"] == bought.timestamp()
+    assert link["first_buy_received_at"] == stock["broker_execution_received_at"]
+    assert (
+        bridge.validate_holding_link(link, receipt=receipt, quote={"known_at": known})
+        == link
+    )
+    # Later receipt ingress cannot silently replace the first BUY generation.
+    stock["broker_execution_received_at"] += 0.2
+    assert (
+        bridge.holding_link(
+            stock,
+            position_key=receipt["position_key"],
+            buy_fill_identity="e" * 64,
+            known_at=known,
+        )["first_buy_received_at"]
+        == link["first_buy_received_at"]
+    )
+    stock["buy_time"] = bought.timestamp() + 1
+    assert (
+        bridge.holding_link(
+            stock,
+            position_key=receipt["position_key"],
+            buy_fill_identity="e" * 64,
+            known_at=known,
+        )
+        is None
+    )
+
+
+def test_initial_entry_context_common_native_handoff(monkeypatch):
+    from types import SimpleNamespace
+    from src.engine.scalping import trailing_entry_research_source as bridge
+    from src.engine.scalping import trailing_situation_policy as typed
+
+    observed = []
+    monkeypatch.setattr(
+        typed,
+        "freeze_shared_entry_context",
+        lambda candle, ws, **kw: observed.append((candle, ws, kw))
+        or {"status": "ready"},
+    )
+    original = SimpleNamespace(
+        ai_payload={"evaluation_attempt_id": "entry:1"},
+        completed_epoch=100.0,
+        prepared_context={
+            "candle_context": {
+                "strategy_completed_bars": {"captured": 1},
+                "market_data_route": "KRX",
+            },
+            "ws_data": {"best_bid": 10, "large_unrelated_tape": object()},
+        },
+    )
+    assert (
+        bridge.freeze_initial_context(
+            original, {"evaluation_attempt_id": "entry:1"}, known_at=101
+        )["status"]
+        == "ready"
+    )
+    assert observed == [
+        (
+            {"strategy_completed_bars": {"captured": 1}, "market_data_route": "KRX"},
+            {"best_bid": 10, "best_ask": None, "session_vwap": None, "vwap": None},
+            {"anchor_at": 100.0},
+        )
+    ]
+    for obj, action, now in [
+        (None, {"evaluation_attempt_id": "entry:1"}, 101),
+        (original, {"evaluation_attempt_id": "other"}, 101),
+        (original, {"evaluation_attempt_id": "entry:1"}, 99),
+    ]:
+        assert (
+            bridge.freeze_initial_context(obj, action, known_at=now)["status"]
+            == "classification_source_gap"
+        )
+    assert len(observed) == 1
+
+
+def test_initial_entry_context_feeds_native_feature_consumer(monkeypatch):
+    from types import SimpleNamespace
+    from datetime import datetime
+    from src.engine.scalping import trailing_entry_research_source as bridge
+    from src.engine.scalping import trailing_situation_policy as typed
+    from src.engine.scalping.entry_strategy_policy import digest as source_digest
+
+    monkeypatch.setattr(typed, "_CLASSIFIER", None)
+    at = datetime.fromisoformat("2026-10-28T08:17:18+09:00").timestamp()
+    body = dict(
+        observed_at="2026-10-28T08:17:17+09:00",
+        bars=[
+            dict(dt="2026-10-28T08:15:00+09:00", c=96000, h=96200, l=95900),
+            dict(dt="2026-10-28T08:16:00+09:00", c=96100, h=96200, l=95900),
+        ],
+    )
+    original = SimpleNamespace(
+        ai_payload={"evaluation_attempt_id": "native:1"},
+        completed_epoch=at,
+        prepared_context={
+            "candle_context": {
+                "strategy_completed_bars": dict(body=body, sha256=source_digest(body)),
+                "market_data_route": "nxt_only",
+            },
+            "ws_data": dict(best_bid=96000, best_ask=96100, session_vwap=96050),
+        },
+    )
+    result = bridge.freeze_initial_context(
+        original, {"evaluation_attempt_id": "native:1"}, known_at=at + 0.184
+    )
+    assert result["status"] == "ready" and result["window_bars"] == 2
+    assert result["route"] == "nxt_only" and result["known_at"] <= at
+    body["bars"][0]["c"] = 95000
+    assert (
+        bridge.freeze_initial_context(
+            original, {"evaluation_attempt_id": "native:1"}, known_at=at + 0.184
+        )["status"]
+        == "classification_source_gap"
+    )

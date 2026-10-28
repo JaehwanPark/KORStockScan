@@ -496,3 +496,97 @@ def test_reserved_quote_cannot_be_consumed_twice_even_after_another_reservation(
         handlers._capture_main_stop_observation(stock, "005930", ctx, **kwargs) is False
     )
     assert len(rows) == 1
+
+
+@pytest.mark.parametrize(
+    "fault", [None, "route", "epoch", "bid", "ask", "depth_clock", "stale", "future"]
+)
+@pytest.mark.parametrize("native_book", [True, False])
+def test_replay_depth_identity_uses_0d_clock_separately_from_newer_0b(
+    fault, native_book
+):
+    from src.trading.market.quote_consistency import ws_quote_source_receipt
+
+    at = 1793143045.3392675
+    depth_at = 1793143045.239
+    trade_at = depth_at + 0.05
+    depth = dict(
+        item="053800_NX",
+        market_route="nxt_only",
+        transport_epoch=7,
+        observed_epoch=depth_at,
+        route_sequence=11,
+        best_bid=96000,
+        best_ask=96100,
+        best_bid_qty=330,
+        best_ask_qty=250,
+    )
+    trade = dict(
+        depth,
+        observed_epoch=trade_at,
+        route_sequence=25,
+        inline_best_bid=96000,
+        inline_best_ask=96100,
+    )
+    if native_book:
+        depth["orderbook"] = {
+            "bids": [{"price": depth.pop("best_bid"), "volume": 330}],
+            "asks": [{"price": depth.pop("best_ask"), "volume": 250}],
+        }
+    ws = dict(
+        best_bid=96000,
+        best_ask=96100,
+        best_bid_qty=330,
+        market_data_transport_epoch=7,
+        last_realtime_type_item={"0B": "053800_NX", "0D": "053800_NX"},
+        last_realtime_type_ts={"0B": trade_at, "0D": depth_at},
+        realtime_type_snapshots_by_route={"_NX|nxt_only": {"0B": trade, "0D": depth}},
+    )
+    receipt = ws_quote_source_receipt(ws, now_ts=at)
+    assert receipt["source_type"] == "0B"
+    if fault == "route":
+        depth["market_route"] = "KRX"
+    if fault == "epoch":
+        depth["transport_epoch"] = 6
+    if fault == "bid":
+        if native_book:
+            depth["orderbook"]["bids"][0]["price"] = 95900
+        else:
+            depth["best_bid"] = 95900
+    if fault == "ask":
+        if native_book:
+            depth["orderbook"]["asks"][0]["price"] = 96200
+        else:
+            depth["best_ask"] = 96200
+    if fault == "depth_clock":
+        depth["observed_epoch"] -= 0.01
+    if fault == "stale":
+        at += 2
+    if fault == "future":
+        receipt["observed_epoch"] = at + 1
+    ctx = handlers._main_stop_quote_context(
+        {},
+        "053800",
+        snapshot=ws,
+        quote_receipt=receipt,
+        executable_bid=96000,
+        bid_source="fresh_ws_executable_bid",
+        rest_snapshot=None,
+        quality={"quote_consistency_state": "single_source"},
+        nxt_quality={},
+        quote_received_at=depth_at,
+        bid_received_at=depth_at,
+        market_type="PREMARKET",
+        exit_allowed_by_clock=True,
+        price_usable=True,
+        now_ts=at,
+        evaluator="fast",
+        holding_profit_rate_at_eval=-0.44,
+    )
+    assert ctx["complete"] is (fault is None)
+    if fault is None:
+        assert ctx["bid_qty"] == 330
+        assert ctx["quote"]["observed_epoch"] == depth_at
+        assert ctx["quote"]["source_type"] == "0D"
+        assert ctx["quote"]["route_sequence"] == 11
+        assert receipt["route_sequence"] == 25
