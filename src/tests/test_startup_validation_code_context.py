@@ -3787,3 +3787,51 @@ def test_issued_entry_member_is_bound_without_rewriting_old_policy_inventory(mon
     monkeypatch.setattr(C, "_main_context", lambda: proof)
     with pytest.raises(ValueError, match="inventory_unbound"):
         C.verify_validation_main_code(policy, {k: v for k, v in paths.items() if k != "entry_deadline.py"}, actual)
+
+
+def test_entry_member_handoff_survives_candidate_to_selected_phase(tmp_path, monkeypatch):
+    """The same issued handoff binds old and selected code without resealing policy."""
+    import hashlib
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+    from src.engine.scalping import reversal_code_handoff as H
+    from src.engine.scalping import continuous_reversal_postclose as P
+
+    relative = "src/engine/scalping/entry_deadline.py"
+    old, new, data = (tmp_path / name for name in ("old", "new", "data"))
+    for root, value in ((old, b"old entry source"), (new, b"new entry source")):
+        path = root / relative
+        path.parent.mkdir(parents=True)
+        path.write_bytes(value)
+    old_sha = hashlib.sha256((old / relative).read_bytes()).hexdigest()
+    new_sha = hashlib.sha256((new / relative).read_bytes()).hexdigest()
+    monkeypatch.setitem(C.REVIEWED_ENTRY_LIFETIME_ORIGINS, relative, old_sha)
+    monkeypatch.setitem(C.REVIEWED_ENTRY_LIFETIME_SOURCES, relative, new_sha)
+    monkeypatch.setattr(C, "reviewed_preparation_pair", lambda name, before, after: (name, before, after) == (relative, old_sha, new_sha))
+    monkeypatch.setattr(C, "_git_head", lambda root: "b" * 40 if Path(root) == old else "c" * 40)
+    pointer = data / "runtime/mechanistic_entry_policy/current.json"
+    pointer.parent.mkdir(parents=True)
+    pointer.write_text(json.dumps({"bundle_sha256": "a" * 64}))
+    receipt_path = tmp_path / "handoff.json"
+    monkeypatch.setattr(H, "path", lambda *args: receipt_path)
+    code_hashes = {str(new / relative): new_sha}
+    monkeypatch.setattr(H, "code_hashes", lambda: code_hashes)
+    receipt = P.seal(dict(
+        schema=H.SCHEMA, authority=H.AUTHORITY, target_date="2026-10-28",
+        release_commit="c" * 40, release_root=str(new),
+        bundle_sha256="a" * 64, current_pointer_sha256=C._sha(pointer),
+        origin_root=str(old), origin_commit="b" * 40,
+        code_hashes=code_hashes, source_hashes={str(pointer):C._sha(pointer)},
+        actual_pid_consumed=False, policy_reselected=False,
+        provider_called=False, source_semantics_repair=True,
+    ))
+    receipt_path.write_text(json.dumps(receipt))
+    names = {Path(module.__file__).name for module in V.contract_modules()}
+    inventories = [dict(schema=V.SCHEMA, expected={name: "d" * 64 for name in names - {"entry_deadline.py"}})]
+    before = C._active_entry_code_extension(data, "2026-10-28", old, new, "c" * 40, inventories)
+    after = C._active_entry_code_extension(data, "2026-10-28", new, new, "c" * 40, inventories)
+    assert before["original_sha256"] == old_sha
+    assert after["original_sha256"] == new_sha
+    assert before["receipt_sha256"] == after["receipt_sha256"]
+    (old / relative).write_bytes(b"changed original")
+    with pytest.raises(ValueError, match="extension_unbound"):
+        C._active_entry_code_extension(data, "2026-10-28", new, new, "c" * 40, inventories)

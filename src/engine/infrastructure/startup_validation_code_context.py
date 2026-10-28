@@ -3998,14 +3998,9 @@ def _active_entry_code_extension(data_root, day, selected, root, commit, invento
     if extra != {"entry_deadline.py"} or old_names - current_names:
         raise ValueError("startup_main_native_membership_extension_unreviewed")
     relative = _code_path("entry_deadline.py")
-    original = _sha(Path(selected) / relative)
+    selected = Path(selected)
+    root = Path(root)
     current = _sha(Path(root) / relative)
-    if (
-        REVIEWED_ENTRY_LIFETIME_ORIGINS.get(relative) != original
-        or REVIEWED_ENTRY_LIFETIME_SOURCES.get(relative) != current
-        or not reviewed_preparation_pair(relative, original, current)
-    ):
-        raise ValueError("startup_main_native_membership_extension_unreviewed")
     pointer = Path(data_root) / "runtime/mechanistic_entry_policy/current.json"
     active = _json(pointer)
     active_sha = active.get("bundle_sha256")
@@ -4017,9 +4012,20 @@ def _active_entry_code_extension(data_root, day, selected, root, commit, invento
         _json(receipt_path), day=day, commit=commit, root=Path(root),
         bundle_sha=active_sha, pointer_sha=pointer_sha,
     )
+    origin = Path(str(receipt.get("origin_root", "")))
     if (
-        receipt.get("origin_root") != str(selected)
-        or receipt.get("origin_commit") != _git_head(selected)
+        not origin.is_absolute()
+        or origin.resolve(strict=True) != origin
+        or origin not in {selected, root} and selected != root
+    ):
+        raise ValueError("startup_main_native_membership_extension_unbound")
+    original = _sha(selected / relative)
+    if (
+        receipt.get("origin_commit") != _git_head(origin)
+        or _sha(origin / relative) != REVIEWED_ENTRY_LIFETIME_ORIGINS.get(relative)
+        or current != REVIEWED_ENTRY_LIFETIME_SOURCES.get(relative)
+        or not reviewed_preparation_pair(relative, _sha(origin / relative), current)
+        or original != (current if selected == root else _sha(origin / relative))
         or receipt.get("code_hashes") != H.code_hashes()
         or receipt.get("code_hashes", {}).get(str(Path(root) / relative)) != current
         or receipt.get("actual_pid_consumed") is not False
