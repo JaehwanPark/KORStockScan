@@ -3168,6 +3168,17 @@ for _name, _sha in REVIEWED_CARRIED_OWNER_SOURCES.items():
         _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
     _history.update((_old, _sha) for _old in _origins)
 
+# Exact carried SELL phase recovery; preserve original position and broker guards.
+REVIEWED_REPORT_ORIGIN_SOURCES = {'src/engine/automation/policy_generation_fixture_validation.py': 'f3d751c05804013292e6a7dce04fc2a9b9bc9eb8b9dba073550ab2156461b7fa'}
+REVIEWED_REPORT_ORIGIN_ORIGINS = {'src/engine/automation/policy_generation_fixture_validation.py': '29da6c2abd0c52620fa9ae84d376ac12cac758df10a8afec5c85af2a9d03ca25'}
+for _name, _sha in REVIEWED_REPORT_ORIGIN_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_REPORT_ORIGIN_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

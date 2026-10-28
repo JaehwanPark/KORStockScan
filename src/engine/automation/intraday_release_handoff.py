@@ -12905,6 +12905,29 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_CARRIED_OWNER_HASHES.items()
 }}
 
+# Exact carried SELL inventory phase over the complete issued signal profile.
+REVIEWED_REPORT_ORIGIN_HASHES = {'src/engine/automation/policy_generation_fixture_validation.py': 'f3d751c05804013292e6a7dce04fc2a9b9bc9eb8b9dba073550ab2156461b7fa', 'src/engine/infrastructure/startup_validation_code_context.py': '9c6b34bbce98c8dc06e777fc7bf66f6a4bdc383d142aa83b390bb7b788415d9c'}
+REVIEWED_REPORT_ORIGIN_ORIGINS = {'src/engine/automation/policy_generation_fixture_validation.py': '29da6c2abd0c52620fa9ae84d376ac12cac758df10a8afec5c85af2a9d03ca25', 'src/engine/infrastructure/startup_validation_code_context.py': 'd593d2e4680ebb7bba4d809b197128b15b12998e3dcc4650fc9008623b8cf6a6'}
+REVIEWED_REPORT_ORIGIN_PROFILE = {**REVIEWED_CARRIED_OWNER_PROFILE, **REVIEWED_REPORT_ORIGIN_HASHES}
+REVIEWED_REPORT_ORIGIN_VARIANTS = {
+    (key[0], REVIEWED_REPORT_ORIGIN_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/automation/policy_generation_fixture_validation.py",
+        "selector_sha256": REVIEWED_REPORT_ORIGIN_HASHES["src/engine/automation/policy_generation_fixture_validation.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_REPORT_ORIGIN_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_REPORT_ORIGIN_HASHES.get(os.path.normpath(name), sha) for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_CARRIED_OWNER_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current) for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_REPORT_ORIGIN_ORIGINS[name]})
+    for name, current in REVIEWED_REPORT_ORIGIN_HASHES.items()
+}}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -13804,6 +13827,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_CARRIED_OWNER_PROFILE
         prepared_variants = REVIEWED_CARRIED_OWNER_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/automation/policy_generation_fixture_validation.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_REPORT_ORIGIN_HASHES["src/engine/automation/policy_generation_fixture_validation.py"]
+    ):
+        prepared_hashes = REVIEWED_REPORT_ORIGIN_PROFILE
+        prepared_variants = REVIEWED_REPORT_ORIGIN_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

@@ -46,6 +46,17 @@ def validate(family, data, *, source_date, target_date, publish=False, source_re
         raise ValueError("source_review_family_not_affected")
     review_references = [review["reference"] for review in reviews]
     code = generation.code_generation(family)
+    if reviews:
+        # A live predecessor's capability code can differ from the preserved
+        # report's original code. The final report reader requires the direct
+        # original-to-current pair, not an unconsumed intermediate transition.
+        observed = next((row for row in generation.observations(
+            validation.ROOT, source_date, data_root=data
+        ) if row["family"] == family), None)
+        if (observed is not None and observed.get("code_sha256") != code
+            and not any(review["pairs"].get(family) == [observed.get("code_sha256"), code]
+                        for review in reviews)):
+            raise ValueError("fixture_source_review_missing_report_origin")
     plan = validation.plan_identity(family)
     for day in (source_date, target_date):
         if datetime.fromisoformat(day).date().isoformat() != day:

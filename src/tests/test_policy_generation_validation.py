@@ -1954,6 +1954,27 @@ def test_fixture_publisher_requires_complete_review_before_reusing_receipt(tmp_p
         writer.validate("auxiliary", data, source_date=DAY, target_date="2026-10-15", source_reviews=[seal_review()])
 
 
+@pytest.mark.parametrize("family", validation.PLANS)
+@pytest.mark.parametrize("basis", ["report_origin", "live_intermediate", "same_code"])
+def test_fixture_publisher_binds_preserved_report_origin_before_running_tests(tmp_path, monkeypatch, family, basis):
+    from src.engine.monitoring import policy_generation_code_handoff as handoff
+    current = "c" * 64
+    original = current if basis == "same_code" else "a" * 64
+    transition = ["b" * 64 if basis == "live_intermediate" else original, current]
+    monkeypatch.setattr(handoff, "reviewed_source_transition", lambda _: dict(reference={}, pairs={family:transition}))
+    monkeypatch.setattr(generation, "code_generation", lambda _:current)
+    monkeypatch.setattr(generation, "observations", lambda *a,**k:[dict(family=family,code_sha256=original)])
+    class ReadyForTests(Exception): pass
+    def reached(*a): raise ReadyForTests()
+    monkeypatch.setattr(validation, "plan_identity", reached)
+    if basis == "live_intermediate":
+        with pytest.raises(ValueError, match="fixture_source_review_missing_report_origin"):
+            writer.validate(family,tmp_path,source_date=DAY,target_date="2026-10-15",source_reviews=["review"])
+    else:
+        with pytest.raises(ReadyForTests):
+            writer.validate(family,tmp_path,source_date=DAY,target_date="2026-10-15",source_reviews=["review"])
+
+
 @pytest.mark.parametrize("damage", [None, "consumer_code"])
 def test_source_review_tracks_code_identity_across_same_code_release_roots(tmp_path, monkeypatch, damage):
     import shutil
