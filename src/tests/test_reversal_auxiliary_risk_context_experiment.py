@@ -101,6 +101,35 @@ def wire_response(logical, risk, fact, verdict="CAUTION"):
     )
 
 
+@pytest.mark.parametrize("reviewed", [True, False])
+def test_temporal_request_uses_native_compatibility_and_retains_issued_codec(
+    monkeypatch, reviewed
+):
+    from src.engine.scalping import reversal_auxiliary_compatibility as C
+
+    logical, _ = source()
+    req = W.request(request(logical), logical, W.contract())
+    issued = dict(W.contract(), source_sha256="a" * 64)
+    req["candidate"]["compact_runtime_contract"] = issued
+    calls = []
+
+    def compatible(actual, expected, paths):
+        calls.append((actual, expected, paths))
+        return reviewed and actual == issued and expected == W.contract()
+
+    monkeypatch.setattr(C, "contract_matches", compatible)
+    if not reviewed:
+        with pytest.raises(ValueError, match="original_request_changed"):
+            X.transform_request(req, logical, expected_contract=X.contract(X.TEMPORAL))
+        assert len(calls) == 1
+        return
+    actual = X.transform_request(req, logical, expected_contract=X.contract(X.TEMPORAL))
+    assert len(calls) == 2  # Original validation and native request re-encoding.
+    assert all(v[2] == {"source_sha256": W.__file__} for v in calls)
+    assert actual["candidate"]["compact_runtime_contract"] == issued
+    assert actual["candidate"]["system_prompt"] == req["candidate"]["system_prompt"]
+
+
 def test_frozen_production_transform_sha_and_original_fields_remain_unchanged():
     assert (
         hashlib.sha256(Path(R.__file__).read_bytes()).hexdigest()

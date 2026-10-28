@@ -470,11 +470,21 @@ def transform_request(req, logical_input, *, expected_contract, source_snapshot=
     if len(present) > 1:
         raise ValueError("risk_context_multiple_wire_contracts")
     codec = present[0][1] if present else None
+    wire_contract = None
     if codec:
         field = present[0][0]
+        wire_contract = candidate[field]
+        if codec is W:
+            from src.engine.scalping import reversal_auxiliary_compatibility as C
+
+            contract_matches = C.contract_matches(
+                wire_contract, codec.contract(), {"source_sha256": codec.__file__}
+            )
+        else:
+            contract_matches = wire_contract == codec.contract()
         wire, schema, aliases = codec.encode(logical_input)
         if (
-            candidate[field] != codec.contract()
+            not contract_matches
             or req.get("candidate_input") != wire
             or candidate.get("logical_input_sha256") != P.digest(logical_input)
             or candidate.get("response_schema") != schema
@@ -522,7 +532,7 @@ def transform_request(req, logical_input, *, expected_contract, source_snapshot=
             },
         ]
     )
-    return codec.request(result, transformed, codec.contract()) if codec else result
+    return codec.request(result, transformed, wire_contract) if codec else result
 
 
 def seal_evaluation(report, *, expected_contract):
