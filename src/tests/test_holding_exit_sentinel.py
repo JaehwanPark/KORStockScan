@@ -2159,6 +2159,126 @@ def _missing_buy_flow_report(*, damage=None):
     )
 
 
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "duplicate_terminal",
+        "other_order",
+        "missing_submit",
+        "late_partial",
+        "unbound_partial",
+        "other_buy",
+        "missing_prior_buy",
+        "duplicate_submit",
+        "new_missing_signal",
+        "other_symbol",
+        "conflicting_submit_buy",
+    ],
+)
+def test_partial_exit_then_missing_buy_terminal_keeps_exact_incident(damage):
+    """RFHIC shape: bound partial, restart, missing BUY, distinct final order."""
+    from copy import deepcopy
+    from dataclasses import replace
+    from src.engine.monitoring.semantic_incident_contract import holding_gap_identity
+
+    event, mechanical, rows, lineage, at = _semantic_flow()
+    partial = event(
+        4,
+        "sell_partial_fill_progress",
+        {
+            **lineage,
+            "order_no": "0002206",
+            "remaining_sell_qty": 4,
+            "holding_path_terminal_signal_binding": "same_position_buy_generation",
+        },
+    )
+    missing = event(
+        10,
+        "holding_path_signal_snapshot",
+        {
+            **rows[1].fields,
+            "buy_fill_identity": "None",
+            "signal_id": "second",
+            "signal_at": at.timestamp() + 10,
+        },
+    )
+    final_lineage = {
+        **lineage,
+        "holding_path_signal_id": "second",
+        "holding_path_buy_fill_identity": "None",
+    }
+    submitted = event(12, "sell_order_sent", {**final_lineage, "ord_no": "0034015"})
+    terminal = event(
+        13,
+        "sell_completed",
+        {
+            "exit_rule": "scalp_trailing_take_profit",
+            "order_no": "0034015",
+            "remaining_sell_qty": 0,
+            "holding_path_terminal_signal_binding": "source_gap_generation_mismatch",
+        },
+    )
+    rows += [
+        event(2, "exit_signal", lineage),
+        event(3, "sell_order_sent", {**lineage, "ord_no": "0002206"}),
+        partial,
+        missing,
+        event(11, "exit_signal", final_lineage),
+        submitted,
+        terminal,
+    ]
+    if damage == "duplicate_terminal":
+        rows.append(deepcopy(terminal))
+    elif damage == "other_order":
+        terminal.fields["order_no"] = "0099999"
+    elif damage == "missing_submit":
+        rows.remove(submitted)
+    elif damage == "late_partial":
+        rows[4] = replace(partial, emitted_at=at + timedelta(seconds=14))
+    elif damage == "unbound_partial":
+        partial.fields["holding_path_terminal_signal_binding"] = "source_gap"
+    elif damage == "other_buy":
+        partial.fields["holding_path_buy_fill_identity"] = "b" * 64
+    elif damage == "missing_prior_buy":
+        rows[1].fields["buy_fill_identity"] = "None"
+    elif damage == "duplicate_submit":
+        rows.append(deepcopy(submitted))
+    elif damage == "new_missing_signal":
+        rows.append(replace(missing, fields={**missing.fields, "signal_id": "third"}))
+    elif damage == "other_symbol":
+        rows[-1] = replace(terminal, stock_code="999999")
+    elif damage == "conflicting_submit_buy":
+        submitted.fields["holding_path_buy_fill_identity"] = "b" * 64
+    original = deepcopy(rows)
+    report = audit_profit_exit_flow(
+        rows,
+        target_date="2026-10-09",
+        as_of=at + timedelta(seconds=20),
+        load_votes=lambda _: [],
+        mechanical_policy_receipt=mechanical,
+        consumed_pid=42,
+    )
+    assert rows == original
+    assert report["semantic_status"] != "pass"
+    assert all(row["lifecycle_state"] != "completed" for row in report["lifecycle"])
+    assert report["economics_status"] != "verified"
+    if damage:
+        assert holding_gap_identity(report) is None
+    else:
+        identity = holding_gap_identity(report)
+        assert identity and len(identity["gaps"]) == 2
+        assert {row[2] for row in identity["gaps"]} == {"second"}
+        assert {row["reason"] for row in report["source_gaps"]} == {
+            "tp_signal_buy_generation_missing",
+            "tp_terminal_buy_generation_unbound",
+        }
+        assert all(
+            row["historical_recovery_proven"] is False
+            for row in report["source_gap_details"]
+        )
+
+
 def _historical_resolution_fixture(tmp_path, monkeypatch):
     from copy import deepcopy
     from src.engine.ai.holding_exit_vote import persist_buy_fill_receipt

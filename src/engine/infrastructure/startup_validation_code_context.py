@@ -3225,6 +3225,19 @@ for _name, _sha in REVIEWED_BUY_LINEAGE_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+
+# Partial-exit diagnostic identity only; original source gaps and guards remain.
+REVIEWED_PARTIAL_GAP_SOURCES = {'src/engine/scalping/holding_profit_exit_semantics.py': '34e654bf8cfc979783b3966b96b952f900cdd67fc21a98ae107c87b2f91b0542'}
+REVIEWED_PARTIAL_GAP_ORIGINS = {'src/engine/scalping/holding_profit_exit_semantics.py': '9c6fb04e8cfe5a776b245a2957deaaa764991bf0da1313b6eaae381b65998bd7'}
+for _name, _sha in REVIEWED_PARTIAL_GAP_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_PARTIAL_GAP_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

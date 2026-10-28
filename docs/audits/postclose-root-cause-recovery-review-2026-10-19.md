@@ -5258,3 +5258,75 @@ Before editing the current checklist, native `preserve_checklist(2026-10-28)` ve
 - Historical RFHIC49558 `tp_signal_buy_generation_missing` and `tp_terminal_buy_generation_unbound` remain original diagnostics. The already completed trade is not resurrected and old signal/terminal nulls are not rewritten. New missing/invalid receipt detection remains active.
 - Evidence: `/home/ubuntu/KORStockScan/tmp/buy-lineage-integrated-20261028-770b26078/` (source-review, historical-preservation, consumer inventory, regression and isolated original proof). Deployment evidence will be appended after actual consumption.
 - Baseline diff counts before this one audit line: {"docs": [44, 0], "source": [73, 0], "tests": [122, 21]}; source growth is one guarded restore branch and exact existing-owner custody profiles; tests add failure/predecessor coverage. No file moves or unrelated changes.
+
+### RFHIC49558 and quantity historical diagnostic review — 2026-10-28
+
+Baseline is selected immutable d0790117a, PID3661403/start80241527. The user
+authorized exact source restoration, historical diagnosis only after current
+collection verification, review/fixes and necessary ordered deployment/restart.
+Shared dirty workspace and original policy, research, receipt and null fields
+remain unchanged. Source dates are holding28 and quantity27; target session28.
+
+Quantity49362/445680 has original BUY3, native Main SELL1 and an operator-owned
+manual sale of the remaining2. The final Main terminal and exact costs cannot
+be invented. Native current-versus-approved historical comparison verifies its
+unchanged record, original declared official-cost window and invalid execution
+receipt. Current fact SHA is ce5d1ce4f06cdee90a0c40984f0aec5404f226c63467d0ded85614bac56bec21.
+The prepared source27 successor already consumes the recovered49415 research
+allocation; it must not be re-excluded. Its34 eligible rows do not imply exact
+per-trade broker costs or policy economic superiority.
+
+The existing monitor producer revalidated the complete native stage and issued
+a separate historical disposition for49013/49266/49362. Current native quantity
+consumer findings are empty, while original source-gap reasons, null economics,
+stage/report/policy/selector/bootstrap bytes remain unchanged. Prior source27
+publication had carried only49013/49266; this source-only recovery restores the
+missing accepted49362 classification without replaying the research calculation.
+Evidence: [exact review](../../tmp/rfhic-quantity-history-20261028/quantity-exact-history-review.json)
+and [native publication/consumption](../../tmp/rfhic-quantity-history-20261028/quantity-historical-consumed.json).
+
+RFHIC49558 originally has a bound08:13 partial SELL0002206 followed by a new
+11:09 signal with BUY identity absent, SELL0034015 and an unbound final terminal.
+Its collector repair is already in d0790117a. The remaining diagnostic producer
+only identified one-snapshot/no-partial populations, losing the exact incident
+identity for this real multi-signal shape. Extend that existing predicate only
+for prior bound partial lineage and one exact later submit/terminal order.
+Duplicate, conflicting BUY, symbol, order, signal, missing submit or reversed
+clock evidence remains unclassified/current. No trading or economic predicate
+is changed. Original missing BUY fields and lifecycle failure remain unchanged.
+
+Actual27-row original replay preserves all semantic outputs except the two
+new exact gap details: signal1793153391.887:SCALP_TRAILING_LIMIT_WEAK, signal SHA
+bed5c61746cc3f4a6fd4dc6b664d61179593a54d2bfa8e2d9bf33f5e35d08936, terminal SHA
+cc04f42f33446bf859f3b620dad70d08a671250e8a4384145ba83783edc05e09.
+[Original-shape reproduction](../../tmp/rfhic-quantity-history-20261028/holding-original-reproduction-reviewed.json)
+is diagnostic evidence, not recovered decision-time BUY lineage or economics.
+
+Historical RFHIC closure remains OPEN: source28 is still current and the native
+resolution contract has no later fully bound natural terminal after the loss.
+Recheck the source28 final report after close, then at source29 startup verify
+current collection, exact original hashes and native resolution eligibility.
+Do not manufacture a trade, relabel another route, suppress new gaps or rewrite
+the original signal. Ownership remains HoldingProfitExitSourceContractRepair;
+quantity future-input detection and daily handoff remain under
+InitialQuantityProducerConsumerRepair1010.
+
+Replacement/removal: consolidate the old whole-position no-partial restriction
+inside audit_profit_exit_flow; retain original single-signal contract and all
+current consumers. No new production module, wrapper, provider, worker, policy
+or validation bypass. Issued predecessor profiles stay immutable; the complete
+successor and independent preparation reader bind the reviewed diagnostic delta.
+Changed dependencies: native holding-vote capability and trailing report code
+need new native evidence; unchanged quantity/source policies are read-only
+revalidated. Candidate/selected P5, actual PID and current observer/health are
+separate deployment acceptance. No natural or economic success is inferred.
+
+Validation:648 distinct targeted cases pass (holding127, existing quantity/cost134,
+independent preparation318, complete handoff/predecessor69). The final real27-row
+reproducer leaves lifecycle/source gaps/economics unchanged and adds exact IDs.
+Review added conflicting-submit BUY rejection. Earlier invalidated test attempts
+and a missing test-file invocation are preserved; they are not production
+failures or acceptance. The predecessor fixture's missing generation mapping
+was corrected and its three cases passed. Compile, diff and print-only document
+parser pass. Unaffected prior tests remain evidence for unchanged owners.
+Source delta is +105/-2, tests +169/-21; docs +74/-0. Growth binds the multi-signal incident and preserves complete predecessor/independent-reader contracts; no new execution entrypoint.

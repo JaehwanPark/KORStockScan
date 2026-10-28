@@ -13016,6 +13016,30 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_BUY_LINEAGE_HASHES.items()
 }}
 
+
+# Complete reviewed partial-exit incident identity successor.
+REVIEWED_PARTIAL_GAP_HASHES = {'src/engine/scalping/holding_profit_exit_semantics.py': '34e654bf8cfc979783b3966b96b952f900cdd67fc21a98ae107c87b2f91b0542', 'src/engine/infrastructure/startup_validation_code_context.py': '5f2f81bb668422db9a7a346b61dc942c6031d64e1f986a9fc37fb57a716247dd'}
+REVIEWED_PARTIAL_GAP_ORIGINS = {'src/engine/scalping/holding_profit_exit_semantics.py': '9c6fb04e8cfe5a776b245a2957deaaa764991bf0da1313b6eaae381b65998bd7', 'src/engine/infrastructure/startup_validation_code_context.py': '45534250126c5631c7a20ac8430603353309cc3337561f2a91dc86824762b0af'}
+REVIEWED_PARTIAL_GAP_PROFILE = {**REVIEWED_BUY_LINEAGE_PROFILE, **REVIEWED_PARTIAL_GAP_HASHES}
+REVIEWED_PARTIAL_GAP_VARIANTS = {
+    (key[0], REVIEWED_PARTIAL_GAP_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/scalping/holding_profit_exit_semantics.py",
+        "selector_sha256": REVIEWED_PARTIAL_GAP_HASHES["src/engine/scalping/holding_profit_exit_semantics.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_PARTIAL_GAP_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_PARTIAL_GAP_HASHES.get(os.path.normpath(name), sha) for name, sha in members.items()}
+            for origin, members in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_BUY_LINEAGE_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current) for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_PARTIAL_GAP_ORIGINS[name]})
+    for name, current in REVIEWED_PARTIAL_GAP_HASHES.items()
+}}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -13939,6 +13963,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_BUY_LINEAGE_PROFILE
         prepared_variants = REVIEWED_BUY_LINEAGE_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/scalping/holding_profit_exit_semantics.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_PARTIAL_GAP_HASHES["src/engine/scalping/holding_profit_exit_semantics.py"]
+    ):
+        prepared_hashes = REVIEWED_PARTIAL_GAP_PROFILE
+        prepared_variants = REVIEWED_PARTIAL_GAP_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

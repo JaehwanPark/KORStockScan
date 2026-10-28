@@ -891,9 +891,69 @@ def audit_profit_exit_flow(
                 # inventing BUY lineage or advancing its lifecycle. Only a
                 # complete, unambiguous signal/terminal population qualifies.
                 # Hash original canonical rows, not the growing session/report.
+                # A prior bound partial exit is not another missing terminal.
+                # Bind the later unbound terminal through its original order,
+                # since that terminal intentionally has no signal/BUY fields.
+                matched_sent = [
+                    row
+                    for row in sent
+                    if _fields(row).get("holding_path_signal_id") == signal_id
+                    and _fields(row).get("holding_path_position_key") == position_key
+                    and _fields(row).get("holding_path_buy_fill_identity")
+                    in (None, "", "None", "-")
+                    and getattr(row, "stock_code", None) == event.stock_code
+                ]
+                prior_snapshots = [row for row in snapshots if row is not event]
+                prior_partial_bound = (
+                    bool(partial)
+                    and bool(prior_snapshots)
+                    and all(
+                        _epoch(row.emitted_at) < _epoch(event.emitted_at)
+                        and getattr(row, "stock_code", None) == event.stock_code
+                        and _fields(row).get("position_key") == position_key
+                        and re.fullmatch(
+                            r"[0-9a-f]{64}", str(_fields(row).get("buy_fill_identity"))
+                        )
+                        and _fields(row).get("signal_id") != signal_id
+                        for row in prior_snapshots
+                    )
+                    and all(
+                        _epoch(row.emitted_at) < _epoch(event.emitted_at)
+                        and getattr(row, "stock_code", None) == event.stock_code
+                        and _fields(row).get("holding_path_terminal_signal_binding")
+                        == "same_position_buy_generation"
+                        and any(
+                            _fields(row).get("holding_path_signal_id")
+                            == _fields(prior).get("signal_id")
+                            and _fields(row).get("holding_path_buy_fill_identity")
+                            == _fields(prior).get("buy_fill_identity")
+                            and _fields(row).get("holding_path_position_key")
+                            == position_key
+                            for prior in prior_snapshots
+                        )
+                        for row in partial
+                    )
+                )
+                matched_partial_terminal = (
+                    prior_partial_bound
+                    and len(matched_sent) == len(completed) == 1
+                    and _epoch(event.emitted_at)
+                    <= _epoch(matched_sent[0].emitted_at)
+                    <= _epoch(completed[0].emitted_at)
+                    and _fields(matched_sent[0]).get("ord_no")
+                    == _fields(completed[0]).get("order_no")
+                    and sum(
+                        _fields(row).get("ord_no")
+                        == _fields(completed[0]).get("order_no")
+                        for row in sent
+                    )
+                    == 1
+                )
                 if (
-                    len(snapshots) == len(completed) == 1
-                    and not partial
+                    len(completed) == 1
+                    and (
+                        len(snapshots) == 1 and not partial or matched_partial_terminal
+                    )
                     and getattr(completed[0], "stock_code", None) == event.stock_code
                     and re.fullmatch(r"[0-9]{6}", event.stock_code or "")
                     and _epoch(completed[0].emitted_at) >= _epoch(event.emitted_at)

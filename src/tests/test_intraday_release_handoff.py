@@ -5424,7 +5424,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_BUY_LINEAGE_PROFILE,
+        "current": handoff.REVIEWED_PARTIAL_GAP_PROFILE,
+        "consumed_buy_lineage": handoff.REVIEWED_BUY_LINEAGE_PROFILE,
         "consumed_completion": handoff.REVIEWED_POSTCLOSE_COMPLETION_PROFILE,
         "consumed_report_origin": handoff.REVIEWED_REPORT_ORIGIN_PROFILE,
         "issuer_bytes_source": handoff.REVIEWED_ISSUER_BYTES_PROFILE,
@@ -5521,6 +5522,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     "show",
                     {
                         "issuer_bytes_source": "29a3c1475",
+                        "consumed_buy_lineage": "d0790117a",
                         "quantity_source": "fef43a8c5",
                         "stopped_preparation": "f48dd058d",
                         "execution_exact": "2d3e27aeb",
@@ -7103,3 +7105,15 @@ def test_buy_lineage_preserves_consumed_completion_predecessor(tmp_path, family)
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, None, "consumed_completion"
     )
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("dependency", sorted(handoff.REVIEWED_PARTIAL_GAP_HASHES))
+@pytest.mark.parametrize("fault", [None, "missing", "dirty", "committed_change", "parent_mix"])
+def test_partial_gap_complete_candidate_and_negatives(tmp_path, family, dependency, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, family, fault, "current", dependency)
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+def test_partial_gap_keeps_consumed_buy_lineage(tmp_path, family):
+    test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, family, None, "consumed_buy_lineage")
