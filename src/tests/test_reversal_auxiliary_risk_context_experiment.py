@@ -28,6 +28,70 @@ def empty_vocabulary():
     return logical, registry
 
 
+def test_temporal_mode_preserves_original_and_separates_prefix_from_future_geometry():
+    original, _ = source()
+    logical = R.project(original, expected_contract=R.contract("ROLE_VOCAB_PATH"))
+    before = copy.deepcopy(logical)
+    projected = X.project(logical, expected_contract=X.contract(X.TEMPORAL))
+    assert logical == before
+    assert projected["signals"] == logical["signals"]
+    setup = projected["entry_setup_evidence_v1"]
+    facts = {f["id"]: f for f in setup["context_facts"]}
+    assert not any(
+        "observed_recent_return_minus_target_gap_pct_points" in fid for fid in facts
+    )
+    cited = {fid for ids in setup["risk_fact_bindings"].values() for fid in ids}
+    assert not any(
+        fid.endswith(
+            ("/target_gap_from_confirmation_trade_pct", "/temporal_target_geometry")
+        )
+        for fid in cited
+    )
+    objective = next(
+        v["value"] for k, v in facts.items() if k.endswith("/temporal_target_geometry")
+    )
+    assert objective["horizon_seconds"] == 1800
+    assert objective["required_future_trade_price"] == pytest.approx(
+        logical["common_context"]["entry_ask"] * 1.004 / 0.9977
+    )
+    assert any(fid.endswith("/received_prefix_state") for fid in cited)
+    assert (
+        X.validate_projected(
+            logical, projected, expected_contract=X.contract(X.TEMPORAL)
+        )
+        == projected
+    )
+    with pytest.raises(ValueError, match="fact_identity_conflict"):
+        X.project(projected, expected_contract=X.contract(X.TEMPORAL))
+    with pytest.raises(ValueError):
+        LIVE.validate(X.contract(X.TEMPORAL))
+
+
+@pytest.mark.parametrize(
+    "bad", ["future_prefix", "changed_geometry", "short_prefix", "wrong_confirmation"]
+)
+def test_temporal_mode_rejects_conflicting_or_incomparable_source(bad):
+    logical, _ = source()
+    logical = R.project(logical, expected_contract=R.contract("ROLE_VOCAB_PATH"))
+    signal = logical["signals"][0]
+    if bad == "future_prefix":
+        signal["recent_observed_prices"][-1]["age_sec"] = -1
+    elif bad == "changed_geometry":
+        next(
+            f
+            for f in logical["entry_setup_evidence_v1"]["context_facts"]
+            if f["id"].endswith("/target_gap_from_confirmation_trade_pct")
+        )["value"] += 1
+    elif bad == "short_prefix":
+        signal["recent_observed_prices"] = signal["recent_observed_prices"][-1:]
+    else:
+        signal["recent_observed_prices"][-1].update(
+            age_sec=0, price=logical["common_context"]["confirmation_price"] + 1
+        )
+    with pytest.raises(ValueError):
+        X.project(logical, expected_contract=X.contract(X.TEMPORAL))
+
+
 def wire_response(logical, risk, fact, verdict="CAUTION"):
     aliases = W.encode(logical)[2]
     return dict(

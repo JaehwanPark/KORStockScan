@@ -13,6 +13,45 @@ def test_reuse_only_exact_unchanged_branch_membership():
     assert R.unchanged_scopes(old, new) == {"same"}
 
 
+def test_premarket_inventory_does_not_require_aftermarket_only_date(
+    tmp_path, monkeypatch
+):
+    from src.engine.scalping import continuous_reversal_source as source
+
+    for day, session in [
+        ("2026-10-13", "SOR_AFTERMARKET"),
+        ("2026-10-28", "NXT_PREMARKET"),
+    ]:
+        folder = (
+            tmp_path
+            / "observations/scalp_micro_reversion_forward"
+            / ("trade_date=" + day)
+            / ("venue=NXT/session=" + session)
+        )
+        folder.mkdir(parents=True)
+        (folder / "market_stream.jsonl").write_bytes(b"inventory must not decode raw")
+    monkeypatch.setattr(
+        source,
+        "_source_quality_receipt",
+        lambda *a: dict(eligible=True, status="closed_main_raw_epochs", receipts=[]),
+    )
+    machine = dict(
+        partitions=[
+            dict(normalized_source=dict(day="2026-10-28", session="NXT_PREMARKET"))
+        ]
+    )
+    result = R.retained_source_inventory(
+        tmp_path, machine, as_of="2026-10-28", market="PRE"
+    )
+    assert result["missing_eligible_dates"] == []
+    assert result["empty_scope_dates"] == ["2026-10-13"]
+    assert [r["day"] for r in result["rows"]] == ["2026-10-28"]
+    with pytest.raises(ValueError, match="market_invalid"):
+        R.retained_source_inventory(
+            tmp_path, machine, as_of="2026-10-28", market="unknown"
+        )
+
+
 def test_reservoir_is_bounded_and_win_fail_blind():
     first = defaultdict(dict)
     second = defaultdict(dict)

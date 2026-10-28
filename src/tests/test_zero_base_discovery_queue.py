@@ -80,6 +80,49 @@ def test_unseen_candidates_rotate_and_recheck_does_not_starve_them():
     assert queue.claim(now_epoch=T0 + 6, limit=1) == []  # prior claim is in flight
 
 
+@pytest.mark.parametrize(
+    "policy,expected", [("current", "000001"), ("eligible_wait", "000002")]
+)
+def test_old_discovery_does_not_impute_eligible_wait_in_candidate_age_turn(
+    policy, expected
+):
+    queue = DiscoveryQueue(DAY)
+    _observe(queue, "000001", kind="activity")
+    _observe(queue, "000002", kind="activity", epoch=T0 + 9)
+    _observe(queue, "000099", kind="activity")
+    used = queue._candidates[("000099", "krx_only")]
+    used.claim_count, used.in_flight = 3, True
+    queue.claim(now_epoch=T0 + 10, limit=0, deferred_active_codes={"000001"})
+    assert queue._eligible_since == {("000002", "krx_only"): T0 + 10}
+    claims = queue.claim(now_epoch=T0 + 30, limit=1, allocation_policy=policy)
+    assert claims[0]["code"] == expected
+
+
+@pytest.mark.parametrize(
+    "policy,expected", [("current", "000002"), ("service_wait", "000001")]
+)
+def test_candidate_age_turn_services_due_revisit_without_a_new_slot(policy, expected):
+    queue = DiscoveryQueue(DAY)
+    _observe(queue, "000001", kind="activity")
+    row = queue._candidates[("000001", "krx_only")]
+    row.claim_count, row.last_claim_epoch, row.next_due_epoch = 3, T0 + 1, T0 + 5
+    queue.claim(now_epoch=T0 + 10, limit=0)
+    _observe(queue, "000002", kind="activity", epoch=T0 + 20)
+    result = queue.claim(now_epoch=T0 + 30, limit=1, allocation_policy=policy)
+    assert [x["code"] for x in result] == [expected]
+    assert queue.in_flight_count() == 1
+
+
+@pytest.mark.parametrize("policy", [None, {}, [], "unknown"])
+def test_unknown_allocation_policy_does_not_mutate_queue(policy):
+    queue = DiscoveryQueue(DAY)
+    _observe(queue, "000001")
+    before = queue.snapshot()
+    with pytest.raises(ValueError, match="invalid allocation policy"):
+        queue.claim(now_epoch=T0 + 2, limit=1, allocation_policy=policy)
+    assert queue.snapshot() == before
+
+
 def test_restored_fund_does_not_reclaim_a_probe_and_preserves_ledger():
     queue = DiscoveryQueue(DAY)
     for code, name in [

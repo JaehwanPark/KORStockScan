@@ -807,6 +807,78 @@ def test_enabled_scanner_enters_new_owner_without_legacy_radar(monkeypatch):
     assert called == [{"token": "token", "event_bus": bus, "is_test_mode": True}]
 
 
+@pytest.mark.parametrize(
+    "release,active,expected",
+    [(True, True, [0, 1]), (False, True, [0]), (True, False, [])],
+)
+def test_physical_release_reuses_normal_dispatch_without_poll_delay(
+    monkeypatch, tmp_path, release, active, expected
+):
+    from collections import defaultdict
+    from src.scanners import scalping_scanner as scanner
+    from src.engine.error_detectors import process_health
+
+    class StopScanner(Exception):
+        pass
+
+    clock = [
+        datetime(2026, 10, 28, 8, 7, 31, tzinfo=ZoneInfo("Asia/Seoul")).timestamp()
+    ]
+    initial = clock[0]
+    calls = []
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.fromtimestamp(clock[0], tz=tz)
+
+    class Queue:
+        session_date = "2026-10-28"
+        count = 5
+
+        def in_flight_count(self):
+            return self.count
+
+    class Runtime:
+        def __init__(self, **kwargs):
+            self.queue, self.drains, self.waits = Queue(), 0, 0
+
+        def drain_results(self):
+            self.drains += 1
+            if self.drains == 2 and release:
+                self.queue.count -= 1
+            return []
+
+        def start_scan(self, token):
+            return False
+
+        def finish_scan(self):
+            return None
+
+        def dispatch_due_probes(self):
+            calls.append(int(clock[0] - initial))
+            return defaultdict(lambda: 0)
+
+        def wait(self, seconds):
+            self.waits += 1
+            if self.waits == 2:
+                raise StopScanner()
+            clock[0] += 1
+
+    monkeypatch.setattr(scanner, "ZeroBaseDiscoveryRuntime", Runtime)
+    monkeypatch.setattr(scanner, "datetime", Clock)
+    monkeypatch.setattr(scanner.time, "time", lambda: clock[0])
+    monkeypatch.setattr(scanner, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        scanner, "_active_scalping_buy_window", lambda now: "PRE" if active else None
+    )
+    monkeypatch.setattr(scanner, "_zero_base_log_event", lambda *a, **kw: None)
+    monkeypatch.setattr(process_health, "write_heartbeat", lambda *a: None)
+    with pytest.raises(StopScanner):
+        scanner.run_zero_base_scanner(token="offline", event_bus=Bus())
+    assert calls == expected
+
+
 def test_scanner_emits_failed_probe_identity_and_artifact_cause(monkeypatch, tmp_path):
     import pytest
     from src.scanners import scalping_scanner as scanner
@@ -849,6 +921,7 @@ def test_scanner_emits_failed_probe_identity_and_artifact_cause(monkeypatch, tmp
             "Runtime",
             (),
             {
+                "queue": type("Queue", (), {"in_flight_count": lambda self: 0})(),
                 "drain_results": lambda self: [result],
                 "finish_scan": lambda self: None,
                 "wait": lambda self, seconds: (_ for _ in ()).throw(StopScanner()),
@@ -1000,7 +1073,7 @@ def test_scanner_publishes_scheduler_diagnostics_in_both_cycle_paths(
 
     class Runtime:
         def __init__(self, **kwargs):
-            pass
+            self.queue = type("Queue", (), {"in_flight_count": lambda self: 0})()
 
         def drain_results(self):
             return []

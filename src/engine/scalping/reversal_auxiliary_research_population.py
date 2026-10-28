@@ -22,14 +22,21 @@ from src.engine.scalping import reversal_extended_union as U
 from src.engine.scalping import continuous_reversal_operating_postclose as O
 
 
-def retained_source_inventory(data_root, machine, *, as_of):
+def retained_source_inventory(data_root, machine, *, as_of, market=None):
     """Find retained dates omitted by the published cumulative manifest."""
     from datetime import date
     from src.engine.scalping.continuous_reversal_source import _source_quality_receipt
 
     if date.fromisoformat(as_of).isoformat() != as_of:
         raise ValueError("research_source_inventory_date_invalid")
-    represented = {p["normalized_source"]["day"] for p in machine["partitions"]}
+    if market not in (None, "PRE", "REGULAR", "AFTER"):
+        raise ValueError("research_source_inventory_market_invalid")
+    represented = {
+        p["normalized_source"]["day"]
+        for p in machine["partitions"]
+        if market is None
+        or K.market_bucket(p["normalized_source"]["session"]) == market
+    }
     base = Path(data_root) / "observations/scalp_micro_reversion_forward"
     dates = sorted(
         {
@@ -40,6 +47,7 @@ def retained_source_inventory(data_root, machine, *, as_of):
         }
     )
     rows = []
+    empty_scope_dates = []
     for day in dates:
         files = list(
             (base / ("trade_date=" + day)).glob(
@@ -52,7 +60,15 @@ def retained_source_inventory(data_root, machine, *, as_of):
             if "event_references" not in p.name
             and p.name.endswith((".jsonl", ".jsonl.gz"))
         ]
+        if market is not None:
+            files = [
+                p
+                for p in files
+                if K.market_bucket(p.parent.name.removeprefix("session=")) == market
+            ]
         if not files:
+            if market is not None:
+                empty_scope_dates.append(day)
             continue
         quality = _source_quality_receipt(data_root, day)
         rows.append(
@@ -71,6 +87,11 @@ def retained_source_inventory(data_root, machine, *, as_of):
         dict(
             schema="auxiliary_retained_source_inventory_v1",
             as_of=as_of,
+            **(
+                dict(market=market, empty_scope_dates=empty_scope_dates)
+                if market is not None
+                else {}
+            ),
             rows=rows,
             missing_eligible_dates=[
                 row["day"] for row in rows if row["needs_backfill"]

@@ -6803,6 +6803,7 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
             )
             next_scan_epoch = 0.0
             next_probe_epoch = 0.0
+        in_flight_before_drain = runtime.queue.in_flight_count()
         for result in runtime.drain_results():
             claim = result["claim"]
             _zero_base_log_event(
@@ -6938,6 +6939,11 @@ def run_zero_base_scanner(*, token, event_bus, is_test_mode=False):
                     ),
                 },
             )
+        if runtime.queue.in_flight_count() < in_flight_before_drain:
+            # The physical release was durably consumed by drain_results.
+            # Reuse this loop's normal admission instead of waiting for the
+            # ten-second polling boundary; all due/source/slot guards remain.
+            next_probe_epoch = min(next_probe_epoch, time.time())
         active_window = _active_scalping_buy_window(now)
         if (
             active_window is not None or is_test_mode

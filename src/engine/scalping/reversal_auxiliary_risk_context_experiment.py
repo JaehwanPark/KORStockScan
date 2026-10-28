@@ -18,6 +18,7 @@ from src.engine.scalping import reversal_auxiliary_wire as W
 from src.engine.scalping import reversal_extended_union as U
 
 VERSION = "auxiliary_observed_risk_context_experiment_v1"
+TEMPORAL = "TEMPORAL_SEPARATED"
 COMMON_KEYS = (
     "epoch",
     "symbol",
@@ -41,8 +42,10 @@ INTERPRETATION = (
 )
 
 
-def contract():
-    return dict(
+def contract(mode=None):
+    if mode not in (None, TEMPORAL):
+        raise ValueError("risk_context_mode_invalid")
+    value = dict(
         version=VERSION,
         source_sha256=P.file_hash(__file__),
         dependencies={
@@ -59,12 +62,15 @@ def contract():
         operating_compatibility="RESEARCH_ONLY_REQUIRES_SEPARATE_IMPLEMENTATION",
         **P.AUTH,
     )
+    if mode is not None:
+        value["mode"] = mode
+    return value
 
 
 def _checked(value):
     if (
         not isinstance(value, dict)
-        or value != contract()
+        or value != contract(value.get("mode"))
         or any(value.get(k) is not v for k, v in P.AUTH.items())
     ):
         raise ValueError("risk_context_contract_changed")
@@ -171,6 +177,8 @@ def _snapshot_context(snapshot, logical_input):
 
 def project(logical_input, *, expected_contract, source_snapshot=None):
     _checked(expected_contract)
+    if expected_contract.get("mode") == TEMPORAL:
+        return _temporal_project(logical_input, source_snapshot=source_snapshot)
     if (
         not isinstance(logical_input, dict)
         or logical_input.get("schema") != U.VERSION
@@ -311,6 +319,123 @@ def project(logical_input, *, expected_contract, source_snapshot=None):
         risk_bindings_are_vocabulary_only=True,
         contract=expected_contract,
     )
+    W.encode(result)
+    return result
+
+
+def _temporal_project(logical_input, *, source_snapshot=None):
+    """Separate observed prefix state from the future objective, research only."""
+    W.encode(logical_input)
+    common = logical_input.get("common_context") or {}
+    if (
+        any(common.get(k) is None for k in COMMON_KEYS)
+        or not _finite(common["epoch"])
+        or common["epoch"] <= 0
+    ):
+        raise ValueError("risk_context_native_identity_missing")
+    if source_snapshot is not None:
+        _snapshot_context(source_snapshot, logical_input)
+    result = copy.deepcopy(logical_input)
+    setup = result["entry_setup_evidence_v1"]
+    removed, neutral = set(), set()
+    additions = []
+    for signal in result["signals"]:
+        geometry, coverage = R._path(signal, common)
+        values, prefix = C._features(signal, common)
+        if (
+            coverage["observed_recent_price_count"] < 2
+            or not coverage["observed_recent_span_sec"]
+        ):
+            raise ValueError("temporal_input_no_comparable_prefix")
+        if (
+            signal["recent_observed_prices"][-1]["age_sec"] == 0
+            and signal["recent_observed_prices"][-1]["price"]
+            != common["confirmation_price"]
+        ):
+            raise ValueError("risk_context_confirmation_price_conflict")
+        ref = signal["ref"]
+        for name, value in geometry.items():
+            fid = ref + "/observed_target_progress_v1/" + name
+            matches = [
+                f
+                for field in ("positive_facts", "context_facts", "contradicting_facts")
+                for f in setup[field]
+                if f["id"] == fid
+            ]
+            if matches and (
+                len(matches) != 1
+                or matches[0]["value"] != value
+                or matches[0]["unit"] != R.PATH_UNITS[name]
+            ):
+                raise ValueError("temporal_input_geometry_conflict")
+            if name == "observed_recent_return_minus_target_gap_pct_points":
+                removed.add(fid)
+            elif name in {
+                "target_gap_from_confirmation_trade_pct",
+                "ask_premium_to_confirmation_trade_pct",
+            }:
+                neutral.add(fid)
+        target = common["entry_ask"] * 1.004 / 0.9977
+        additions.extend(
+            [
+                dict(
+                    id=ref + "/temporal_target_geometry",
+                    unit="post_entry_objective",
+                    value=dict(
+                        entry_ask=common["entry_ask"],
+                        required_future_trade_price=target,
+                        target_net_pct=0.4,
+                        horizon_seconds=1800,
+                        cost_rate=0.0023,
+                        required_move_from_confirmation_pct=geometry[
+                            "target_gap_from_confirmation_trade_pct"
+                        ],
+                    ),
+                ),
+                dict(
+                    id=ref + "/received_prefix_state",
+                    unit="received_prefix_observations",
+                    value=dict(
+                        observed_span_seconds=coverage["observed_recent_span_sec"],
+                        observation_count=coverage["observed_recent_price_count"],
+                        newest_age_seconds=prefix["newest_age_sec"],
+                        observed_return_pct=values["observed_prefix_return_pct"],
+                        last_from_observed_max_pct=values[
+                            "observed_prefix_giveback_pct"
+                        ],
+                        known_side_buy_qty_share_pct=values[
+                            "known_side_buy_qty_share_pct"
+                        ],
+                        known_side_qty_coverage_pct=values[
+                            "known_side_qty_coverage_pct"
+                        ],
+                    ),
+                ),
+            ]
+        )
+    for field in ("positive_facts", "context_facts", "contradicting_facts"):
+        if field != "context_facts" and any(
+            f["id"] in removed | neutral for f in setup[field]
+        ):
+            raise ValueError("temporal_input_geometry_role_conflict")
+        setup[field] = [f for f in setup[field] if f["id"] not in removed]
+    for risk, ids in list(setup["risk_fact_bindings"].items()):
+        kept = [fid for fid in ids if fid not in removed | neutral]
+        if kept:
+            setup["risk_fact_bindings"][risk] = kept
+        else:
+            del setup["risk_fact_bindings"][risk]
+    existing = {
+        f["id"]
+        for field in ("positive_facts", "context_facts", "contradicting_facts")
+        for f in setup[field]
+    }
+    if any(f["id"] in existing for f in additions):
+        raise ValueError("risk_context_fact_identity_conflict")
+    setup["context_facts"].extend(additions)
+    setup["risk_fact_bindings"]["RECEIVED_PREFIX_STATE_CONCERN"] = [
+        f["id"] for f in additions if f["id"].endswith("/received_prefix_state")
+    ]
     W.encode(result)
     return result
 

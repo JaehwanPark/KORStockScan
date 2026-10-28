@@ -201,6 +201,7 @@ class DiscoveryQueue:
         deferred_active_codes: set[str] | None = None,
         product_check=None,
         borrow_idle_short_slot: bool = False,
+        allocation_policy: str = "current",
     ) -> list[dict]:
         """Return due generations, oldest last claim first, with a bounded budget."""
         from src.utils.kiwoom_utils import is_non_equity_product_name
@@ -214,9 +215,16 @@ class DiscoveryQueue:
             raise ValueError("invalid source rotation budget")
         if max_observation_age_sec is not None and max_observation_age_sec <= 0:
             raise ValueError("invalid observation age budget")
+        if not isinstance(allocation_policy, str) or allocation_policy not in {
+            "current",
+            "eligible_wait",
+            "service_wait",
+        }:
+            raise ValueError("invalid allocation policy")
         ready_by_cohort: dict[tuple[str, str, str], list[Candidate]] = {}
         cohort_claims: dict[tuple[str, str, str], int] = {}
         self.claim_eligibility = dict(
+            allocation_policy=allocation_policy,
             eligible_due_count=0,
             active_target_deferred_count=0,
             stale_count=0,
@@ -326,6 +334,25 @@ class DiscoveryQueue:
         )
         allocation = {}
         self.residence_deferred = {}
+
+        def age_key(row):
+            if allocation_policy == "current":
+                return row.last_claim_epoch, row.first_seen_epoch, -row.discovery_volume
+            eligible = self._eligible_since[(row.code, row.route)]
+            if allocation_policy == "eligible_wait":
+                return (
+                    bool(row.last_claim_epoch),
+                    eligible if not row.last_claim_epoch else row.last_claim_epoch,
+                    row.first_seen_epoch,
+                    -row.discovery_volume,
+                )
+            return (
+                eligible,
+                row.last_claim_epoch,
+                row.first_seen_epoch,
+                -row.discovery_volume,
+            )
+
         while len(ready) < limit:
             for cohort_key, rows in ready_by_cohort.items():
                 # A global fourth turn always coincides with the gainer turn
@@ -342,11 +369,7 @@ class DiscoveryQueue:
                             else 0
                         ),
                         (
-                            (
-                                row.last_claim_epoch,
-                                row.first_seen_epoch,
-                                -row.discovery_volume,
-                            )
+                            age_key(row)
                             if age_turn
                             else (
                                 bool(row.last_claim_epoch),
