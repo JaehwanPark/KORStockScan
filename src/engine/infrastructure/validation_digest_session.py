@@ -17,6 +17,7 @@ import os
 import re
 import resource
 import stat
+import sys
 import tempfile
 import time
 from contextlib import contextmanager, ExitStack
@@ -30,6 +31,7 @@ MIN_BYTES = 1024 * 1024
 MAX_BYTES = 512 * 1024
 MAX_ENTRIES = 4096
 MAX_GENERATIONS = 32
+SEMANTIC_MAX_BYTES = 4 * 1024 * 1024
 KST = ZoneInfo("Asia/Seoul")
 
 
@@ -256,6 +258,10 @@ class DigestSession:
         self._loaded_entries_sha = None
         self.stats = dict(
             semantic_reused_reads=0,
+            invocation_full_reads=0,
+            invocation_full_bytes=0,
+            invocation_reused_reads=0,
+            invocation_reused_bytes=0,
             full_reads=0,
             full_bytes=0,
             reused_reads=0,
@@ -317,6 +323,61 @@ class DigestSession:
             self.entries = {}
             self._loaded_entries_sha = None
 
+    def remember_semantic(self, key, entry):
+        """Share the existing invocation budget between decoded inputs and hashes."""
+        size = entry[3]
+        previous = self.semantic_objects.pop(key, None)
+        if previous is not None:
+            self.semantic_bytes -= previous[3]
+        if size > SEMANTIC_MAX_BYTES:
+            return
+        if (
+            self.semantic_bytes + size > SEMANTIC_MAX_BYTES
+            or len(self.semantic_objects) >= MAX_ENTRIES
+        ):
+            self.semantic_objects.clear()
+            self.semantic_bytes = 0
+        self.semantic_objects[key] = entry
+        self.semantic_bytes += size
+
+    def _invocation_digest(self, path, before):
+        """Observer byte reuse only; never persist code or small-file authority."""
+        if (
+            self.binding["role"] != "observer"
+            or self.invocation_pid != os.getpid()
+            or self.native_read_budget is not None
+        ):
+            return None
+        key = ("file_digest", str(path))
+        fingerprint = _sha(before)
+        now = time.monotonic()
+        entry = self.semantic_objects.get(key)
+        if (
+            entry is not None
+            and entry[0] == fingerprint
+            and 0 <= now - entry[2] <= self.ttl
+        ):
+            if identity(path) != before:
+                raise ValueError("digest_source_changed")
+            self.stats["invocation_reused_reads"] += 1
+            self.stats["invocation_reused_bytes"] += before[4]
+            return entry[1]
+        with path.open("rb") as stream:
+            observed = hashlib.file_digest(stream, "sha256").hexdigest()
+        if identity(path) != before:
+            raise ValueError("digest_source_changed")
+        self.stats["invocation_full_reads"] += 1
+        self.stats["invocation_full_bytes"] += before[4]
+        size = (
+            sys.getsizeof(key)
+            + sum(sys.getsizeof(part) for part in key)
+            + sys.getsizeof((fingerprint, observed, now, 0))
+            + sum(sys.getsizeof(part) for part in (fingerprint, observed, now, 0))
+            + 256
+        )
+        self.remember_semantic(key, (fingerprint, observed, now, size))
+        return observed
+
     def digest(self, path):
         if self.binding["role"] == "postclose" and self.binding["pid"] != os.getpid():
             return None  # A fork cannot inherit invocation-local digest authority.
@@ -366,14 +427,15 @@ class DigestSession:
             and self.native_read_budget is None
             and not (isinstance(entry, dict) and entry.get("native_generation_proof"))
         ):
-            return None
-        # Only native data dependencies. Code and control-plane small files are
-        # read normally; optional file discovery is never memoized.
+            return self._invocation_digest(path, before)
+        # Persistent reuse is restricted to native data dependencies. Observers
+        # may reuse other byte digests within this invocation, after fresh identity
+        # checks; semantic results and optional discovery are never memoized.
         if (
             not Path(before[1]).is_relative_to(self.data_root.resolve())
             or before[2] != self.data_root.stat().st_dev
         ):
-            return None
+            return self._invocation_digest(path, before)
         key = str(path)
         now = time.time()
         entry = self.entries.get(key, {})

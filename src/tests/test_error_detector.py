@@ -67,6 +67,62 @@ def test_artifact_checks_reuse_digests_between_invocations_but_run_semantics(
     assert len(calls) == 3 and calls[0] == calls[1] != calls[2]
 
 
+def test_observer_reuses_small_source_bytes_without_reusing_semantic_results(
+    monkeypatch, tmp_path
+):
+    import hashlib
+    import src.engine.error_detector as module
+    from src.engine.infrastructure import validation_digest_session as D
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+
+    data = tmp_path / "data"
+    data.mkdir()
+    sources = [tmp_path / "code.py", data / "first.json", data / "second.json"]
+    for index, source in enumerate(sources):
+        source.write_bytes(bytes([index]) * 128)
+    monkeypatch.setattr(module, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(D, "code_generation", lambda: {"code": "reviewed"})
+    monkeypatch.setattr(N, "_HASH_MAX_ENTRIES", 2)
+    N._hash_cache_clear()
+    digested = []
+    original = hashlib.file_digest
+
+    def counted(stream, algorithm):
+        if Path(stream.name) in sources:
+            digested.append(Path(stream.name))
+        return original(stream, algorithm)
+
+    monkeypatch.setattr(hashlib, "file_digest", counted)
+    semantic_calls = []
+    engine = ErrorDetectionEngine.__new__(ErrorDetectionEngine)
+    engine.mode = "artifact_only"
+    engine.postclose_source_date = None
+
+    def check():
+        for _ in range(3):
+            values = [N._source_hash(str(p), N._signature(p)) for p in sources]
+            semantic_calls.append(values)
+        return [DetectionResult("artifact_freshness", "artifact", "pass", "checked")]
+
+    engine._run_all = check
+    try:
+        first = engine.run_all()[0]
+        assert digested == sources
+        assert len(semantic_calls) == 3
+        assert first.details["validation_io"]["invocation_reused_reads"] == 6
+        sources[1].write_bytes(b"changed")
+        engine.run_all()
+        assert digested == sources * 2
+        assert len(semantic_calls) == 6
+        assert semantic_calls[0][1] != semantic_calls[-1][1]
+        assert all(
+            not json.loads(p.read_text())["payload"]["entries"]
+            for p in (data / "runtime/validation_digests/observer").glob("*.json")
+        )
+    finally:
+        N._hash_cache_clear()
+
+
 def test_digest_contention_defers_artifact_only_and_keeps_health_failure(
     monkeypatch, tmp_path
 ):

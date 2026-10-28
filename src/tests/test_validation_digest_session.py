@@ -151,6 +151,121 @@ def test_cold_warm_actual_digest_and_default_opt_out(tmp_path, source):
     assert D.reused_digest(source) is None
 
 
+@pytest.mark.parametrize("mutation", ["rewrite", "replace", "append", "chmod", "alias"])
+def test_invocation_digest_revalidates_changed_small_source(tmp_path, mutation):
+    path = tmp_path / "source.json"
+    path.write_bytes(b"first")
+    alias = tmp_path / "alias"
+    alias.symlink_to(path)
+    with session(tmp_path).activate() as checked:
+        first = D.reused_digest(alias)
+        assert D.reused_digest(alias) == first
+        before = path.stat()
+        if mutation == "rewrite":
+            path.write_bytes(b"other")
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        elif mutation == "replace":
+            replacement = tmp_path / "replacement"
+            replacement.write_bytes(b"first")
+            replacement.replace(path)
+        elif mutation == "append":
+            with path.open("ab") as stream:
+                stream.write(b"more")
+        elif mutation == "chmod":
+            path.chmod(0o600)
+        else:
+            alias.unlink()
+            alias.symlink_to(path)
+        assert D.reused_digest(alias) == hashlib.sha256(path.read_bytes()).hexdigest()
+        assert checked.stats["invocation_full_reads"] == 2
+        assert checked.stats["invocation_reused_reads"] == 1
+        alias.unlink()
+        with pytest.raises(FileNotFoundError):
+            D.reused_digest(alias)
+
+
+def test_invocation_digest_rejects_mutation_during_read(tmp_path, monkeypatch):
+    path = tmp_path / "source.json"
+    path.write_bytes(b"first")
+    original = hashlib.file_digest
+
+    def changing(stream, algorithm):
+        value = original(stream, algorithm)
+        path.write_bytes(b"other")
+        return value
+
+    with session(tmp_path).activate() as checked:
+        monkeypatch.setattr(hashlib, "file_digest", changing)
+        with pytest.raises(ValueError, match="digest_source_changed"):
+            D.reused_digest(path)
+        assert not checked.semantic_objects
+
+
+def test_invocation_digest_rejects_mutation_during_cache_hit(tmp_path, monkeypatch):
+    path = tmp_path / "source.json"
+    path.write_bytes(b"first")
+    original = D.identity
+    with session(tmp_path).activate():
+        D.reused_digest(path)
+        calls = 0
+
+        def changing(source):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                path.write_bytes(b"other")
+            return original(source)
+
+        monkeypatch.setattr(D, "identity", changing)
+        with pytest.raises(ValueError, match="digest_source_changed"):
+            D.reused_digest(path)
+
+
+def test_invocation_digest_expiry_fork_and_native_budget_opt_out(tmp_path):
+    path = tmp_path / "source.json"
+    path.write_bytes(b"first")
+    with session(tmp_path, ttl=-1).activate() as checked:
+        D.reused_digest(path)
+        D.reused_digest(path)
+        assert checked.stats["invocation_full_reads"] == 2
+        checked.invocation_pid = os.getpid() + 1
+        assert D.reused_digest(path) is None
+        checked.invocation_pid = os.getpid()
+        checked.native_read_budget = {"remaining": 0}
+        with pytest.raises(
+            D.ValidationDeferred, match="native_source_read_budget_exceeded"
+        ):
+            D.reused_digest(path)
+
+
+@pytest.mark.parametrize("role", ["transition", "postclose"])
+def test_other_roles_do_not_admit_invocation_code_digests(tmp_path, role):
+    data = tmp_path / "data"
+    data.mkdir()
+    code = tmp_path / "code.py"
+    code.write_bytes(b"original")
+    checked = D.DigestSession(data, "2026-10-14", role=role, generation={})
+    with checked.activate():
+        assert D.reused_digest(code) is None
+        assert not checked.semantic_objects
+
+
+def test_decoded_objects_and_invocation_digests_share_existing_budget(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "source.json"
+    path.write_bytes(b"first")
+    monkeypatch.setattr(D, "SEMANTIC_MAX_BYTES", 1024)
+    with session(tmp_path).activate() as checked:
+        checked.remember_semantic("decoded", ([], {}, time.monotonic(), 900))
+        D.reused_digest(path)
+        assert "decoded" not in checked.semantic_objects
+        assert checked.semantic_bytes <= D.SEMANTIC_MAX_BYTES
+        checked.remember_semantic("too-large", ([], {}, time.monotonic(), 1025))
+        assert "too-large" not in checked.semantic_objects
+    assert not checked.semantic_objects and checked.semantic_bytes == 0
+
+
 def test_postclose_is_fresh_per_invocation_and_has_no_store(tmp_path, source):
     expected = hashlib.sha256(source.read_bytes()).hexdigest()
     for _ in range(2):

@@ -2290,7 +2290,6 @@ def _semantic_object(
     from copy import deepcopy
     from src.engine.infrastructure.validation_digest_session import (
         ACTIVE,
-        MAX_ENTRIES,
         identity,
     )
 
@@ -2318,19 +2317,9 @@ def _semantic_object(
     if observation is not None:
         observation.update(details)
     if size <= 1024 * 1024:
-        if (
-            session.semantic_bytes + size > 4 * 1024 * 1024
-            or len(session.semantic_objects) >= MAX_ENTRIES
-        ):
-            session.semantic_objects.clear()
-            session.semantic_bytes = 0
-        session.semantic_objects[key] = (
-            before,
-            deepcopy(result),
-            time.monotonic(),
-            size,
+        session.remember_semantic(
+            key, (before, deepcopy(result), time.monotonic(), size)
         )
-        session.semantic_bytes += size
     return result
 
 
