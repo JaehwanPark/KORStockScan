@@ -3251,6 +3251,32 @@ for _name, _sha in REVIEWED_ENTRY_EXPIRY_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# Exact actual-completion projection and terminal BUY field delivery.
+REVIEWED_HOLDING_PROJECTION_SOURCES = {'src/engine/holding_exit_observation_report.py': 'b7ec8cf43e586de98f0e18dbce3cf3eb439a706bab495c79ac759df6d32bab09', 'src/engine/holding_exit_sentinel.py': '39bc9d11bbc66fc4dd59325ef4c7a3e30f467ab9b855d5ef46dc1522f8488d23', 'src/engine/lifecycle/research_json_stream.py': '6b2d6827fe5b614328088b1bd7311737eb59194b0c706b071d223e063310f65e'}
+REVIEWED_HOLDING_PROJECTION_ORIGINS = {'src/engine/holding_exit_observation_report.py': 'ed270681ec734cef04732baade2344d5b0f7e997b323eff621b031f4f273421e', 'src/engine/holding_exit_sentinel.py': '8122426c54a67bd3270519d11dc1faf980d3e8dedb11a7e02044f59801ee6f3d', 'src/engine/lifecycle/research_json_stream.py': '8010dd6b2fdc2b513edeaeff5866710e5b5706cfb7d51f4d1b24b964451edb72'}
+for _name, _sha in REVIEWED_HOLDING_PROJECTION_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_HOLDING_PROJECTION_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
+# Observer hash reuse has invocation-only authority. Historical code endpoints
+# below were already reviewed by the native family readers; unknowns still fail.
+REVIEWED_OBSERVER_INVOCATION_SOURCES = {'src/engine/error_detectors/artifact_freshness.py': 'defb7bb396c703cbb47acb83eb85bc9ac1d7ea57eca16c49c57a9a27485cfc67', 'src/engine/infrastructure/validation_digest_session.py': 'd99dd1bb98a950f8ca05fc87275f883f7965eb63e34a7dd6bee061c2e87d04ff'}
+REVIEWED_OBSERVER_INVOCATION_ORIGINS = {'src/engine/error_detectors/artifact_freshness.py': '5fb82e262bf670d0469dde7f82eacacf29c9c52bce78a9433d2c02617d6e0a79', 'src/engine/infrastructure/validation_digest_session.py': '085b09f49408d7b544250cbf297e82052c1d6cab9df554c07d812e67ace7b74a'}
+REVIEWED_HOLDING_EXPIRY_HISTORY = {'src/engine/holding_exit_observation_report.py': ('108fcdffa626abec4e90b263c12780e78c7f77e222b950e2407b0b00d462fa4f', '2ec0a7be672eb04044a9094b7ee445af66cef17720df83efe24e6148110ded03', '538cc6b7a2cdc91871af06896ee1328de11ebad441f343e7c6b693ad29b8f255', '6ffbcceecdecfa73346047d2ec6f2019ccd1ab296959819c63c4acac7c421ec9', '8baa7a8788877aa872afeec62f199db2a095d420ff1d87d84fdd50e4b1b2c7db', 'b7ec8cf43e586de98f0e18dbce3cf3eb439a706bab495c79ac759df6d32bab09', 'bd366b341b5515a0d7dcc2b4da47cf71320a0d703b617057037044d52b8c06e3', 'bde5c4156f9b748e957b8b1fa38d12ce24f5b23777a7343fbe31aedbeeb6e75a', 'd9310a1136cc2086e83037c020d5d44a9d3b3f57d1207697bcd8eac8f6cf73fe', 'da364a9f0a6933158e95046f82e7669f0609244c51cd8f35e119949cc0bc0969', 'ed270681ec734cef04732baade2344d5b0f7e997b323eff621b031f4f273421e', 'fb676ef08389cfbf7d46a0b532d0bd6f3c81949d6b6a64a2c45c17ccf3a839b5'), 'src/engine/holding_exit_sentinel.py': ('39bc9d11bbc66fc4dd59325ef4c7a3e30f467ab9b855d5ef46dc1522f8488d23', '5bc00325005b6d4346dc896c21741cec0e61fcd9904c6c947ae7774ce5e031e4', '7ae845b51d16bf425337e4758d1f83047f1f4e1c3479d39875523f0e2748012a', '8122426c54a67bd3270519d11dc1faf980d3e8dedb11a7e02044f59801ee6f3d', 'a02066a6f6538f7b4f855c5cc93ed3b5b4e661f4516c6191cd4859542cc5afdb'), 'src/engine/lifecycle/research_json_stream.py': ('1ea671f8ba5b5397257c2d1da513dee653b05379133073d1412ee4edf7a07a11', '53bd6a0cec6435ff0cfb399ad75fc9edd0b479463c06dea77bc5cae5e59db4b6', '6b2d6827fe5b614328088b1bd7311737eb59194b0c706b071d223e063310f65e', '8010dd6b2fdc2b513edeaeff5866710e5b5706cfb7d51f4d1b24b964451edb72', '8fd211dc5409ee6a5bdd619bef772255c07687e921b075d473f50f70303a6201', 'cfaf531c495730a6ae2f159601153749f8dc53ab297576250e03de61decf796b', 'f886a7510dbabda0db35cf264a9ea61aa7e50ddeb0a5cac407a2b479d7c4c944', 'fbca117c876a62659255914b5771772cdcbdb3e58a904e566a402959379f3df0', 'ff07214148fce486e68e1db048469dd7a657553894cb3472960fea59c7ee09dc'), 'src/engine/error_detectors/artifact_freshness.py': ('09c1d34cc554ef68060125590e84545e75a335add5ed2b87043b4a6a6b2eafb9', '0c3d6bfd413cf5e3a49e0d748d7d2366e2a60a75cb107514a6a69cbaf20db677', '3a58f8ac3220ea8d64247cf17a756d2658c7815cd3d57744303f80bc40d34dcc', '47897e387407c5d6472735463107d8e0ce7697aededa723c724973e4efc173a4', '5badbc45d86f2426ce060c7420f2f1f428dd262a2d9c2ea14f41454c89d2d1b6', '5fb82e262bf670d0469dde7f82eacacf29c9c52bce78a9433d2c02617d6e0a79', '6f853e28cf95b2f6513ad6650350c6574ddeeb5b99f5d2d2d5756d34ebf14ed9', '6f9cf859a4adf8e27b6465d38cf4eb536b16631381e94af199ecf84554ca7ffa', '756a1fa9a36e7350a97d274b22047dffd8bedcdccd4bd4e3c7bb034efdcceba2', '7d75cb5f90844d42206b4e79714898442e15b7edc84649cb73fc97f7407e4376', '8dae2dc097b769214195f17c3b666fb6e43c2c2f25ea7c3a0311b723355bc665', 'a6b9f2882bac4ae90f8a972a3cfbd56e111d78dd3bacead8cb5f32c41a949e27', 'adbd91229c1a84cf5bcacf8f6c7ef6e55f9636fefc37b182a9802f4aa1755bd3', 'bc6c903c8a9ea08026103101bcefcaf8e18ea5a4e707408787bc26a15ebd150a', 'edd034fef32d08c01ea52e3a0022a5ac185d45bde9ff66ab190fdbc4fd7221e6', 'f64db72754c88c8bab262e275fe3ab68440b32656a5b74ab9c4f0f0044b94ebf', 'f8955d1d5f8fc807d0f1772e6a21ac682ff800b6668a00d551a1f4a8fd25983e'), 'src/engine/infrastructure/validation_digest_session.py': ('085b09f49408d7b544250cbf297e82052c1d6cab9df554c07d812e67ace7b74a', '40497e9bcb5d325bb0623631cd2149a0b2090c996bc54e3300b650f201a0e056', '5a8fc66dc1cb1626de559efb024e2ee30afa9e68bce83fd6c31be2456f677d86', '655b6f32ed1f14cb7c00e7c85b4b2f3917d55e00cfdefc905160a039d585a4f1', '87ea421cd28cd81d06fabecbfeed4c03d041b771f31dba6057857283a53828da', '8fc28395c82a3efa15896c21362d3be7162656fec506fbba6f939e8c6b5101a3', 'bfdcbf093652783bea5d2c72bf10e1dc910b5d3cdca9c702279ee75a15ec77b9')}
+for _name, _sha in {**REVIEWED_HOLDING_PROJECTION_SOURCES, **REVIEWED_OBSERVER_INVOCATION_SOURCES}.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.update(REVIEWED_HOLDING_EXPIRY_HISTORY[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

@@ -5424,7 +5424,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_PARTIAL_GAP_PROFILE,
+        "current": handoff.REVIEWED_HOLDING_EXPIRY_PROFILE,
         "consumed_buy_lineage": handoff.REVIEWED_BUY_LINEAGE_PROFILE,
         "consumed_completion": handoff.REVIEWED_POSTCLOSE_COMPLETION_PROFILE,
         "consumed_report_origin": handoff.REVIEWED_REPORT_ORIGIN_PROFILE,
@@ -7132,4 +7132,13 @@ def test_entry_expiry_complete_candidate_and_negatives(tmp_path, family, depende
 def test_entry_expiry_preserves_issued_buy_lineage(tmp_path, family):
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, None, "consumed_buy_lineage"
+    )
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("dependency", sorted(handoff.REVIEWED_HOLDING_EXPIRY_HASHES))
+@pytest.mark.parametrize("fault", [None, "missing", "dirty", "committed_change", "parent_mix"])
+def test_holding_expiry_complete_generation(tmp_path, family, dependency, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "current", dependency
     )

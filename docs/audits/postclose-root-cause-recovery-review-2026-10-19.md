@@ -5368,3 +5368,73 @@ Performance evidence:50 sealed input metadata files total2,884,180 bytes; the ac
 - Native preserve_checklist verified strict-bound748fc505... before current owner edits. Source/test/doc additions and deletions, full validation logs and source-only commit are recorded in the evidence directory. No existing execution, natural source, cost or policy acceptance is closed by this code review.
 
 Evidence: [follow-up snapshot](../../tmp/holding-profit-exit-source-gap-20261028-1120/followup-20261028-123209/snapshot.json), [latest readback](../../tmp/holding-profit-exit-source-gap-20261028-1120/followup-20261028-123209/latest-readback.json), [exact source27 reproduction](../../tmp/holding-profit-exit-source-gap-20261028-1120/followup-20261028-123209/partitioned-original-reproduction.json), [current cost classification](../../tmp/holding-profit-exit-source-gap-20261028-1120/followup-20261028-123209/quantity-cost-classification.json), [validation](../../tmp/holding-profit-exit-source-gap-20261028-1120/followup-20261028-123209/validation.json).
+
+
+### Holding, expiry and observer integration — 2026-10-28
+
+Selected baseline d0790117a/PID3661403/start80241527 remains running during
+preparation. This session is the user-designated final deployment owner. The
+user authorized c30d06a7d,27d4a000c and7edc491a7 with the existing0865cd2f0
+RFHIC diagnostic repair. Shared dirty source and other preparation work remain
+untouched; no policy value,5-second validity,1200ms clock or safety change.
+
+- Existing actual-result projection replaces the research-checkpoint reference;
+  the completed-source field owner retains terminal BUY identity. Legacy original
+  reports and their missing/null values remain immutable. New native generation
+  and natural collection are distinct acceptance states.
+- Existing AI/trace owners retain exact deadline-expiry cause. The discovery
+  owner records bounded rank inputs before claim; allocation and guards remain.
+- Existing DigestSession shares its4MiB invocation budget for byte hashes and
+  decoded inputs. Observer-only hash reuse rechecks identity, age and PID; no
+  semantic verdict or persistent code authority is reused. Other roles and native
+  read budgets retain their original paths. Artifact freshness uses that owner.
+- Both separately reviewed source profiles remain historical predecessors. The
+  complete combined native handoff and independent preparation inventories bind
+  all requested files. Initial regression exposed missing older holding-report
+  endpoints; reviewed native family endpoints are retained explicitly, with
+  exact candidate/dirty/missing/mixed negative tests. Unknown sources still fail.
+- Replacement disposition: original projection assignment removed, identity
+  allowlist extended, expiry mislabel replaced, preclaim diagnostic retained,
+  duplicated semantic-cache insertion consolidated into DigestSession. Native
+  transition, preparation/PID and report readers retained for current consumers.
+  No new production module, worker, CLI, provider call or execution entrypoint.
+- Dependency disposition: original policy/report/BUY/SELL evidence reused only
+  through native readers; affected capability, quantity monitor projection and
+  trailing currentness require exact final code generation. Candidate and final
+  selected P5 plus actual PID consumption remain mandatory and separate.
+  Source27 holding projection is diagnostic-only; no full raw replay or original
+  snapshot overwrite is authorized by this compatibility integration.
+- Quantity49362 is now natively historical with49013/49266 after original fact,
+  manual terminal and current collection verification; the earlier12:53 OPEN
+  observation remains historical evidence. RFHIC49558's two original losses stay
+  OPEN for historical classification until its native day/current-collection
+  predicates are satisfied. No missing BUY, cost or economics is manufactured.
+
+Evidence and final validation: `tmp/holding-expiry-integrated-20261028/`.
+Current owners remain HoldingProfitExitSourceContractRepair,
+InitialQuantityProducerConsumerRepair1010 and DirectFamilyPreopenPolicyHandoff;
+expiry/allocation uses the existing regular-preclaim owner. Natural route-specific
+acceptance remains10/28 REGULAR through15:30/AFTERMARKET16:00-20:00 and the next
+eligible10/29 window, with exact PID/item/route/epoch/signal/terminal and consumer
+evidence. No sample manufacture or economic success claim.
+
+Shared-source follow-through: `research_json_stream.py` participates in optional
+weakness research's code generation. Its existing native installer must rebind
+the selected code while preserving identical schedule/notification authority;
+source/cumulative revalidation remains under MainMarketWeaknessPostcloseObservation1008
+at the native21:40 night window and its existing reservation/quota. No daytime
+worker, forged ticket or stale comparison PASS is used. This optional research
+state is separate from Main startup and current trade-policy consumption.
+
+Independent preparation1063, functional2095 and observer759 tests pass. Exact
+source27 projection reads2,884,180 metadata bytes, transfers37 actual/5 strict
+rows and retains37 original missing BUY identities; raw quote/vote replay0.
+Original snapshots/receipts remain byte-identical. Combined handoff negatives
+and final native validation are recorded separately in the evidence directory.
+Source +506/-32, tests +871/-21 and docs growth record the requested repairs,
+complete reviewed histories and regression cases; no moves or new entrypoints.
+
+Final combined complete-profile/negative/predecessor regression272 PASS;
+538.65seconds wall time. Earlier failed endpoint attempts and intentionally
+interrupted overbroad runs are retained, not counted as closure. Re-review has
+no unresolved in-scope source finding; deployment/PID/natural states remain separate.
