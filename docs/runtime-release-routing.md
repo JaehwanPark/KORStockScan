@@ -224,6 +224,12 @@ The parent records successful native bundle loading and semantic validation boun
 
 The child requires unprivileged Linux Landlock and seccomp, closes inherited control descriptors and permits writes only in its private run directory. Native source/code/policy validation remains mandatory. A denied side effect, invalid or incomplete consumer, identity mismatch, timeout, changed input or surviving worker fails the validation; exit zero alone is insufficient. Results live under `data/report/main_startup_validation/<target>/<run-id>/final.json`. They always retain `actual_pid_consumed=false`, `allowed_runtime_apply=false` and `runtime_effect=false` and never replace the operating bootstrap/PID or observer receipts.
 
+Indexed stop proof keys may retain a physical gzip spelling. Resolve its native
+logical identity before comparing source stats or reading the isolated proof;
+retain the original key and exact gzip/receipt/database/WAL identities. Unknown
+or ambiguous aliases remain unbound; this never decompresses source in Main's
+isolated validation child.
+
 For indexed stop inputs, establish the native readonly SQLite reader before
 sealing physical source/database/WAL identities. SQLite can create an empty WAL
 on the first readonly open; subsequent index, WAL and source changes still fail

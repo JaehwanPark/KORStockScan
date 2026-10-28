@@ -648,10 +648,10 @@ def _bind_stop_fixture(f, report):
         "generation",
     ],
 )
-@pytest.mark.parametrize("archived", [False, True])
+@pytest.mark.parametrize("archived,alias", [(False, False), (True, False), (True, True)])
 @pytest.mark.parametrize("cold", [False, True])
 def test_indexed_stop_source_survives_real_isolation_only_with_exact_native_binding(
-    request_fixture, monkeypatch, fault, archived, cold
+    request_fixture, monkeypatch, fault, archived, alias, cold
 ):
     from datetime import datetime
     from src.tests.test_holding_path_vote_replay import _events
@@ -664,19 +664,36 @@ def test_indexed_stop_source_survives_real_isolation_only_with_exact_native_bind
     data = Path(request["data_root"])
     day = "2026-10-16"
     at = datetime.fromisoformat(day + "T09:00:00+09:00").timestamp()
-    path = votes.path_vote_store_path(data, "record:7")
-    monkeypatch.setattr(votes.time, "time", lambda: at + 20)
-    events = _events("EXIT_TRAILING_TP", "REGULAR", base_at=at, session_key=day)
-    assert votes.append_path_events_file(path, "record:7", events)[1] == "appended"
+    if alias:
+        from src.tests.test_main_trailing_source_store import append, row
+
+        monkeypatch.setattr(S, "maintain", lambda *a: None)
+        path = data / "ai_decision_trace" / ("ai_decision_trace_" + day + ".jsonl")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+        append(data, path, row())
+    else:
+        path = votes.path_vote_store_path(data, "record:7")
+        monkeypatch.setattr(votes.time, "time", lambda: at + 20)
+        events = _events("EXIT_TRAILING_TP", "REGULAR", base_at=at, session_key=day)
+        assert votes.append_path_events_file(path, "record:7", events)[1] == "appended"
     expected = S.generation(data, path)
     if archived:
         import gzip
 
-        Path(str(path) + ".gz").write_bytes(gzip.compress(path.read_bytes()))
-        path.unlink()
-        S.migrate_frozen_source(data, path)
+        if alias:
+            from src.engine.compress_db_backfilled_files import _gzip_file
+
+            assert _gzip_file(path, dry_run=False)[0]
+        else:
+            Path(str(path) + ".gz").write_bytes(gzip.compress(path.read_bytes()))
+            path.unlink()
+            S.migrate_frozen_source(data, path)
+    bound_path = Path(str(path) + ".gz") if alias else path
+    if alias:
+        expected = S.generation(data, bound_path)
     report = dict(source_date=day, target_date=DAY, policy_sha256="a" * 64,
-                  research_sha256="d" * 64, vote_source_inventory={str(path): expected})
+                  research_sha256="d" * 64, vote_source_inventory={str(bound_path): expected})
     if cold:
         # End only this fixture's writer, exercising SQLite's real first-read
         # creation of an empty WAL without changing the frozen source bytes.
@@ -702,9 +719,9 @@ def test_indexed_stop_source_survives_real_isolation_only_with_exact_native_bind
     elif fault == "scope":
         closure["receipt"] = {**closure["receipt"], "target_date": "2026-10-20"}
     elif fault == "generation":
-        closure["entries"][str(path)]["generation"]["raw_records"] += 1
+        closure["entries"][str(bound_path)]["generation"]["raw_records"] += 1
     _write_request(f, request)
-    lookup = str(path) + ".segment-1" if fault == "lookup" else str(path)
+    lookup = str(path) + ".segment-1" if fault == "lookup" else str(bound_path)
     root = str(data.parent) if fault == "data_root" else str(data)
     result = _child(
         f,
@@ -713,6 +730,8 @@ from src.engine.automation import main_trailing_source_assembler as A, main_trai
 expected = {expected!r}
 assert S.generation is C.validation_indexed_source_generation
 assert A.source_generation_matches({root!r}, {day!r}, {lookup!r}, expected)
+if {bool(alias and fault is None)!r}:
+    assert A.source_generation_matches({root!r}, {day!r}, {str(path)!r}, expected)
 assert_no_forbidden_attempts()
 """,
     )

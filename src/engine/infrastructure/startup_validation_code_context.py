@@ -5072,6 +5072,7 @@ def _verify_stop_indexed_sources(proof, *, verify_native=False):
     ):
         raise ValueError("startup_stop_index_closure_unbound")
     for path, entry in entries.items():
+        logical, _, _ = S._location(data_root, path)
         before = _stop_index_identities(data_root, path)
         current, expected = entry["generation"], inventory[path]
         if (
@@ -5085,13 +5086,13 @@ def _verify_stop_indexed_sources(proof, *, verify_native=False):
             )
             # Archived source_signature itself reads SQLite. Its native parent
             # proof is instead pinned by the exact archive/receipt/DB/WAL set.
-            or Path(path).is_file()
-            and current.get("source_stat") != S.signature(Path(path).stat())
+            or logical.is_file()
+            and current.get("source_stat") != S.signature(logical.stat())
             or (
                 current != expected
                 and (
-                    Path(path).exists()
-                    or not Path(str(path) + ".gz").is_file()
+                    logical.exists()
+                    or not Path(str(logical) + ".gz").is_file()
                     or {
                         k: v
                         for k, v in current.items()
@@ -5652,9 +5653,14 @@ def validation_indexed_source_generation(data_root, path):
     if str(Path(data_root).resolve()) != request["data_root"]:
         raise ValueError("startup_stop_index_data_root_changed")
     entries = _verify_stop_indexed_sources(proof)
-    entry = entries.get(str(Path(path).absolute()))
-    if entry is None:
+    from src.engine.automation import main_trailing_source_store as S
+
+    logical, _, _ = S._location(data_root, path)
+    matching = [value for name, value in entries.items()
+                if S._location(data_root, name)[0] == logical]
+    if len(matching) != 1:
         raise ValueError("startup_stop_index_source_unbound")
+    entry = matching[0]
     return json.loads(json.dumps(entry["generation"]))
 
 
