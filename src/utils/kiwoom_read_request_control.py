@@ -9,6 +9,8 @@ the bearer token itself is never persisted or logged.  A sliding one-second
 window is shared by all participating processes.  Source-only callers reserve
 one of the five production slots for runtime-required or execution-critical
 reads.  Kiwoom's mock environment is scoped per TR at one request per second.
+Production kt00018 also shares a three-request ceiling inside that same lock
+and window, including both exchange queries and every authenticated retry.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ import threading
 import tempfile
 import uuid
 from copy import deepcopy
+from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -45,6 +48,9 @@ MAX_READ_REQUESTS_PER_WINDOW = 5
 SOURCE_ONLY_REQUESTS_PER_WINDOW = 4
 MOCK_READ_REQUESTS_PER_WINDOW = 1
 READ_WINDOW_SEC = 1.0
+# Operator-supplied Kiwoom notice: kt00018 changes to 3/s after 2026-10-29
+# 18:00 KST. Apply the stricter ceiling before that boundary as authorized.
+ACCOUNT_INVENTORY_REQUESTS_PER_WINDOW = 3
 DEFAULT_RATE_LIMIT_COOLDOWN_SEC = 3.0
 DEFAULT_REQUIRED_MAX_WAIT_SEC = 3.25
 DEFAULT_SOURCE_ONLY_MAX_WAIT_SEC = 1.25
@@ -789,6 +795,65 @@ class KiwoomReadRequestCoordinator:
                     for value in raw_timestamps
                     if now - (timestamp := float(value)) < self.window_sec
                 )
+                # Old writers retain only global timestamps. Keep every
+                # unattributed admission conservative for the narrower TR cap;
+                # do not reset a live window during an upgrade or mixed writer.
+                records = state.get("request_records", [])
+                invalid_records = not isinstance(records, list) or any(
+                    not isinstance(row, dict)
+                    or type(row.get("epoch")) not in (int, float)
+                    or not math.isfinite(row["epoch"])
+                    or not 0 <= row["epoch"] <= now + self.window_sec
+                    or not isinstance(row.get("api_id"), str)
+                    or not row["api_id"]
+                    for row in records
+                )
+                if not invalid_records:
+                    attributed = Counter(
+                        row["epoch"]
+                        for row in records
+                        if now - row["epoch"] < self.window_sec
+                    )
+                    available = Counter(request_epochs)
+                    invalid_records = any(
+                        n > available[epoch] for epoch, n in attributed.items()
+                    )
+                if invalid_records:
+                    return self._admission(
+                        admitted=False,
+                        reason="shared_read_rate_request_records_invalid",
+                        request_class=normalized_class,
+                        request_owner=owner,
+                        api_id=api_label,
+                        request_code=code_label,
+                        waited_sec=now - started,
+                        requests_before=len(request_epochs),
+                        effective_limit=effective_limit,
+                        max_limit=max_limit,
+                        cooldown_remaining=0.0,
+                        scope_digest=digest,
+                    )
+                unmatched = Counter(request_epochs)
+                request_records = []
+                for row in records:
+                    if unmatched[row["epoch"]] > 0:
+                        request_records.append(row)
+                        unmatched[row["epoch"]] -= 1
+                request_records.extend(
+                    {"epoch": epoch, "api_id": "unknown_api_id"}
+                    for epoch, count in unmatched.items()
+                    for _ in range(count)
+                )
+                api_limit = (
+                    ACCOUNT_INVENTORY_REQUESTS_PER_WINDOW
+                    if not mock_environment and api_label == "kt00018"
+                    else None
+                )
+                api_epochs = sorted(
+                    row["epoch"]
+                    for row in request_records
+                    if row["api_id"] in {api_label, "unknown_api_id"}
+                )
                 cooldown_until = state.get("cooldown_until_epoch", 0.0)
                 try:
                     cooldown_until = float(cooldown_until or 0.0)
@@ -840,6 +905,30 @@ class KiwoomReadRequestCoordinator:
                 cooldown_remaining = max(0.0, cooldown_until - now)
                 last_requests_before = len(request_epochs)
                 last_cooldown_remaining = cooldown_remaining
+                if now > deadline and (waited_once or wait_budget > 0):
+                    if ticket is not None and isinstance(
+                        state.get("source_waiters"), list
+                    ):
+                        state["source_waiters"] = [
+                            row
+                            for row in state["source_waiters"]
+                            if isinstance(row, dict) and row.get("ticket") != ticket
+                        ]
+                        self._write_state(handle, state)
+                    return self._admission(
+                        admitted=False,
+                        reason="shared_read_rate_wait_budget_exhausted",
+                        request_class=normalized_class,
+                        request_owner=owner,
+                        api_id=api_label,
+                        request_code=code_label,
+                        waited_sec=now - started,
+                        requests_before=len(request_epochs),
+                        effective_limit=effective_limit,
+                        max_limit=max_limit,
+                        cooldown_remaining=cooldown_remaining,
+                        scope_digest=digest,
+                    )
                 turn = True
                 if ticket is not None:
                     pending = state.get("source_waiters", [])
@@ -871,25 +960,6 @@ class KiwoomReadRequestCoordinator:
                             scope_digest=digest,
                         )
                     pending = [row for row in pending if row["deadline"] >= now]
-                    if waited_once and now > deadline:
-                        state["source_waiters"] = [
-                            row for row in pending if row["ticket"] != ticket
-                        ]
-                        self._write_state(handle, state)
-                        return self._admission(
-                            admitted=False,
-                            reason="shared_read_rate_wait_budget_exhausted",
-                            request_class=normalized_class,
-                            request_owner=owner,
-                            api_id=api_label,
-                            request_code=code_label,
-                            waited_sec=now - started,
-                            requests_before=len(request_epochs),
-                            effective_limit=effective_limit,
-                            max_limit=max_limit,
-                            cooldown_remaining=cooldown_remaining,
-                            scope_digest=digest,
-                        )
                     if not any(row["ticket"] == ticket for row in pending):
                         if len(pending) >= 128:
                             return self._admission(
@@ -934,6 +1004,7 @@ class KiwoomReadRequestCoordinator:
                 elif (
                     len(request_epochs) < max_limit
                     and len(request_epochs) < effective_limit
+                    and (api_limit is None or len(api_epochs) < api_limit)
                     and turn
                 ):
                     if ticket is not None:
@@ -941,6 +1012,7 @@ class KiwoomReadRequestCoordinator:
                             row for row in pending if row["ticket"] != ticket
                         ]
                     request_epochs.append(now)
+                    request_records.append({"epoch": now, "api_id": api_label})
                     state.update(
                         {
                             "schema_version": STATE_SCHEMA_VERSION,
@@ -956,12 +1028,15 @@ class KiwoomReadRequestCoordinator:
                                 api_label if mock_environment else "all_read_tr"
                             ),
                             "request_epochs": request_epochs,
+                            "request_records": request_records,
                             "last_admission": {
                                 "at_epoch": now,
                                 "api_id": api_label,
                                 "request_code": code_label,
                                 "request_owner": owner,
                                 "request_class": normalized_class,
+                                "api_limit": api_limit,
+                                "api_requests_in_window_before": len(api_epochs),
                                 "pid": os.getpid(),
                             },
                         }
@@ -982,14 +1057,21 @@ class KiwoomReadRequestCoordinator:
                         scope_digest=digest,
                     )
                 else:
-                    if len(request_epochs) < effective_limit and not turn:
-                        delay = 0.01
-                    else:
+                    delay = 0.01 if not turn else 0.001
+                    if len(request_epochs) >= effective_limit:
                         relevant_count = min(len(request_epochs), effective_limit)
                         release_index = max(0, len(request_epochs) - relevant_count)
                         delay = max(
-                            0.001,
+                            delay,
                             request_epochs[release_index]
+                            + self.window_sec
+                            - now
+                            + 0.001,
+                        )
+                    if api_limit is not None and len(api_epochs) >= api_limit:
+                        delay = max(
+                            delay,
+                            api_epochs[len(api_epochs) - api_limit]
                             + self.window_sec
                             - now
                             + 0.001,

@@ -248,13 +248,14 @@ def _acquire(
     endpoint: str = "https://api.kiwoom.com/api/dostk/mrkcond",
     request_class: str = "source_only",
     max_wait_sec: float = 0.0,
+    api_id: str = "ka10004",
 ):
     return coordinator.acquire(
         token=token,
         endpoint=endpoint,
         request_owner="test_owner",
         request_class=request_class,
-        api_id="ka10004",
+        api_id=api_id,
         request_code="005930",
         max_wait_sec=max_wait_sec,
     )
@@ -1085,3 +1086,212 @@ def test_market_singleflight_forked_child_never_waits_for_parent_owner_or_mutex(
             receive.close()
             send.close()
         assert owner.result(1)[0] == {"parent": True}
+
+
+@pytest.mark.parametrize(
+    "request_class", ["execution_critical", "runtime_required", "source_only"]
+)
+def test_inventory_sub_limit_and_global_limit_share_one_window(tmp_path, request_class):
+    clock = MutableClock()
+    a, b = _coordinator(tmp_path, clock), _coordinator(tmp_path, clock)
+    for coordinator in (a, b, a):
+        assert _acquire(
+            coordinator, api_id="kt00018", request_class=request_class
+        ).admitted
+    denied = _acquire(b, api_id="kt00018", request_class=request_class)
+    assert not denied.admitted
+    assert denied.reason == "shared_read_rate_wait_budget_exhausted"
+    for _ in range(2):
+        assert _acquire(
+            a, api_id="kt00005", request_class="execution_critical"
+        ).admitted
+    assert not _acquire(
+        b, api_id="kt00001", request_class="execution_critical"
+    ).admitted
+    assert clock.sleeps == []
+    clock.value += 1.001
+    assert _acquire(b, api_id="kt00018", request_class=request_class).admitted
+
+
+def test_inventory_wait_preserves_original_budget_and_releases_only_expired_rows(
+    tmp_path,
+):
+    clock = MutableClock()
+    a = _coordinator(tmp_path, clock)
+    for _ in range(3):
+        assert _acquire(
+            a, api_id="kt00018", request_class="execution_critical"
+        ).admitted
+        clock.value += 0.1
+    before = clock.value
+    assert not _acquire(
+        a, api_id="kt00018", request_class="execution_critical", max_wait_sec=0.5
+    ).admitted
+    assert clock.value == before
+    admitted = _acquire(
+        a, api_id="kt00018", request_class="execution_critical", max_wait_sec=0.75
+    )
+    assert admitted.admitted and 0.7 <= admitted.waited_sec <= 0.75
+    assert not _acquire(
+        a, api_id="kt00018", request_class="execution_critical"
+    ).admitted
+
+
+@pytest.mark.parametrize("mixed_writer", [False, True])
+def test_inventory_upgrade_keeps_unattributed_legacy_admissions(tmp_path, mixed_writer):
+    clock = MutableClock()
+    a = _coordinator(tmp_path, clock)
+    for _ in range(3):
+        assert _acquire(
+            a, api_id="kt00018", request_class="execution_critical"
+        ).admitted
+    path, _ = a._state_path(
+        token="SECRET-TOKEN",
+        endpoint="https://api.kiwoom.com/api/dostk/mrkcond",
+        api_id="kt00018",
+    )
+    state = json.loads(path.read_text())
+    if mixed_writer:
+        state["request_records"] = state["request_records"][:1]
+    else:
+        state.pop("request_records")
+    path.write_text(json.dumps(state))
+    assert not _acquire(
+        a, api_id="kt00018", request_class="execution_critical"
+    ).admitted
+    assert _acquire(a, api_id="kt00005", request_class="execution_critical").admitted
+    clock.value += 1.001
+    assert _acquire(a, api_id="kt00018", request_class="execution_critical").admitted
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [None, {}, [{"epoch": True, "api_id": "kt00018"}], [{"epoch": 100, "api_id": ""}]],
+)
+def test_corrupt_inventory_attribution_fails_closed(tmp_path, invalid):
+    clock = MutableClock()
+    a = _coordinator(tmp_path, clock)
+    assert _acquire(a).admitted
+    path, _ = a._state_path(
+        token="SECRET-TOKEN",
+        endpoint="https://api.kiwoom.com/api/dostk/mrkcond",
+        api_id="kt00018",
+    )
+    state = json.loads(path.read_text())
+    state["request_records"] = invalid
+    path.write_text(json.dumps(state))
+    result = _acquire(a, api_id="kt00018", request_class="execution_critical")
+    assert (
+        not result.admitted
+        and result.reason == "shared_read_rate_request_records_invalid"
+    )
+
+
+def test_inventory_mock_keeps_one_request_per_tr(tmp_path):
+    a = _coordinator(tmp_path, MutableClock())
+    args = dict(
+        api_id="kt00018",
+        request_class="execution_critical",
+        endpoint="https://mockapi.kiwoom.com/api/dostk/acnt",
+    )
+    assert _acquire(a, **args).admitted
+    assert not _acquire(a, **args).admitted
+    assert _acquire(
+        a,
+        api_id="kt00005",
+        request_class="execution_critical",
+        endpoint=args["endpoint"],
+    ).admitted
+
+
+def _inventory_process_admission(state_dir, barrier, results):
+    a = _coordinator(state_dir, MutableClock())
+    barrier.wait(timeout=10)
+    results.put(
+        _acquire(a, api_id="kt00018", request_class="execution_critical").admitted
+    )
+
+
+def test_inventory_processes_cannot_split_the_sub_limit(tmp_path):
+    import multiprocessing
+
+    ctx = multiprocessing.get_context("fork")
+    barrier, results = ctx.Barrier(6), ctx.Queue()
+    children = [
+        ctx.Process(
+            target=_inventory_process_admission, args=(tmp_path, barrier, results)
+        )
+        for _ in range(6)
+    ]
+    try:
+        for child in children:
+            child.start()
+        values = [results.get(timeout=15) for _ in children]
+        assert sum(values) == 3
+    finally:
+        for child in children:
+            child.join(timeout=5)
+            if child.is_alive():
+                child.terminate()
+                child.join()
+    assert all(child.exitcode == 0 for child in children)
+
+
+@pytest.mark.parametrize(
+    "request_class", ["execution_critical", "runtime_required", "source_only"]
+)
+def test_inventory_oversleep_cannot_admit_after_original_deadline(
+    tmp_path, request_class
+):
+    clock = MutableClock()
+    a = _coordinator(tmp_path, clock)
+    for _ in range(3):
+        assert _acquire(a, api_id="kt00018", request_class=request_class).admitted
+    a.sleep = lambda delay: setattr(clock, "value", clock.value + delay + 0.25)
+    result = _acquire(
+        a, api_id="kt00018", request_class=request_class, max_wait_sec=1.1
+    )
+    assert (
+        not result.admitted
+        and result.reason == "shared_read_rate_wait_budget_exhausted"
+    )
+    assert result.waited_sec > 1.1
+
+
+def test_inventory_rejects_attribution_without_matching_global_admission(tmp_path):
+    clock = MutableClock()
+    a = _coordinator(tmp_path, clock)
+    assert _acquire(a).admitted
+    path, _ = a._state_path(
+        token="SECRET-TOKEN",
+        endpoint="https://api.kiwoom.com/api/dostk/mrkcond",
+        api_id="kt00018",
+    )
+    state = json.loads(path.read_text())
+    state["request_records"] *= 2
+    path.write_text(json.dumps(state))
+    result = _acquire(a, api_id="kt00018", request_class="execution_critical")
+    assert (
+        not result.admitted
+        and result.reason == "shared_read_rate_request_records_invalid"
+    )
+
+
+def test_inventory_initial_lock_delay_cannot_grant_late_admission(tmp_path):
+    clock = MutableClock()
+    a = _coordinator(tmp_path, clock)
+    original = a._open_locked_state
+
+    def delayed(path):
+        handle = original(path)
+        clock.value += 1.2
+        return handle
+
+    a._open_locked_state = delayed
+    result = _acquire(
+        a, api_id="kt00018", request_class="execution_critical", max_wait_sec=1.1
+    )
+    assert (
+        not result.admitted
+        and result.reason == "shared_read_rate_wait_budget_exhausted"
+    )

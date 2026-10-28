@@ -9,6 +9,37 @@ quantity guards.
 
 ## Official Kiwoom Reference Gate
 
+### Domestic Account Inventory Read Admission
+
+The operator supplied Kiwoom's notice reducing production `kt00018` from five
+to three requests per second after `2026-10-29T18:00:00+09:00` and authorized
+early deployment of that stricter ceiling on 2026-10-28. The existing
+`src/utils/kiwoom_read_request_control.py` owns both checks in one cross-process
+locked sliding one-second window: all domestic read TRs remain limited to five,
+source-only reads retain their existing four-slot ceiling, and `kt00018` is
+additionally limited to three. KRX/NXT bodies and request-owner labels do not
+split its bucket. Each physical authentication retry obtains admission again,
+including against an already occupied replacement-token bucket. Real/demo
+origins and token scopes retain their existing isolation; mock per-TR admission
+remains one per second. No order-write capacity is consumed.
+
+The additive state keeps global timestamps and their API attribution together.
+Unattributed live timestamps from an older writer count conservatively toward
+the narrower limit until that original window expires. Invalid attribution
+fails closed. Admission after a wait or an over-budget initial lock acquisition
+cannot dispatch after the original positive wait budget. HTTP timeouts, retry
+count, cooldown, source freshness and broker/account/order/quantity guards are
+unchanged. Missing either inventory venue remains unverified in the existing
+cancel/remaining-quantity reconciliation consumers.
+
+Official upstream revision `953e5dbff123f437ab4d11a78a95191a685eb51f` was
+rechecked for this change; core client/errors, specs, packaged account spec,
+Postman envelope and account example were preserved in
+[`revision.json`](../tmp/kt00018-rate-repair-20261028/official/revision.json).
+`kiwoom_docs` is absent in that tree. The new rate value is authorized by the
+operator-supplied notice; request/response fields and authentication protocol
+are unchanged. [Review and acceptance](audits/postclose-root-cause-recovery-review-2026-10-19.md#kt00018-dual-read-admission--2026-10-28).
+
 
 ### Operator KRX And SOR Defaults
 

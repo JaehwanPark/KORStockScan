@@ -2136,3 +2136,118 @@ def test_official_non_nxt_listing_persists_to_main_sor_submit(
             )
         ]
         assert result["return_code"] == "0"
+
+
+def test_inventory_exchanges_and_auth_retry_spend_the_same_three_slots(
+    monkeypatch, tmp_path
+):
+    from src.utils.kiwoom_read_request_control import KiwoomReadRequestCoordinator
+
+    clock = [100.0]
+    coordinator = KiwoomReadRequestCoordinator(
+        state_dir=tmp_path / "rate",
+        clock=lambda: clock[0],
+        sleep=lambda d: clock.__setitem__(0, clock[0] + d),
+    )
+    admissions, posts = [], []
+
+    def acquire(**kwargs):
+        r = coordinator.acquire(**kwargs, max_wait_sec=0)
+        admissions.append((kwargs["api_id"], kwargs["request_owner"], r.admitted))
+        return r
+
+    class Response:
+        status_code = 200
+
+        def __init__(self, result):
+            self.result = result
+
+        def json(self):
+            return {"return_code": self.result, "acnt_evlt_remn_indv_tot": []}
+
+    def post(_url, **kwargs):
+        posts.append(kwargs["json"]["dmst_stex_tp"])
+        return Response("8005" if len(posts) == 1 else "0")
+
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils, "acquire_kiwoom_read_capacity", acquire
+    )
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils, "resolve_kiwoom_request_token", lambda token: token
+    )
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "get_kiwoom_token_after_auth_failure",
+        lambda **kwargs: "TOKEN",
+    )
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "get_api_url",
+        lambda path: "https://api.kiwoom.com" + path,
+    )
+    monkeypatch.setattr(kiwoom_orders.requests, "post", post)
+    monkeypatch.setattr(kiwoom_orders, "log_info", lambda *args, **kwargs: None)
+    monkeypatch.setattr(kiwoom_orders, "log_error", lambda *args, **kwargs: None)
+    assert kiwoom_orders.get_my_inventory("TOKEN") == ([], {"KRX", "NXT"})
+    assert posts == ["KRX", "KRX", "NXT"]
+    assert any(owner.endswith(".auth_retry") for _, owner, ok in admissions if ok)
+    assert kiwoom_orders.get_my_inventory("TOKEN") == ([], set())
+    assert len(posts) == 3
+    assert all(not ok for _, _, ok in admissions[3:])
+    assert all(
+        "shared_read_rate_wait_budget_exhausted" in e["return_msg"]
+        for e in kiwoom_orders.get_last_inventory_errors()
+    )
+
+
+def test_inventory_auth_retry_cannot_bypass_full_replacement_token_bucket(
+    monkeypatch, tmp_path
+):
+    from src.utils.kiwoom_read_request_control import KiwoomReadRequestCoordinator
+
+    coordinator = KiwoomReadRequestCoordinator(
+        state_dir=tmp_path / "rate", clock=lambda: 100.0
+    )
+    url = "https://api.kiwoom.com/api/dostk/acnt"
+
+    def acquire(**kwargs):
+        return coordinator.acquire(**kwargs, max_wait_sec=0)
+
+    for _ in range(3):
+        assert acquire(
+            token="FRESH",
+            endpoint=url,
+            request_owner="other_worker",
+            request_class="execution_critical",
+            api_id="kt00018",
+        ).admitted
+    posts = []
+
+    class Response:
+        status_code = 200
+
+        def json(self):
+            return {"return_code": "8005"}
+
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils, "acquire_kiwoom_read_capacity", acquire
+    )
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils, "resolve_kiwoom_request_token", lambda token: token
+    )
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "get_kiwoom_token_after_auth_failure",
+        lambda **kwargs: "FRESH",
+    )
+    monkeypatch.setattr(
+        kiwoom_orders.requests,
+        "post",
+        lambda *args, **kwargs: posts.append(kwargs) or Response(),
+    )
+    monkeypatch.setattr(kiwoom_orders, "log_info", lambda *args, **kwargs: None)
+    with pytest.raises(RuntimeError, match="shared_read_rate_wait_budget_exhausted"):
+        kiwoom_orders._post_kiwoom_with_auth_retry(
+            url, {"api-id": "kt00018", "authorization": "Bearer OLD"}, {}, "kt00018"
+        )
+    assert len(posts) == 1
