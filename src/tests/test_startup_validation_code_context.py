@@ -273,7 +273,7 @@ def test_handoff_coordination_preparation_pair_is_exact(fault):
     old = C.REVIEWED_HANDOFF_COORDINATION_ORIGINS[name]
     current = C._sha(ROOT / name)
     assert current == C.REVIEWED_ISSUER_BYTES_SOURCES[name]
-    assert current == H.REVIEWED_POSTCLOSE_COMPLETION_PROFILE[name]
+    assert current == H.REVIEWED_BUY_LINEAGE_PROFILE[name]
     if fault == "old":
         old = "0" * 64
     elif fault == "current":
@@ -2844,7 +2844,7 @@ def test_main_preparation_uses_reviewed_stopped_origin_code(name):
     review = json.loads((ROOT / H._FORMATTING_REVIEW_PATH).read_text())
     predecessor = review["sources"][name]["before_sha256"]
     if review["sources"][name]["after_sha256"] != current:
-        assert H.REVIEWED_POSTCLOSE_COMPLETION_PROFILE[name] == current
+        assert H.REVIEWED_BUY_LINEAGE_PROFILE[name] == current
         C._pairs({name: review["sources"][name]["after_sha256"]}, {name: current})
     origins = {old for old, new in pairs if new in {predecessor, current}}
     origins.add(predecessor)
@@ -3110,7 +3110,7 @@ def test_main_preparation_independently_reviews_closed_scanner(origin, damage):
 )
 def test_migration_configuration_has_independent_exact_source_pairs(name):
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-    assert H.REVIEWED_POSTCLOSE_COMPLETION_PROFILE[name] == current
+    assert H.REVIEWED_BUY_LINEAGE_PROFILE[name] == current
     for old in H.REVIEWED_MIGRATION_ORIGINS[name]:
         C._pairs({name: old}, {name: H.REVIEWED_CLOSED_LOADER_PROFILE[name]})
         C._pairs({name: old}, {name: current})
@@ -3318,7 +3318,7 @@ def test_entry_capability_independent_preparation_exact_pairs(relative, fault):
 def test_nonfixed_identifier_preparation_uses_independent_exact_sources(name,fault):
     old=H.REVIEWED_NONFIXED_IDENTITY_ORIGINS[name]
     current=hashlib.sha256((ROOT/name).read_bytes()).hexdigest()
-    assert H.REVIEWED_POSTCLOSE_COMPLETION_PROFILE[name]==current
+    assert H.REVIEWED_BUY_LINEAGE_PROFILE[name]==current
     if fault=='source':old='0'*64
     if fault=='target':current='0'*64
     if fault=='path':name='src/engine/unknown_identifier_owner.py'
@@ -3365,7 +3365,7 @@ def test_invalidation_cadence_independent_preparation_exact_pairs(relative, faul
 def test_delay_collection_independent_preparation_exact_pairs(relative, fault):
     old = C.REVIEWED_DELAY_COLLECTION_ORIGINS[relative]
     current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
-    assert H.REVIEWED_POSTCLOSE_COMPLETION_PROFILE[relative] == current
+    assert H.REVIEWED_BUY_LINEAGE_PROFILE[relative] == current
     if fault == "origin": old = "0" * 64
     if fault == "successor": current = "0" * 64
     if fault == "path": relative = "src/engine/unknown_collection_owner.py"
@@ -3381,7 +3381,7 @@ def test_submit_fresh_independent_preparation_exact_pairs(relative, fault, proje
         if projected else C.REVIEWED_SUBMIT_FRESH_ORIGINS[relative]
     )
     current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
-    assert current == H.REVIEWED_POSTCLOSE_COMPLETION_PROFILE[relative]
+    assert current == H.REVIEWED_BUY_LINEAGE_PROFILE[relative]
     if fault == "origin": old = "0" * 64
     if fault == "successor": current = "0" * 64
     if fault == "path": relative = "src/engine/unknown_submit_owner.py"
@@ -3481,7 +3481,7 @@ def test_prior_execution_independent_preparation_exact_current_source(name, faul
     old = C.REVIEWED_PRIOR_EXECUTION_ORIGINS[name]
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
     assert current == C.REVIEWED_QUANTITY_COST_SOURCES.get(name, C.REVIEWED_PRIOR_EXECUTION_SOURCES[name])
-    assert current == H.REVIEWED_POSTCLOSE_COMPLETION_PROFILE[name]
+    assert current == H.REVIEWED_BUY_LINEAGE_PROFILE[name]
     if fault == "origin":
         old = "0" * 64
     elif fault == "successor":
@@ -3497,7 +3497,7 @@ def test_quantity_source_independent_preparation_keeps_exact_pair(name, fault):
     old = C.REVIEWED_QUANTITY_SOURCE_ORIGINS[name]
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
     assert current == C.REVIEWED_QUANTITY_COST_SOURCES.get(name, C.REVIEWED_QUANTITY_SOURCE_SOURCES[name])
-    assert current == H.REVIEWED_POSTCLOSE_COMPLETION_PROFILE[name]
+    assert current == H.REVIEWED_BUY_LINEAGE_PROFILE[name]
     if fault == "origin":
         old = "0" * 64
     elif fault == "successor":
@@ -3515,7 +3515,7 @@ def test_stopped_preparation_independent_source_pair_is_exact(name, fault):
     assert current == C.REVIEWED_CLOSED_NATIVE_PREPARATION_SOURCES.get(
         name, C.REVIEWED_EXECUTION_EXACT_SOURCES.get(name, C.REVIEWED_STOPPED_PREPARATION_SOURCES[name])
     )
-    assert current == H.REVIEWED_POSTCLOSE_COMPLETION_PROFILE[name]
+    assert current == H.REVIEWED_BUY_LINEAGE_PROFILE[name]
     if fault == "origin":
         old = "0" * 64
     elif fault == "successor":
@@ -3530,7 +3530,7 @@ def test_stopped_preparation_independent_source_pair_is_exact(name, fault):
 def test_sell_cancel_preparation_exact_reviewed_sources(relative, fault):
     old = C.REVIEWED_SELL_CANCEL_ORIGINS[relative]
     current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
-    assert current == H.REVIEWED_POSTCLOSE_COMPLETION_PROFILE[relative]
+    assert current == H.REVIEWED_BUY_LINEAGE_PROFILE[relative]
     if fault == "origin": old = "0" * 64
     if fault == "successor": current = "0" * 64
     if fault == "path": relative = "src/engine/unknown_sell_owner.py"
@@ -3543,7 +3543,7 @@ def test_quantity_cost_preparation_pair_is_exact(name, fault):
     old = C.REVIEWED_QUANTITY_COST_ORIGINS[name]
     current = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
     assert current == C.REVIEWED_QUANTITY_COST_SOURCES[name]
-    assert current == H.REVIEWED_POSTCLOSE_COMPLETION_PROFILE[name]
+    assert current == H.REVIEWED_BUY_LINEAGE_PROFILE[name]
     if fault == "origin":
         old = "0" * 64
     elif fault == "successor":
@@ -3557,8 +3557,8 @@ def test_quantity_cost_preparation_pair_is_exact(name, fault):
 def test_integrated_holding_source_exact_reviewed_preparation(relative, fault):
     old=C.REVIEWED_HOLDING_SOURCE_ORIGINS[relative]
     current=hashlib.sha256((ROOT/relative).read_bytes()).hexdigest()
-    assert current==C.REVIEWED_FINAL_SIGNAL_REFERENCE_SOURCES.get(relative, C.REVIEWED_HOLDING_SOURCE_SOURCES[relative])
-    assert current==H.REVIEWED_POSTCLOSE_COMPLETION_PROFILE[relative]
+    assert current==C.REVIEWED_BUY_LINEAGE_SOURCES.get(relative, C.REVIEWED_FINAL_SIGNAL_REFERENCE_SOURCES.get(relative, C.REVIEWED_HOLDING_SOURCE_SOURCES[relative]))
+    assert current==H.REVIEWED_BUY_LINEAGE_PROFILE[relative]
     assert C.reviewed_preparation_pair(relative, old if fault!='old_changed' else '0'*64, current if fault!='current_changed' else '1'*64) is (fault is None)
 
 @pytest.mark.parametrize('relative', sorted(C.REVIEWED_CAPABILITY_SCOPE_SOURCES))
@@ -3567,7 +3567,7 @@ def test_capability_scope_exact_reviewed_preparation(relative, fault):
     old=C.REVIEWED_CAPABILITY_SCOPE_ORIGINS[relative]
     current=hashlib.sha256((ROOT/relative).read_bytes()).hexdigest()
     assert current==C.REVIEWED_CAPABILITY_SCOPE_SOURCES[relative]
-    assert current==H.REVIEWED_POSTCLOSE_COMPLETION_PROFILE[relative]
+    assert current==H.REVIEWED_BUY_LINEAGE_PROFILE[relative]
     assert C.reviewed_preparation_pair(relative, old if fault!='old_changed' else '0'*64, current if fault!='current_changed' else '1'*64) is (fault is None)
 
 @pytest.mark.parametrize('relative', sorted(C.REVIEWED_CLOSED_NATIVE_PREPARATION_SOURCES))
@@ -3576,7 +3576,7 @@ def test_closed_native_exact_reviewed_preparation(relative, fault):
     old=C.REVIEWED_CLOSED_NATIVE_PREPARATION_ORIGINS[relative]
     current=hashlib.sha256((ROOT/relative).read_bytes()).hexdigest()
     assert current==C.REVIEWED_CLOSED_NATIVE_PREPARATION_SOURCES[relative]
-    assert current==H.REVIEWED_POSTCLOSE_COMPLETION_PROFILE[relative]
+    assert current==H.REVIEWED_BUY_LINEAGE_PROFILE[relative]
     assert C.reviewed_preparation_pair(relative, old if fault!='old_changed' else '0'*64, current if fault!='current_changed' else '1'*64) is (fault is None)
 
 
@@ -3586,7 +3586,7 @@ def test_final_signal_reference_exact_reviewed_preparation(relative, fault):
     old=C.REVIEWED_FINAL_SIGNAL_REFERENCE_ORIGINS[relative]
     current=hashlib.sha256((ROOT/relative).read_bytes()).hexdigest()
     assert current==C.REVIEWED_FINAL_SIGNAL_REFERENCE_SOURCES[relative]
-    assert current==H.REVIEWED_POSTCLOSE_COMPLETION_PROFILE[relative]
+    assert current==H.REVIEWED_BUY_LINEAGE_PROFILE[relative]
     assert C.reviewed_preparation_pair(relative, old if fault!='old_changed' else '0'*64, current if fault!='current_changed' else '1'*64) is (fault is None)
 
 
@@ -3596,7 +3596,7 @@ def test_carried_owner_exact_reviewed_preparation(relative, fault):
     old=C.REVIEWED_CARRIED_OWNER_ORIGINS[relative]
     current=hashlib.sha256((ROOT/relative).read_bytes()).hexdigest()
     assert current==C.REVIEWED_CARRIED_OWNER_SOURCES[relative]
-    assert current==H.REVIEWED_POSTCLOSE_COMPLETION_PROFILE[relative]
+    assert current==H.REVIEWED_BUY_LINEAGE_PROFILE[relative]
     assert C.reviewed_preparation_pair(relative, old if fault!='old_changed' else '0'*64, current if fault!='current_changed' else '1'*64) is (fault is None)
 
 
@@ -3606,7 +3606,7 @@ def test_report_origin_exact_reviewed_preparation(relative, fault):
     old=C.REVIEWED_REPORT_ORIGIN_ORIGINS[relative]
     current=hashlib.sha256((ROOT/relative).read_bytes()).hexdigest()
     assert current==C.REVIEWED_REPORT_ORIGIN_SOURCES[relative]
-    assert current==H.REVIEWED_POSTCLOSE_COMPLETION_PROFILE[relative]
+    assert current==H.REVIEWED_BUY_LINEAGE_PROFILE[relative]
     assert C.reviewed_preparation_pair(relative, old if fault!='old_changed' else '0'*64, current if fault!='current_changed' else '1'*64) is (fault is None)
 
 
@@ -3616,7 +3616,7 @@ def test_pre_delivery_preparation_independent_exact_sources(relative, fault):
     old = C.REVIEWED_PRE_DELIVERY_ORIGINS[relative]
     current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
     assert current == C.REVIEWED_PRE_DELIVERY_SOURCES[relative]
-    assert current == H.REVIEWED_POSTCLOSE_COMPLETION_PROFILE[relative]
+    assert current == H.REVIEWED_BUY_LINEAGE_PROFILE[relative]
     if fault == "origin": old = "0" * 64
     if fault == "successor": current = "0" * 64
     if fault == "path": relative = "src/scanners/unreviewed_delivery.py"
@@ -3630,8 +3630,21 @@ def test_postclose_completion_independent_exact_sources(relative, fault):
     old = C.REVIEWED_POSTCLOSE_COMPLETION_ORIGINS[relative]
     current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
     assert current == C.REVIEWED_POSTCLOSE_COMPLETION_SOURCES[relative]
-    assert current == H.REVIEWED_POSTCLOSE_COMPLETION_PROFILE[relative]
+    assert current == H.REVIEWED_BUY_LINEAGE_PROFILE[relative]
     if fault == "origin": old = "0" * 64
     if fault == "successor": current = "0" * 64
     if fault == "path": relative = "src/engine/unreviewed_completion_owner.py"
+    assert C.reviewed_preparation_pair(relative, old, current) is (fault is None)
+
+
+@pytest.mark.parametrize("relative", sorted(C.REVIEWED_BUY_LINEAGE_SOURCES))
+@pytest.mark.parametrize("fault", [None, "origin", "successor", "path"])
+def test_buy_lineage_independent_preparation_exact_sources(relative, fault):
+    old = C.REVIEWED_BUY_LINEAGE_ORIGINS[relative]
+    current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+    assert current == C.REVIEWED_BUY_LINEAGE_SOURCES[relative]
+    assert current == H.REVIEWED_BUY_LINEAGE_PROFILE[relative]
+    if fault == "origin": old = "0" * 64
+    if fault == "successor": current = "0" * 64
+    if fault == "path": relative = "src/engine/unreviewed_buy_lineage.py"
     assert C.reviewed_preparation_pair(relative, old, current) is (fault is None)

@@ -12993,6 +12993,29 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_POSTCLOSE_COMPLETION_HASHES.items()
 }}
 
+# Reviewed partial SELL BUY-lineage successor; original issued profiles remain.
+REVIEWED_BUY_LINEAGE_HASHES = {'src/engine/kiwoom_sniper_v2.py': '05fd9d811b5d433f0e7fd86c8634dcb97fba480ac1fe8963053a0a25cd59c377', 'src/engine/infrastructure/startup_validation_code_context.py': '45534250126c5631c7a20ac8430603353309cc3337561f2a91dc86824762b0af'}
+REVIEWED_BUY_LINEAGE_ORIGINS = {'src/engine/kiwoom_sniper_v2.py': '35393c7ffa067328fc6e2a2df931a5e352adc65ca15730513ef74da3274d0881', 'src/engine/infrastructure/startup_validation_code_context.py': 'b4fa54f30db08e5ddd07d05ff068d8e8b409ad3c48ced7daa68cc90d740333cf'}
+REVIEWED_BUY_LINEAGE_PROFILE = {**REVIEWED_POSTCLOSE_COMPLETION_PROFILE, **REVIEWED_BUY_LINEAGE_HASHES}
+REVIEWED_BUY_LINEAGE_VARIANTS = {
+    (key[0], REVIEWED_BUY_LINEAGE_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/kiwoom_sniper_v2.py",
+        "selector_sha256": REVIEWED_BUY_LINEAGE_HASHES["src/engine/kiwoom_sniper_v2.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_BUY_LINEAGE_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_BUY_LINEAGE_HASHES.get(os.path.normpath(name), sha) for name, sha in members.items()}
+            for origin, members in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_POSTCLOSE_COMPLETION_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current) for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_BUY_LINEAGE_ORIGINS[name]})
+    for name, current in REVIEWED_BUY_LINEAGE_HASHES.items()
+}}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -13910,6 +13933,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_POSTCLOSE_COMPLETION_PROFILE
         prepared_variants = REVIEWED_POSTCLOSE_COMPLETION_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/kiwoom_sniper_v2.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_BUY_LINEAGE_HASHES["src/engine/kiwoom_sniper_v2.py"]
+    ):
+        prepared_hashes = REVIEWED_BUY_LINEAGE_PROFILE
+        prepared_variants = REVIEWED_BUY_LINEAGE_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

@@ -3212,6 +3212,19 @@ for _name, _sha in REVIEWED_POSTCLOSE_COMPLETION_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# Partial SELL recovery restores original BUY identity only after an exact
+# native journal match; current held quantity and all admission guards remain.
+REVIEWED_BUY_LINEAGE_SOURCES = {'src/engine/kiwoom_sniper_v2.py': '05fd9d811b5d433f0e7fd86c8634dcb97fba480ac1fe8963053a0a25cd59c377'}
+REVIEWED_BUY_LINEAGE_ORIGINS = {'src/engine/kiwoom_sniper_v2.py': '35393c7ffa067328fc6e2a2df931a5e352adc65ca15730513ef74da3274d0881'}
+for _name, _sha in REVIEWED_BUY_LINEAGE_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_BUY_LINEAGE_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

@@ -5424,7 +5424,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_POSTCLOSE_COMPLETION_PROFILE,
+        "current": handoff.REVIEWED_BUY_LINEAGE_PROFILE,
+        "consumed_completion": handoff.REVIEWED_POSTCLOSE_COMPLETION_PROFILE,
         "consumed_report_origin": handoff.REVIEWED_REPORT_ORIGIN_PROFILE,
         "issuer_bytes_source": handoff.REVIEWED_ISSUER_BYTES_PROFILE,
         "inventory_origin_source": handoff.REVIEWED_INVENTORY_ORIGIN_PROFILE,
@@ -5581,6 +5582,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                         "consumed_policy_custody": "9e820cbf8",
                         "prepared_pre_submit": "b2dbb0862",
                         "consumed_report_origin": "270511ce5",
+                        "consumed_completion": "770b26078",
                         "consumed_observer_io": "a2ca8e7d8",
                         "consumed_index_sentinel": "926ebca82",
                         "consumed_sentinel": "2b7ca0380",
@@ -7085,3 +7087,19 @@ def test_postclose_completion_complete_candidate_and_negatives(tmp_path, family,
 @pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
 def test_completion_successor_preserves_consumed_report_origin(tmp_path, family):
     test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, family, None, "consumed_report_origin")
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("dependency", sorted(handoff.REVIEWED_BUY_LINEAGE_HASHES))
+@pytest.mark.parametrize("fault", [None, "missing", "dirty", "committed_change", "parent_mix"])
+def test_buy_lineage_complete_candidate_and_negatives(tmp_path, family, dependency, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "current", dependency
+    )
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+def test_buy_lineage_preserves_consumed_completion_predecessor(tmp_path, family):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, None, "consumed_completion"
+    )
