@@ -12882,6 +12882,29 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_FINAL_SIGNAL_REFERENCE_HASHES.items()
 }}
 
+# Exact carried SELL inventory phase over the complete issued signal profile.
+REVIEWED_CARRIED_OWNER_HASHES = {'src/engine/sniper_sync.py': '990cc54f499be60b66571742cabbb94bf752f19e1e509b19c0404951a4dff33e', 'src/engine/infrastructure/startup_validation_code_context.py': 'd593d2e4680ebb7bba4d809b197128b15b12998e3dcc4650fc9008623b8cf6a6'}
+REVIEWED_CARRIED_OWNER_ORIGINS = {'src/engine/sniper_sync.py': 'a8788beb561139657e18c4342abfbf4273d7ca6317eea8985b57c34962bc3c69', 'src/engine/infrastructure/startup_validation_code_context.py': '8b53de5b151b4fa8484716e748fc076e7fe0048ac04fb2fbf05d933e73f4adda'}
+REVIEWED_CARRIED_OWNER_PROFILE = {**REVIEWED_FINAL_SIGNAL_REFERENCE_PROFILE, **REVIEWED_CARRIED_OWNER_HASHES}
+REVIEWED_CARRIED_OWNER_VARIANTS = {
+    (key[0], REVIEWED_CARRIED_OWNER_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/sniper_sync.py",
+        "selector_sha256": REVIEWED_CARRIED_OWNER_HASHES["src/engine/sniper_sync.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_CARRIED_OWNER_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_CARRIED_OWNER_HASHES.get(os.path.normpath(name), sha) for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_FINAL_SIGNAL_REFERENCE_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current) for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_CARRIED_OWNER_ORIGINS[name]})
+    for name, current in REVIEWED_CARRIED_OWNER_HASHES.items()
+}}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -13775,6 +13798,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_FINAL_SIGNAL_REFERENCE_PROFILE
         prepared_variants = REVIEWED_FINAL_SIGNAL_REFERENCE_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/sniper_sync.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_CARRIED_OWNER_HASHES["src/engine/sniper_sync.py"]
+    ):
+        prepared_hashes = REVIEWED_CARRIED_OWNER_PROFILE
+        prepared_variants = REVIEWED_CARRIED_OWNER_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

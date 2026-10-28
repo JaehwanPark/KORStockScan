@@ -3157,6 +3157,17 @@ for _name, _sha in REVIEWED_FINAL_SIGNAL_REFERENCE_SOURCES.items():
         _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
     _history.update((_old, _sha) for _old in _origins)
 
+# Exact carried SELL phase recovery; preserve original position and broker guards.
+REVIEWED_CARRIED_OWNER_SOURCES = {'src/engine/sniper_sync.py': '990cc54f499be60b66571742cabbb94bf752f19e1e509b19c0404951a4dff33e'}
+REVIEWED_CARRIED_OWNER_ORIGINS = {'src/engine/sniper_sync.py': 'a8788beb561139657e18c4342abfbf4273d7ca6317eea8985b57c34962bc3c69'}
+for _name, _sha in REVIEWED_CARRIED_OWNER_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_CARRIED_OWNER_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

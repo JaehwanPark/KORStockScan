@@ -1040,8 +1040,8 @@ def _restore_registered_partial_sell(record, target, code, remaining_qty, mismat
 
     if (
         not isinstance(target, dict)
-        or str(getattr(record, "status", "")).upper() != "SELL_ORDERED"
-        or str(target.get("status", "")).upper() != "SELL_ORDERED"
+        or str(getattr(record, "status", "")).upper() not in {"SELL_ORDERED", "HOLDING"}
+        or str(target.get("status", "")).upper() not in {"SELL_ORDERED", "HOLDING"}
         or evaluate_main_bot_control_exclusion(code).excluded
         or target.get("id") != getattr(record, "id", None)
         or str(target.get("code") or "").strip()[:6] != code
@@ -1080,15 +1080,54 @@ def _restore_registered_partial_sell(record, target, code, remaining_qty, mismat
             status="SELL_ORDERED",
             sell_odno=state.get("order_no"),
         )
-        if (
-            not receipts._restore_pending_sell_submit_custody_retry_snapshot(probe)
-            or probe.get("sell_submit_pending") is not False
-            or not receipts._active_partial_sell_receipt(
-                probe, str(state.get("order_no") or "")
-            )
-            or receipts._validated_sell_order_context(probe)[0] is None
-        ):
-            return None
+        anchored = receipts._restore_pending_sell_submit_custody_retry_snapshot(probe)
+        active = bool(str(record.status).upper() == str(target.get("status", "")).upper() == "SELL_ORDERED"
+                      and anchored and probe.get("sell_submit_pending") is False
+                      and receipts._active_partial_sell_receipt(probe, str(state.get("order_no") or ""))
+                      and receipts._validated_sell_order_context(probe)[0] is not None)
+        committed_carry = False
+        if not active:
+            # A canceled partial order is rotated into carried fills. Its old
+            # order is no longer active; the exact prior execution ledger and
+            # durable cancel generation still own the remaining position.
+            prior = state.get("prior_orders")
+            if (state.get("order_no") or _to_int(state.get("expected_qty")) != 0
+                or _to_int(state.get("cumulative_qty")) != 0
+                or state.get("carried_quantity_contract_complete") is not True
+                or state.get("carried_unit_fill_consistent") is not True
+                or not isinstance(prior, dict) or not prior
+                or any(not re.fullmatch(r"[0-9]{7}", str(no)) or not isinstance(row, dict)
+                       or row.get("quantity_contract_complete") is not True
+                       or row.get("unit_fill_consistent") is not True for no, row in prior.items())
+                or sum(_to_int(row.get("cumulative_qty")) for row in prior.values())
+                    != _to_int(state.get("carried_qty"))
+                or not 0 < _to_int(state.get("carried_qty")) == _to_int(state.get("aggregate_cumulative_qty"))
+                or _to_int(state.get("remaining_qty")) != remaining_qty):
+                return None
+            fields, pending_reason = receipts.load_pending_sell_submit_custody(
+                target_id=record.id, code=code, position_qty=_to_int(record.buy_qty))
+            if isinstance(fields, dict):
+                if (not anchored or fields.get("sell_submit_generation") != probe.get("sell_submit_generation")
+                    or fields.get("sell_submit_context_sha256") != probe.get("sell_submit_context_sha256")):
+                    return None
+                probe.update(fields)
+                order = str(probe.get("sell_cancel_ack_order_no") or probe.get("sell_cancel_intent_order_no") or "")
+                probe.update(sell_odno=order, sell_submit_pending=False, status="SELL_ORDERED")
+                if (order not in prior or receipts._validated_sell_order_context(probe)[0] is None
+                    or not (receipts.pending_sell_cancel_intent_exact(probe, code=code, order_no=order)
+                            or receipts.pending_sell_cancel_ack_exact(probe, code=code, order_no=order))):
+                    return None
+            else:
+                # Native DB HOLDING plus a cleared cancel journal is a later
+                # phase. Never rehydrate that retired submission as live intent.
+                proof = (probe.get("_sell_submit_receipt_proof") or {})
+                committed_carry = bool(pending_reason == "pending_submit_journal_missing"
+                    and str(record.status).upper() == str(target.get("status", "")).upper() == "HOLDING"
+                    and not any(target.get(k) for k in ("sell_submit_generation", "sell_odno", "sell_ord_no", "sell_submit_pending"))
+                    and (not anchored or (proof.get("custody_emitted") is True
+                         and not probe.get("exit_receipt_submission_custody_retry_required"))))
+                if not committed_carry:
+                    return None
         restored, reason = _restore_sell_receipt_recovery(
             target_stock=target,
             record=record,
@@ -1097,6 +1136,9 @@ def _restore_registered_partial_sell(record, target, code, remaining_qty, mismat
         )
         if restored is None:
             return None
+        if committed_carry:
+            from src.engine.sniper_state_handlers import _clear_sell_submit_context
+            _clear_sell_submit_context(target)
         # Only this exact mismatch belongs to this recovery. Other allocation,
         # cancel, manual and pending-order interlocks retain their own owners.
         if prior_conflict == mismatch:
@@ -1674,12 +1716,25 @@ def _preserve_coexistence_owner_inventory(
                 }
             )
             if reconciliation_error:
+                prior_source = target.get("sell_cancel_reconciliation_source")
+                retain_foreign_source = bool(
+                    prior_source
+                    and prior_source not in {
+                        reconciliation_error,
+                        "durable_pending_sell_submit_exact_rehydration",
+                        "durable_sell_receipt_journal_exact_match",
+                    }
+                    and (target.get("broker_symbol_allocation_conflict")
+                         or target.get("sell_cancel_reconciliation_required"))
+                )
                 target.update(
                     {
                         "scale_in_locked": True,
                         "broker_symbol_allocation_conflict": True,
                         "sell_cancel_reconciliation_required": True,
-                        "sell_cancel_reconciliation_source": reconciliation_error,
+                        "sell_cancel_reconciliation_source": (
+                            prior_source if retain_foreign_source else reconciliation_error
+                        ),
                     }
                 )
     if reconciliation_error:

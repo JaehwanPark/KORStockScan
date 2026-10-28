@@ -3754,3 +3754,67 @@ def test_rotated_partial_restart_preserves_newer_durable_cancel_intent(monkeypat
     assert restarted["status"] == "SELL_ORDERED"
     assert restarted["sell_odno"] == "0000456"
     assert execution_receipts.pending_sell_cancel_intent_exact(restarted, code=stock["code"], order_no="0000456")
+
+
+@pytest.mark.parametrize('phase', ['pending', 'committed', 'cold_committed'])
+@pytest.mark.parametrize('fault', [None, 'checksum', 'carried', 'prior', 'missing_pending', 'generation', 'manual', 'foreign_conflict'])
+def test_original_rotated_sell_owner_inventory_consumes_carried_phase(monkeypatch, tmp_path, phase, fault):
+    import hashlib
+    from src.tests.test_scalp_exit_safety_monitor import _CancelDB
+    fixture = Path(__file__).parent / 'fixtures/sell_receipt_carried_20261028'
+    root = tmp_path / 'sell'
+    (root / 'pending_submit').mkdir(parents=True)
+    monkeypatch.setattr(execution_receipts, 'SELL_RECEIPT_RECOVERY_DIR', root)
+    monkeypatch.setattr(execution_receipts.time, 'time', lambda: datetime.fromisoformat('2026-10-28T10:00:00+09:00').timestamp())
+    originals = {'pending_submit/49558.json': fixture / 'pending.json', '49558.json': fixture / 'receipt.json'}
+    for name, path in originals.items():
+        (root / name).write_bytes(path.read_bytes())
+    monkeypatch.setattr(execution_receipts, '_log_holding_pipeline', lambda *a, **kw: {'structured_append_succeeded': True, 'structured_append_status': 'raw_appended'})
+    target = dict(id=49558, code='218410', name='RFHIC', status='SELL_ORDERED', buy_qty=5, buy_price=50600, strategy='SCALPING')
+    record = SimpleNamespace(id=49558, stock_code='218410', stock_name='RFHIC', status='SELL_ORDERED', buy_qty=5, strategy='SCALPING', scale_in_locked=True)
+    monkeypatch.setattr(sniper_sync, 'evaluate_main_bot_control_exclusion', lambda _: SimpleNamespace(excluded=fault == 'manual'))
+    registry = SimpleNamespace(symbol_registered=lambda _: True, decision_activation_matches=lambda _: True,
+        reconcile_symbol_quantity=lambda **kw: dict(position_quantities={'main_scalping:49558':4}, external_manual_remainder=0))
+    monkeypatch.setattr(sniper_sync, 'default_order_owner_registry', lambda: registry)
+    monkeypatch.setattr(sniper_sync, 'resolve_symbol_owner_policy', lambda _: SimpleNamespace(coexistence_enabled=True, policy_id='fixture', policy_hash='a'*64))
+    monkeypatch.setattr(sniper_sync, 'ACTIVE_TARGETS', [target])
+    errors=[]
+    monkeypatch.setattr(sniper_sync, 'log_error', errors.append)
+    # First reconstruct and close the real original cancel intent, using the
+    # existing native owners with all external calls confined to offline mocks.
+    if phase != 'pending':
+        state, reason = sniper_sync._restore_sell_receipt_recovery(target_stock=target, record=record, code='218410', broker_remaining_qty=4)
+        assert state is not None, reason
+        monkeypatch.setattr(state_handlers.kiwoom_orders, 'send_cancel_order', lambda **kw: pytest.fail('no repeated cancel'))
+        monkeypatch.setattr(state_handlers, '_sell_order_terminal_absence_confirmed', lambda *a:(True,'ka10075_terminal_absence_confirmed'))
+        monkeypatch.setattr(state_handlers, '_broker_position_qty_for_sell_reconciliation', lambda *a:(4,'owner_registry_plus_all_venue_inventory'))
+        monkeypatch.setattr(state_handlers, '_terminalize_registered_main_orders', lambda **kw:(True,'owner_registry_orders_terminal'))
+        monkeypatch.setattr(state_handlers, '_log_holding_pipeline', lambda *a,**kw:None)
+        monkeypatch.setattr(state_handlers, 'ACTIVE_TARGETS', [target])
+        assert state_handlers.process_sell_cancellation(target, '218410', '0002206', _CancelDB())
+        assert target['status']=='HOLDING' and not (root/'pending_submit/49558.json').exists()
+        record.status='HOLDING'
+        if phase=='cold_committed':
+            target=dict(id=49558, code='218410', name='RFHIC', status='HOLDING', buy_qty=5, buy_price=50600, strategy='SCALPING')
+            sniper_sync.ACTIVE_TARGETS[:]=[target]
+    journal=root/'49558.json'
+    if fault=='checksum': journal.write_text('{}')
+    if fault in {'carried','prior'}:
+        body=json.loads(journal.read_bytes());s=body['payload']['receipt_state']
+        if fault=='carried': s['carried_qty']=2
+        else: s['prior_orders']['0002206']['quantity_contract_complete']=False
+        body['payload_sha256']=hashlib.sha256(json.dumps(body['payload'],ensure_ascii=True,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        journal.write_text(json.dumps(body))
+    if fault=='missing_pending' and phase=='pending': (root/'pending_submit/49558.json').unlink()
+    if fault=='generation': target['sell_submit_generation']='f'*32
+    if fault=='foreign_conflict': target.update(broker_symbol_allocation_conflict=True,sell_cancel_reconciliation_required=True,sell_cancel_reconciliation_source='multiple_active_records_share_symbol')
+    should_fail=fault is not None and not (fault=='missing_pending' and phase!='pending')
+    for _ in range(2):
+        errors.clear()
+        assert sniper_sync._preserve_coexistence_owner_inventory(record=record,code='218410',real_codes={'218410':{'qty':4}},source='periodic_account_sync')
+        assert bool(errors) is should_fail
+        assert record.buy_qty==5
+        if not should_fail:
+            assert target['buy_qty']==4 and not target.get('broker_symbol_allocation_conflict')
+            assert target['status']==('SELL_ORDERED' if phase=='pending' else 'HOLDING')
+            if phase!='pending': assert not target.get('sell_submit_generation')

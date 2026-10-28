@@ -124,6 +124,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 
 - [ ] `[HoldingProfitExitSourceContractRepair] Main 보유 익절 원천·재생·의미 계약 수리` (`Due: 2026-10-28`, `Slot: IMPLEMENTATION`, `TimeWindow: 09:00~23:59`, `Track: RuntimeStability`)
+  - 10/28 RFHIC carried 소비 수리: a55e37759/PID3200222의 기동 후 registry4/DB원수량5 불일치 재현. 활성 주문이 없는 이월 체결 및 취소 완료 단계를 native ID/해시/원체결로 검증하고 반복 대사의 타 owner 차단 보존. 최종 successor 배포·실제 잔여4/반복 경고·정책/observer/health 수용까지 OPEN. [인과·검증](../audits/postclose-root-cause-recovery-review-2026-10-19.md#rfhic-carried-inventory-consumer-repair--2026-10-28)
   - 10/28 최종 신호 시계 통합: 5f20853f6·a2b471e8f를5b45a0f8d 기반에 반영. 동일/불명/진행 중 평가 시계 유지, NOT_SENT 후 별도 기계·AI ID의 새 평가만 갱신;5초·1200ms 및 RFHIC/수량/8700 원천 계약 보존. 최종 정책 인계→P5→ordered 재기동→실제 PID/observer/health까지 이 세션 담당. 자연 수용·경제성은 별도 OPEN. [통합 리뷰](../audits/postclose-root-cause-recovery-review-2026-10-19.md#final-signal-clock-integration-and-preserved-native-preparation--2026-10-28)
   - 10/28 종료 PREOPEN 준비: 후보 P5가 종료된 원 PID의 현재 실행을 요구한 결함을 수리하고, 기존 closed scope와 독립 준비 독자에 원 PID·종료·정책 증거를 결속한다. 원 실패/hold 보존, 새 PID 소비는 기동 후 별도 검증. [원인·검증](../audits/postclose-root-cause-recovery-review-2026-10-19.md#closed-native-preopen-preparation--2026-10-28). 기존 자연 수용 창/GAP/null 유지.
   - 10/28 인계 독자 보완: 공통 검토의 다른 정책군 변경이 동일 취소대기 fixture를 거절하는 원인을 수리한다. 원본 전체 목록·해시 검증을 유지하고 해당 소비자 세대만 결속하며, 새 공통 코드의4개 독립 fixture·P5·실제 PID를 확인한다. [원인·대체 관계](../audits/postclose-root-cause-recovery-review-2026-10-19.md#capability-consumer-scope-integration--2026-10-28). 기존 자연 관측 창·GAP/null·경제성 경계는 유지한다.
