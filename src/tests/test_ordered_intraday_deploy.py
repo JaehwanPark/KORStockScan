@@ -3970,3 +3970,79 @@ def test_operator_incident_hold_cannot_transfer_before_native_preflight(driver):
     d.assert_unchanged = lambda: None
     with pytest.raises(ValueError, match="operator_hold_adoption_unverified"):
         d.acquire_hold()
+
+
+def test_preflight_rejects_pending_selection_from_another_code_generation(tmp_path, monkeypatch):
+    from src.engine.scalping import reversal_cumulative_registration as G
+    from src.engine.scalping import continuous_reversal_postclose as P
+    day='2026-10-28'
+    candidate=Path(D.__file__).resolve().parents[3]
+    old=tmp_path/'old'
+    selection=tmp_path/'data/runtime/runtime_release_selection.json'
+    selection.parent.mkdir(parents=True)
+    selection.write_text('{}')
+    monkeypatch.setattr(D.R,'selected_release',lambda *_:(old,'a'*40))
+    monkeypatch.setattr(D.R,'validate_release',lambda *a:(candidate,'b'*40))
+    monkeypatch.setattr(D.R,'git',lambda *a:'b'*40)
+    monkeypatch.setattr(G,'_validate_scoring_intent',lambda value:value)
+    P.write(G.scoring_intent_path(tmp_path/'data'),dict(publication_date=day,
+        contract_file_sha256={'old.py':'a'*64},preparation_reader_code_sha256='a'*64))
+    driver=object.__new__(D.Deployment)
+    driver.workspace=tmp_path; driver.candidate=candidate; driver.day=day
+    driver.selection=selection; driver.pin_candidate_p5=lambda:None
+    # This executes the real preflight before it can create a hold or drain.
+    with pytest.raises(ValueError,match='deployment_pending_scoring_code_changed'):
+        driver.preflight()
+    assert not (tmp_path/'data/runtime/operator_startup_hold.json').exists()
+    assert not (tmp_path/'restart.flag').exists()
+
+
+@pytest.mark.parametrize('change',['appeared','removed','changed'])
+def test_prepublication_cas_includes_pending_selection(tmp_path, monkeypatch, change):
+    from src.engine.scalping import reversal_cumulative_registration as G
+    from src.engine.scalping import continuous_reversal_postclose as P
+    day='2026-10-28'; data=tmp_path/'data'
+    path=G.scoring_intent_path(data)
+    # A different publication still has immutable pending custody to preserve.
+    monkeypatch.setattr(G,'_validate_scoring_intent',lambda value:value)
+    if change!='appeared':P.write(path,dict(publication_date='2026-10-27'))
+    driver=object.__new__(D.Deployment)
+    driver.workspace=tmp_path; driver.day=day
+    driver.pending_scoring=G.pending_scoring_code_check(data,day)
+    driver._assert_failed_transition_unchanged=lambda:None
+    if change=='removed':path.unlink()
+    else:P.write(path,dict(publication_date='2026-10-27',generation='new'))
+    with pytest.raises(ValueError,match='deployment_pending_scoring_changed'):
+        driver.assert_unchanged()
+
+
+@pytest.mark.parametrize('publication', ['2026-10-28','2026-10-29'])
+def test_pending_scoring_guard_covers_current_and_future_consumers(tmp_path, monkeypatch, publication):
+    from src.engine.scalping import reversal_cumulative_registration as G
+    from src.engine.scalping import continuous_reversal_postclose as P
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+    from src.engine.automation import postclose_summary_handoff as H
+    monkeypatch.setattr(G,'_validate_scoring_intent',lambda value:value)
+    value=dict(publication_date=publication,
+        contract_file_sha256={Path(m.__file__).name:P.file_hash(m.__file__) for m in V.contract_modules()},
+        preparation_reader_code_sha256=P.file_hash(H.__file__))
+    path=G.scoring_intent_path(tmp_path)
+    P.write(path,value)
+    assert G.pending_scoring_code_check(tmp_path,'2026-10-28')['sha256']==P.file_hash(path)
+    value['preparation_reader_code_sha256']='a'*64
+    P.write(path,value)
+    with pytest.raises(ValueError,match='pending_scoring_code_changed'):
+        G.pending_scoring_code_check(tmp_path,'2026-10-28')
+
+
+def test_stopped_recovery_preflight_preserves_pending_selection(stopped_recovery, monkeypatch):
+    from src.engine.scalping import reversal_cumulative_registration as G
+    from src.engine.scalping import continuous_reversal_postclose as P
+    driver,_,_=stopped_recovery
+    monkeypatch.setattr(G,'_validate_scoring_intent',lambda value:value)
+    P.write(G.scoring_intent_path(driver.workspace/'data'),dict(publication_date=driver.day,
+        contract_file_sha256={'old.py':'a'*64},preparation_reader_code_sha256='a'*64))
+    before=driver.hold.read_bytes()
+    with pytest.raises(ValueError,match='deployment_pending_scoring_code_changed'):
+        driver.preflight()
+    assert driver.hold.read_bytes()==before

@@ -389,6 +389,28 @@ Prepare the reviewed code-preserving release with these wrapper/consumer contrac
 The sentinel cache reader also shares bounded, short immutable field names and string values within one read. It keeps at most 2048 key strings and 8192 value strings of at most192 characters. Containers, JSON types, field values, row population, cache bytes and raw source remain unchanged; larger/unique values decode normally. This reduces repeated-object memory at some CPU cost. Verify peak RSS, full report completion and freshness under the ordinary scheduled workload; a prefix decoder benchmark is not whole-Main performance evidence.
 
 
+## Pending source-first scoring requests
+
+An approved source-first scoring intent is a pending policy consumer. The
+ordered deployment preflight checks its exact code profile before a startup
+hold or drain, and every pre-publication CAS includes its presence and byte
+identity. Scoring registration shares the release-set lock and rechecks the
+selected origin before publishing. A request created during an older writer's
+transition remains detectable by the CAS; unknown or changed code is rejected.
+
+The existing cumulative registration owner's `handoff_scoring_intent` may
+transfer the same approved recipe to an already selected, reviewed immutable
+code generation before its source machine stage starts. It independently reads
+the original and selected code, verifies both against Git, attests the unchanged
+active parent and all frozen memberships, and requires a review bound to the
+exact source and target profiles. Preserve the original intent and review in
+content-addressed evidence before native publisher/stage CAS publication.
+Dates, score specification, candidate scopes, memberships and authority cannot
+change. The operational writer binds the selected consumer's profile, never its
+own newer source. A materialized scoring contract or started stage prohibits
+this transfer. Registration, source fulfillment, policy selection and actual
+Main consumption remain separate; the handoff starts no Main or order.
+
 ## Observer verification and Sentinel I/O custody
 
 The approved I/O release uses `REVIEWED_IO_OBSERVER_SOURCES` for the exact original-to-reviewed bootstrap bytes. Only the historical health observer context enables process-local successful delay-generation reuse. Public preparation, startup, policy publication and live guards retain native full verification. Inventory signatures include source/code/date/pointer and canonical evidence shards; noncanonical trees remain fully verified. One in-flight observer validates a generation, failures remain failures during finite retry backoff, and no old success may authorize a changed generation.

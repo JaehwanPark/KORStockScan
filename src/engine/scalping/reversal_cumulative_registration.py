@@ -9,7 +9,8 @@ import hashlib
 import re
 import math
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 from fractions import Fraction
 from functools import lru_cache
 from pathlib import Path
@@ -298,6 +299,7 @@ def request_scoring(data_root, *, publication, scope_candidates, confirm, origin
     """Authorize only the frozen selection recipe; source and policy stay unset."""
     from src.engine.scalping import continuous_reversal_policy_v6 as V
     from src.engine.automation import postclose_summary_handoff as H
+    from src.engine.infrastructure import runtime_release_router as router
 
     if confirm != SCORING_AUTHORITY:
         raise ValueError("cumulative_scoring_explicit_authority_required")
@@ -330,14 +332,176 @@ def request_scoring(data_root, *, publication, scope_candidates, confirm, origin
     ))
     _validate_scoring_intent(intent)
     path = scoring_intent_path(data_root)
-    with _before_machine(data_root, publication), (path.parent/"publisher.lock").open("a") as lock:
+    with router.runtime_release_set_lock(Path(data_root).resolve().parent), _before_machine(data_root, publication), (path.parent/"publisher.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        if router.selected_release(Path(data_root).resolve().parent) != (Path(origin_root).resolve(), origin_commit):
+            raise ValueError("cumulative_scoring_selected_generation_changed")
         if N._read(path.parent/"current.json")["bundle_sha256"] != parent["bundle_sha256"]:
             raise ValueError("cumulative_scoring_parent_changed")
         if path.exists() and N._read(path) != intent:
             raise ValueError("cumulative_scoring_intent_conflict")
         P.write(path, intent)
     return intent
+
+
+def pending_scoring_code_check(data_root, publication):
+    """Include an unconsumed recipe in the deployment's pre-drain census."""
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+    from src.engine.automation import postclose_summary_handoff as H
+
+    path = scoring_intent_path(data_root)
+    if not path.exists():
+        return dict(path=str(path), sha256=None)
+    raw = path.read_bytes()
+    value = _validate_scoring_intent(json.loads(raw))
+    result = dict(path=str(path), sha256=hashlib.sha256(raw).hexdigest())
+    if value["publication_date"] >= publication:
+        code = {Path(m.__file__).name:P.file_hash(m.__file__) for m in V.contract_modules()}
+        if (value["contract_file_sha256"] != code
+                or value["preparation_reader_code_sha256"] != P.file_hash(H.__file__)):
+            raise ValueError("deployment_pending_scoring_code_changed")
+    return result
+
+
+def _scoring_handoff_context(root, commit, intent, *, data_root=None):
+    """Read each immutable generation through its own independent interpreter."""
+    import os
+    import subprocess
+
+    program = r'''
+import hashlib,json,sys
+from pathlib import Path
+from src.engine.scalping import reversal_cumulative_registration as G
+from src.engine.scalping import continuous_reversal_policy_v6 as V
+from src.engine.scalping import continuous_reversal_postclose as P
+from src.engine.automation import postclose_summary_handoff as H
+from src.engine.infrastructure import runtime_release_router as R
+request=json.load(sys.stdin)
+root=Path(request['root'])
+if R.git(root,'rev-parse','HEAD')!=request['commit']:
+    raise ValueError('scoring_handoff_origin_commit_changed')
+modules=[*V.contract_modules(),H]
+for module in modules:
+    path=Path(module.__file__).resolve()
+    relative=path.relative_to(root).as_posix()
+    # Git CLI's text reader cannot preserve arbitrary source bytes.
+    import subprocess
+    blob=subprocess.check_output(['git','-C',str(root),'show',request['commit']+':'+relative])
+    if path.read_bytes()!=blob:
+        raise ValueError('scoring_handoff_source_dirty:'+relative)
+intent=G._validate_scoring_intent(request['intent'])
+code={Path(m.__file__).name:P.file_hash(m.__file__) for m in V.contract_modules()}
+reader=P.file_hash(H.__file__)
+proposed=P.seal(dict(intent,contract_file_sha256=code,
+    preparation_reader_code_sha256=reader,
+    activation_parent_origin=dict(root=str(root),commit=request['commit'])))
+G._validate_scoring_intent(proposed)
+if request.get('data_root'):
+    parent=V._attested_activation_parent(Path(request['data_root']),intent['publication_date'],
+        origin_root=root,origin_commit=request['commit'])
+    if (parent['bundle_sha256']!=intent['parent_bundle_sha256']
+        or parent['continuous_reversal']['operating_manifest']['scopes']!=intent['frozen_parent_scopes']):
+        raise ValueError('scoring_handoff_parent_changed')
+print(json.dumps(dict(contract_file_sha256=code,preparation_reader_code_sha256=reader,proposed=proposed)))
+'''
+    request = dict(root=str(root), commit=commit, intent=intent,
+                   data_root=str(data_root) if data_root is not None else None)
+    result = subprocess.run(
+        [str(Path(root)/".venv/bin/python"), "-B", "-c", program],
+        cwd=root, env={**os.environ, "PYTHONPATH":str(root)},
+        input=json.dumps(request), text=True, capture_output=True, timeout=120,
+    )
+    if result.returncode:
+        raise ValueError("scoring_handoff_independent_reader_failed:" + result.stderr[-2000:])
+    return json.loads(result.stdout)
+
+
+def handoff_scoring_intent(data_root, *, expected_sha256, review_path, confirm):
+    """Transfer the same approval to the selected code; never alter its recipe.
+
+    This operational writer deliberately binds the independent selected reader,
+    not its own newer code profile. It neither prepares sources nor starts Main.
+    """
+    from src.engine.infrastructure import runtime_release_router as router
+    import os
+
+    if confirm != SCORING_AUTHORITY:
+        raise ValueError("cumulative_scoring_explicit_authority_required")
+    data_root = Path(data_root).resolve()
+    workspace = data_root.parent
+    path = scoring_intent_path(data_root)
+    with router.runtime_release_set_lock(workspace):
+        selected_path = workspace/"data/runtime/runtime_release_selection.json"
+        selection = selected_path.read_bytes()
+        root, commit = router.selected_release(workspace)
+        old = _validate_scoring_intent(N._read(path))
+        if P.file_hash(path) != expected_sha256:
+            raise ValueError("scoring_handoff_intent_changed")
+        if datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat() != old["publication_date"]:
+            raise ValueError("scoring_handoff_publication_expired")
+        if scoring_path(data_root).exists():
+            raise ValueError("scoring_handoff_already_materialized")
+        origin = old["activation_parent_origin"]
+        source = _scoring_handoff_context(Path(origin["root"]), origin["commit"], old)
+        target = _scoring_handoff_context(root, commit, old, data_root=data_root)
+        for key in ("contract_file_sha256", "preparation_reader_code_sha256"):
+            if source[key] != old[key]:
+                raise ValueError("scoring_handoff_original_code_changed")
+        review_raw = Path(review_path).read_bytes()
+        review_sha = hashlib.sha256(review_raw).hexdigest()
+        review = json.loads(review_raw)
+        if (review.get("status") != "reviewed"
+                or review.get("intent_sha256") != expected_sha256
+                or review.get("source_code") != {k:source[k] for k in ("contract_file_sha256", "preparation_reader_code_sha256")}
+                or review.get("target_code") != {k:target[k] for k in ("contract_file_sha256", "preparation_reader_code_sha256")}
+                or review.get("target_root") != str(root) or review.get("target_commit") != commit
+                or review.get("recipe_changed") is not False):
+            raise ValueError("scoring_handoff_review_unbound")
+        proposed = target["proposed"]
+        permitted = {"artifact_content_sha256", "contract_file_sha256",
+                     "preparation_reader_code_sha256", "activation_parent_origin"}
+        if ({k:v for k,v in old.items() if k not in permitted}
+                != {k:v for k,v in proposed.items() if k not in permitted}):
+            raise ValueError("scoring_handoff_recipe_changed")
+        if proposed == old:
+            return old
+        directory = path.parent/"scoring-intent-handoffs"/expected_sha256
+        with _before_machine(data_root, old["publication_date"]), (path.parent/"publisher.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if (router.selected_release(workspace) != (root, commit)
+                    or selected_path.read_bytes() != selection or P.file_hash(path) != expected_sha256
+                    or N._read(path.parent/"current.json")["bundle_sha256"] != old["parent_bundle_sha256"]
+                    or scoring_path(data_root).exists()):
+                raise ValueError("scoring_handoff_generation_changed")
+            predecessor = _archive(path, directory/"evidence")
+            reviewed = _archive(review_path, directory/"evidence")
+            if predecessor["sha256"] != expected_sha256 or reviewed["sha256"] != review_sha:
+                raise ValueError("scoring_handoff_evidence_changed")
+            for receipt in (predecessor, reviewed):
+                with Path(receipt["path"]).open("rb") as evidence:
+                    os.fsync(evidence.fileno())
+            fd = os.open(directory/"evidence", os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            successor = P.seal(dict(proposed, code_handoff=dict(
+                predecessor_intent=predecessor, review=reviewed,
+                predecessor_content_sha256=old["artifact_content_sha256"],
+                selection_sha256=hashlib.sha256(selection).hexdigest(),
+            )))
+            _validate_scoring_intent(successor)
+            prepared_path = directory/"successor.json"
+            if prepared_path.exists() and N._read(prepared_path) != successor:
+                raise ValueError("scoring_handoff_successor_conflict")
+            if not prepared_path.exists():
+                P.write(prepared_path, successor)
+            # The native writer publishes only after durable evidence and CAS.
+            if (router.selected_release(workspace) != (root, commit)
+                    or selected_path.read_bytes() != selection or P.file_hash(path) != expected_sha256):
+                raise ValueError("scoring_handoff_generation_changed")
+            P.write(path, successor)
+        return successor
 
 
 def fulfill_scoring(data_root, day, publication):
