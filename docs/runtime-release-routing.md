@@ -447,6 +447,22 @@ current/future approval still requires its exact consumer code. This custody
 classification proves neither source validity nor completed machine calculation
 or Main consumption, and does not permit rewriting the original approval.
 
+For a stopped next-session code change, inventory every family consumer against
+the predecessor's verified preparation before selector publication or source
+regeneration. Issue changed prepared-policy code contracts through the existing
+`prepared_policy_code_handoff.issue` owner while its original controller,
+summary, policy and verification bytes still authenticate. An active Main code
+handoff and candidate P5 do not replace this family custody. Exercise the actual
+source-date strict/controller reader too: it may consume a next-session policy
+before that session's live bootstrap exists. Missing proof stops the first write.
+
+After an origin was already invalidated, preserve it and the failed attempt.
+Use the affected native producer's verified sealed qualification/cache path to
+republish only that family, then compare its source, dates and numerical policy
+payload with the original. Rebuild its dependent summary/strict/controller and
+preparation, followed by selected P5. Do not reconstruct an origin receipt,
+manufacture a live bootstrap, relax code checks or repeat the whole wrapper.
+
 ## Observer verification and Sentinel I/O custody
 
 The approved I/O release uses `REVIEWED_IO_OBSERVER_SOURCES` for the exact original-to-reviewed bootstrap bytes. Only the historical health observer context enables process-local successful delay-generation reuse. Public preparation, startup, policy publication and live guards retain native full verification. Inventory signatures include source/code/date/pointer and canonical evidence shards; noncanonical trees remain fully verified. One in-flight observer validates a generation, failures remain failures during finite retry backoff, and no old success may authorize a changed generation.
