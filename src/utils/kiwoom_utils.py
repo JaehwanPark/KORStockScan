@@ -2244,7 +2244,7 @@ def get_stock_eligibility_map_ka10099(
         normalize_stock_code(code) for code in (target_codes or []) if code
     }
     requested_codes = {
-        code for code in requested_codes if code and code.isdigit() and len(code) == 6
+        code for code in requested_codes if is_canonical_stock_code(code)
     }
     # None explicitly requests every returned listing. An empty iterable keeps
     # the existing no-call contract used by EOD and offline callers.
@@ -2350,9 +2350,7 @@ def get_stock_eligibility_map_ka10099(
                     continue
                 code = normalize_stock_code(item.get("code"))
                 if (
-                    not code
-                    or not code.isdigit()
-                    or len(code) != 6
+                    not is_canonical_stock_code(code)
                     or (not all_listings and code not in requested_codes)
                 ):
                     continue
@@ -2395,7 +2393,7 @@ def get_stock_eligibility_map_ka10099(
                 }
                 previous = result.get(code)
                 if previous is not None and (
-                    (runtime_prepare and previous.get("quality_state") == "CONFLICT")
+                    previous.get("quality_state") == "CONFLICT"
                     or any(
                         previous.get(field) != snapshot.get(field)
                         for field in (
@@ -2479,11 +2477,7 @@ def get_stock_eligibility_map_ka10099(
         "official_upstream_commit": source_revision,
         "eligibility_source_revision": source_revision,
         "official_upstream_paths": [
-            (
-                "kiwoom/_data/kiwoom_api_spec.json#종목정보-리스트-ka10099"
-                if runtime_prepare
-                else "kiwoom_docs/종목정보.md#종목정보-리스트-ka10099"
-            ),
+            "kiwoom/_data/kiwoom_api_spec.json#종목정보-리스트-ka10099",
             "kiwoom/specs.py",
         ],
     }
