@@ -5,6 +5,137 @@ import pytest
 from src.engine import holding_exit_observation_report as report_mod
 
 
+def test_partitioned_actual_projection_preserves_native_cost_and_buy_identity(
+    tmp_path, monkeypatch
+):
+    from src.engine.lifecycle import research_storage as storage
+    from src.engine.scalping.pre_submit_delay_initial_policy import digest
+
+    assembly, out = tmp_path / "assembly", tmp_path / "out"
+    assembly.mkdir()
+    native = dict(
+        id=49558,
+        code="218410",
+        status="COMPLETED",
+        strategy="SCALPING",
+        rec_date="2026-10-28",
+        completion_observed_date="2026-10-28",
+        entry_mode="normal",
+        terminal_population_scope="real_record_bound",
+        strict_completion_status="eligible",
+        strict_completion_reasons=[],
+        sell_quantity_conserved=True,
+        terminal_profit_rate_reconciled=True,
+        realized_pnl_krw_source="broker_actual_fee_reconciled",
+        broker_actual_cost_observed=True,
+        broker_actual_fees_taxes_krw=12,
+        profit_rate=0.5,
+        realized_pnl_krw=100,
+        holding_path_buy_fill_identity="a" * 64,
+        actual_cost_reconciliation={"status": "actual_cost_reconciled"},
+    )
+    # Exercise the real structural projection used before freeze_replay_trade.
+    from src.engine.lifecycle.research_json_stream import TRADE_FIELDS
+
+    frozen = dict(
+        schema="holding_path_frozen_trade_v1",
+        trade={k: native.get(k) for k in TRADE_FIELDS},
+    )
+    actual = dict(
+        evidence_kind="actual_completed",
+        owner="main",
+        position_key="49558",
+        symbol="218410",
+        holding_path_diagnostic_ref=storage.write_tree(assembly, [frozen]),
+    )
+    missing = dict(
+        evidence_kind="actual_completed",
+        owner="main",
+        position_key="49559",
+        symbol="053800",
+    )
+    counterfactual = dict(
+        evidence_kind="enter_pass_opportunity_cf",
+        position_key="cf",
+        actual_cost_reconciliation={"status": "actual_cost_reconciled"},
+    )
+    part = dict(positions=[actual, missing, counterfactual])
+    part["artifact_sha256"] = digest(part)
+    (assembly / "part.json").write_text(json.dumps(part))
+    refs = storage.write_tree(
+        assembly, [dict(path="part.json", artifact_sha256=digest(part))]
+    )
+    ref = report_mod._partitioned_profit_exit_outcomes(
+        assembly, out, refs, clean_start="2026-09-29"
+    )
+    rows = list(storage.iter_tree(out, ref))
+    assert [r["record_id"] for r in rows] == ["49558", "49559"]
+    assert rows[0]["holding_path_buy_fill_identity"] == "a" * 64
+    assert rows[0]["actual_cost_reconciliation"] == native["actual_cost_reconciliation"]
+    assert rows[0]["strict_completed_position"] is True
+    assert rows[1]["strict_completed_position"] is False
+    assert rows[1]["actual_cost_reconciliation"] is None
+    assert rows[1]["projection_gap"] == "holding_actual_projection_missing"
+
+    # Exercise the actual fallback caller: a research checkpoint must never
+    # be published as the completed-position observation reference again.
+    from src.engine.lifecycle import holding_window_generation
+    from src.engine.scalping import holding_path_vote_replay, holding_vote_experiment
+    from src.engine.monitoring import policy_generation_contract
+
+    manifest = dict(
+        partitions_ref=refs,
+        consumed_dates=["2026-10-28"],
+        as_of=1793156400,
+        approved_parent_receipt=dict(classifier_version="test"),
+    )
+    manifest["artifact_sha256"] = digest(manifest)
+    (assembly / "manifest.json").write_text(json.dumps(manifest))
+    monkeypatch.setattr(
+        report_mod,
+        "_analysis_window_start",
+        lambda **kw: (
+            "2026-09-29",
+            dict(
+                evaluation_start_date="2026-09-29",
+                policy_refresh_start_date="2026-09-29",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        holding_window_generation,
+        "capture_window",
+        lambda *a, **kw: dict(dependencies={}, input_window_generation_sha256="b" * 64),
+    )
+    monkeypatch.setattr(
+        holding_path_vote_replay,
+        "summarize_frozen_holding_path_votes",
+        lambda *a, **kw: dict(source_status="source_bound"),
+    )
+    monkeypatch.setattr(
+        holding_vote_experiment,
+        "native_research",
+        lambda *a, **kw: dict(status="hold", selected_cells=[]),
+    )
+    monkeypatch.setattr(policy_generation_contract, "native", lambda *a, **kw: {})
+    result = dict(
+        assembly_census={},
+        status="complete",
+        common_population_evaluation={},
+        partition_results_ref={"count": 999},
+    )
+    report = report_mod._partitioned_holding_report(
+        "2026-10-28", None, result, out, assembly
+    )
+    assert report["position_outcomes_ref"] == ref
+    assert report["position_outcomes_ref"] != result["partition_results_ref"]
+    assert (
+        report["meta"]["position_outcomes_schema"]
+        == "holding_profit_exit_observation_rows_v1"
+    )
+    assert report["completed_population_quality"]["canonical_main_completed_rows"] == 2
+
+
 def _write_json(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")

@@ -26,6 +26,213 @@ MECHANICAL_FIELDS = {
 }
 
 
+def _partitioned_observation(tmp_path, monkeypatch, record_id="49558"):
+    from src.engine.lifecycle import research_storage as storage
+    from src.engine.scalping.pre_submit_delay_initial_policy import digest
+    from src.engine.lifecycle.holding_window_generation import byte_generation
+
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    day = "2026-10-28"
+    root = tmp_path / "report/main_all_scope_trailing" / day / "generations/source"
+    rows = [
+        dict(
+            record_id=record_id,
+            holding_path_buy_fill_identity="a" * 64,
+            completed_valid_profit=True,
+            strict_completed_position=True,
+            sell_quantity_conserved=True,
+            profit_rate=0.5,
+            realized_pnl_krw=100,
+            actual_cost_reconciliation=dict(
+                status="actual_cost_reconciled",
+                cost_available_at="2026-10-28T11:00:00+09:00",
+                reconciled_at="2026-10-28T11:00:00+09:00",
+            ),
+        )
+    ]
+    ref = storage.write_tree(root, rows)
+    research_path = root / ("research_" + day + ".json")
+    research = dict(schema="main_all_scope_exit_research_v2", source_date=day)
+    research["artifact_sha256"] = digest(research)
+    research_path.write_text(json.dumps(research))
+    report = dict(
+        date=day,
+        meta=dict(
+            storage_schema="main_holding_cohort_reference_v2",
+            position_outcomes_schema="holding_profit_exit_observation_rows_v1",
+            knowledge_cutoff="2026-10-28T11:00:00+09:00",
+        ),
+        completed_population_quality=dict(canonical_main_completed_rows=1),
+        position_outcomes_ref=ref,
+        all_scope_trailing_research=dict(
+            report_path=str(research_path),
+            report_generation=byte_generation(research_path),
+        ),
+    )
+    path = (
+        tmp_path
+        / "report/monitor_snapshots"
+        / ("holding_exit_observation_" + day + ".json")
+    )
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(report))
+    return path, root, report
+
+
+def test_partitioned_native_observation_is_consumed_without_research_checkpoint_replay(
+    tmp_path, monkeypatch
+):
+    path, root, report = _partitioned_observation(tmp_path, monkeypatch)
+    observed = sentinel.load_observation_report(report["date"])
+    assert (
+        observed["position_outcomes"][0]["holding_path_buy_fill_identity"] == "a" * 64
+    )
+    assert observed["completed_population_quality"][
+        "strict_completed_position_ids"
+    ] == ["49558"]
+    assert (
+        sentinel._observation_metrics(observed)["strict_completed_position_count"] == 1
+    )
+    assert "trailing_evaluated" not in sentinel._observation_metrics(observed)
+    assert observed["_observation_projection"]["rows"] == 1
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "old_checkpoint_shape",
+        "missing",
+        "changed",
+        "foreign_root",
+        "traversal",
+        "duplicate",
+        "wrong_count",
+        "wrong_date",
+        "new_generation",
+        "mixed_generation",
+        "boolean_count",
+        "missing_research",
+        "changed_research",
+    ],
+)
+def test_partitioned_observation_invalid_sources_fail_closed(
+    tmp_path, monkeypatch, defect
+):
+    from src.engine.lifecycle import research_storage as storage
+
+    path, root, report = _partitioned_observation(tmp_path, monkeypatch)
+    if defect == "old_checkpoint_shape":
+        report["meta"].pop("position_outcomes_schema")
+    elif defect in {"missing", "changed"}:
+        leaf = root / report["position_outcomes_ref"]["path"]
+        if defect == "missing":
+            leaf.unlink()
+        else:
+            leaf.write_text("{}")
+    elif defect == "foreign_root":
+        report["all_scope_trailing_research"]["report_path"] = str(
+            tmp_path / "foreign/research.json"
+        )
+    elif defect == "traversal":
+        report["all_scope_trailing_research"]["report_path"] = str(
+            root / "../../../../../foreign/research.json"
+        )
+    elif defect == "wrong_date":
+        report["all_scope_trailing_research"]["report_path"] = str(
+            tmp_path / "report/main_all_scope_trailing/2026-10-27/research.json"
+        )
+    elif defect == "new_generation":
+        report["all_scope_trailing_research"]["report_generation"]["sha256"] = "b" * 64
+    elif defect == "mixed_generation":
+        report["all_scope_trailing_research"]["report_generation"][
+            "path"
+        ] = "other.json"
+    elif defect == "wrong_count":
+        report["completed_population_quality"]["canonical_main_completed_rows"] = 2
+    elif defect == "boolean_count":
+        report["completed_population_quality"]["canonical_main_completed_rows"] = True
+    elif defect in {"missing_research", "changed_research"}:
+        research = (
+            root / report["all_scope_trailing_research"]["report_generation"]["path"]
+        )
+        if defect == "missing_research":
+            research.unlink()
+        else:
+            research.write_text("{}")
+    else:
+        row = next(iter(storage.iter_tree(root, report["position_outcomes_ref"])))
+        report["position_outcomes_ref"] = storage.write_tree(root, [row, row])
+        report["completed_population_quality"]["canonical_main_completed_rows"] = 2
+    path.write_text(json.dumps(report))
+    with pytest.raises(ValueError, match="holding_observation|research_shard"):
+        sentinel.load_observation_report(report["date"])
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        None,
+        "missing_cost",
+        "research_cost",
+        "future_cost",
+        "other_buy",
+        "quantity",
+        "excluded",
+    ],
+)
+def test_partitioned_observation_reaches_profit_auditor_with_cost_guards(
+    tmp_path, monkeypatch, defect
+):
+    from src.engine.lifecycle import research_storage as storage
+
+    path, root, source = _partitioned_observation(tmp_path, monkeypatch, record_id="21")
+    row = next(iter(storage.iter_tree(root, source["position_outcomes_ref"])))
+    if defect == "missing_cost":
+        row["actual_cost_reconciliation"] = None
+    elif defect == "research_cost":
+        row["actual_cost_reconciliation"]["status"] = "broker_confirmed_total_allocated"
+    elif defect == "future_cost":
+        row["actual_cost_reconciliation"][
+            "cost_available_at"
+        ] = "2026-10-28T13:00:00+09:00"
+    elif defect == "other_buy":
+        row["holding_path_buy_fill_identity"] = "b" * 64
+    elif defect == "quantity":
+        row["sell_quantity_conserved"] = False
+    elif defect == "excluded":
+        row["strict_completed_position"] = False
+    source["position_outcomes_ref"] = storage.write_tree(root, [row])
+    path.write_text(json.dumps(source))
+    event, mechanical, rows, lineage, at = _semantic_flow(day=source["date"])
+    rows.extend(
+        [
+            event(2, "exit_signal", {**lineage, "buy_qty": 1}),
+            event(3, "sell_order_sent", {**lineage, "ord_no": "001", "qty": 1}),
+            event(
+                4,
+                "sell_completed",
+                {
+                    **lineage,
+                    "order_no": "001",
+                    "remaining_sell_qty": 0,
+                    "holding_path_terminal_signal_binding": "same_position_buy_generation",
+                },
+            ),
+        ]
+    )
+    checked = audit_profit_exit_flow(
+        rows,
+        target_date=source["date"],
+        load_votes=lambda _: [],
+        observation=sentinel.load_observation_report(source["date"]),
+        mechanical_policy_receipt=mechanical,
+        consumed_pid=42,
+        as_of=at + timedelta(hours=2),
+    )
+    assert checked["lifecycle"][0]["lifecycle_state"] == "completed"
+    assert (checked["economics_status"] == "verified") is (defect is None)
+
+
 @pytest.mark.parametrize("use_cache", [False, True])
 def test_mixed_timezone_rows_use_the_same_kst_clock_in_sort_and_windows(
     tmp_path, monkeypatch, use_cache

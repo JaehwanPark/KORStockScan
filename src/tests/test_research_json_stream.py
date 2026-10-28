@@ -17,6 +17,7 @@ def test_resident_native_projection_matches_legacy_stream_without_raw_read(tmp_p
         id="native",
         strategy="SCALPING",
         status="COMPLETED",
+        holding_path_buy_fill_identity="a" * 64,
         stock_code="123456",
         buy_fill_legs=[dict(at=DAY + "T09:00:00", qty=2, amount_krw=200)],
         sell_fill_legs=[dict(at=DAY + "T09:01:00", qty=2, amount_krw=202)],
@@ -33,6 +34,7 @@ def test_resident_native_projection_matches_legacy_stream_without_raw_read(tmp_p
     old = list(completed_rows(path, tmp_path / "old"))
     new = list(resident_completed_rows([row], tmp_path / "new"))
     assert storage.logical_value(old) == storage.logical_value(new)
+    assert new[0][0]["holding_path_buy_fill_identity"] == "a" * 64
 
 
 @pytest.mark.parametrize(

@@ -3150,6 +3150,63 @@ def build_holding_exit_observation_report(
         _SOURCE_ROOT.reset(root_token)
 
 
+def _partitioned_profit_exit_outcomes(assembly, out, partitions, *, clean_start):
+    """Project original completed receipts, never research checkpoint outcomes."""
+    from src.engine.lifecycle import research_storage as storage
+    from src.engine.automation.main_trailing_all_scope_research import _sealed
+    from src.engine.scalping.holding_path_vote_replay import _same_completed_position
+
+    def rows():
+        for part in storage.iter_tree(assembly, partitions):
+            payload = _sealed(
+                storage.safe_path(assembly, part["path"]), part["artifact_sha256"]
+            )
+            for position in payload["positions"]:
+                if position["evidence_kind"] != "actual_completed":
+                    continue
+                ref = position.get("holding_path_diagnostic_ref")
+                frozen = (
+                    list(storage.iter_tree(assembly, ref))
+                    if isinstance(ref, dict) and ref.get("count") == 1
+                    else []
+                )
+                valid = (
+                    len(frozen) == 1
+                    and frozen[0].get("schema") == "holding_path_frozen_trade_v1"
+                    and _same_completed_position(position, frozen[0].get("trade") or {})
+                )
+                trade = frozen[0]["trade"] if valid else {}
+                gap = (
+                    frozen[0].get("source_gap")
+                    if valid
+                    else "holding_actual_projection_missing"
+                )
+                reasons = _strict_completed_reasons(trade, clean_start=clean_start)
+                if gap:
+                    reasons.append(gap)
+                yield dict(
+                    record_id=position["position_key"],
+                    **{
+                        key: trade.get(key)
+                        for key in (
+                            "holding_path_buy_fill_identity",
+                            "actual_cost_reconciliation",
+                            "sell_quantity_conserved",
+                            "profit_rate",
+                            "realized_pnl_krw",
+                            "exact_sell_fill_time",
+                        )
+                    },
+                    completed_valid_profit=_is_valid_completed_trade(trade),
+                    strict_completed_position=not reasons
+                    and _is_valid_completed_trade(trade),
+                    strict_completion_reasons=sorted(set(reasons)),
+                    projection_gap=gap,
+                )
+
+    return storage.write_tree(out, rows())
+
+
 def _partitioned_holding_report(target_date, month_start, result, out, assembly):
     """Keep the complete actual cohort as sealed refs, never an empty list.
 
@@ -3165,14 +3222,15 @@ def _partitioned_holding_report(target_date, month_start, result, out, assembly)
         target_date=target_date, month_start=month_start
     )
 
-    def actual_ids():
-        for part in storage.iter_tree(assembly, manifest["partitions_ref"]):
-            payload = _sealed(assembly / part["path"])
-            for position in payload["positions"]:
-                if position["evidence_kind"] == "actual_completed":
-                    yield position["position_key"]
-
-    actual_ref = storage.write_tree(out, actual_ids())
+    outcomes_ref = _partitioned_profit_exit_outcomes(
+        assembly,
+        out,
+        manifest["partitions_ref"],
+        clean_start=window["evaluation_start_date"],
+    )
+    actual_ref = storage.write_tree(
+        out, (row["record_id"] for row in storage.iter_tree(out, outcomes_ref))
+    )
     from src.engine.lifecycle.holding_window_generation import capture_window
 
     dependency = capture_window(
@@ -3296,7 +3354,7 @@ def _partitioned_holding_report(target_date, month_start, result, out, assembly)
         cohorts=dict(
             actual_completed=dict(population_ids_ref=actual_ref, n=actual_ref["count"])
         ),
-        position_outcomes_ref=result["partition_results_ref"],
+        position_outcomes_ref=outcomes_ref,
         holding_path_vote_replay=votes,
         trailing_mechanical_market_tuning=market_tuning,
         input_window_dependencies=dependency,
@@ -3309,6 +3367,7 @@ def _partitioned_holding_report(target_date, month_start, result, out, assembly)
         meta=dict(
             schema_version=SCHEMA_VERSION,
             storage_schema="main_holding_cohort_reference_v2",
+            position_outcomes_schema="holding_profit_exit_observation_rows_v1",
             basis="main-only, normal_only, post_fallback_deprecation",
             legacy_display_diagnostics="partitioned",
             knowledge_cutoff=datetime.fromtimestamp(

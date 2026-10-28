@@ -61,6 +61,7 @@ TRADE_FIELDS = frozenset(
         "buy_fill_amount",
         "trailing_replay_cost_model",
         "actual_cost_reconciliation",
+        "holding_path_buy_fill_identity",
         "entry_quote_route",
         "entry_quote_item",
         "trailing_observation_source_gap",

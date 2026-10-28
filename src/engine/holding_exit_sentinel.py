@@ -377,10 +377,98 @@ def load_observation_report(target_date: str) -> dict[str, Any] | None:
         payload = json.loads(raw)
         if not isinstance(payload, dict) or payload.get("date") != target_date:
             return None
-        payload["_source_sha256"] = hashlib.sha256(raw).hexdigest()
-        return payload
     except Exception:
         return None
+    payload["_source_sha256"] = hashlib.sha256(raw).hexdigest()
+    if (payload.get("meta") or {}).get(
+        "storage_schema"
+    ) != "main_holding_cohort_reference_v2":
+        return payload
+    from src.engine.lifecycle import research_storage as storage
+    from src.engine.lifecycle.research_input_budget import Claim
+
+    if (
+        payload["meta"].get("position_outcomes_schema")
+        != "holding_profit_exit_observation_rows_v1"
+    ):
+        raise ValueError("holding_observation_actual_projection_missing")
+    research = (payload.get("all_scope_trailing_research") or {}).get("report_path")
+    root = Path(research).parent if isinstance(research, str) else path.parent
+    allowed = DATA_DIR / "report/main_all_scope_trailing" / target_date
+    if (
+        not root.is_absolute()
+        or not root.resolve().is_relative_to(allowed.resolve())
+        or any(parent.is_symlink() for parent in (root, *root.parents))
+    ):
+        raise ValueError("holding_observation_projection_root_invalid")
+    from src.engine.automation.main_trailing_all_scope_research import _sealed
+
+    generation = payload["all_scope_trailing_research"].get("report_generation") or {}
+    if generation.get("path") != Path(research).name:
+        raise ValueError("holding_observation_research_generation_missing")
+    research_path = storage.safe_path(root, generation["path"])
+    sources = {}
+    try:
+        native = _sealed(research_path, generations=sources)
+    except (OSError, ValueError) as exc:
+        raise ValueError("holding_observation_research_unavailable") from exc
+    if (
+        sources[str(research_path)] != generation.get("sha256")
+        or research_path.stat().st_size != generation.get("size")
+        or native.get("schema") != "main_all_scope_exit_research_v2"
+        or native.get("source_date") != target_date
+    ):
+        raise ValueError("holding_observation_research_generation_mismatch")
+    rows, seen, logical_bytes = [], set(), 0
+    try:
+        with Claim(0) as claim:
+            for row in storage.iter_tree(root, payload["position_outcomes_ref"]):
+                row_size = len(storage.encoded(row))
+                logical_bytes += row_size
+                if logical_bytes + len(raw) + generation["size"] > 64 * 1024 * 1024:
+                    raise ValueError("holding_observation_projection_budget")
+                claim.grow(row_size * 8)
+                record = row.get("record_id")
+                if (
+                    not isinstance(record, str)
+                    or not record.isdigit()
+                    or int(record) <= 0
+                    or record in seen
+                    or type(row.get("strict_completed_position")) is not bool
+                    or type(row.get("completed_valid_profit")) is not bool
+                ):
+                    raise ValueError("holding_observation_projection_identity_invalid")
+                seen.add(record)
+                rows.append(row)
+    except (OSError, KeyError, TypeError) as exc:
+        raise ValueError("holding_observation_projection_unavailable") from exc
+    population = payload.get("completed_population_quality") or {}
+    if (
+        type(population.get("canonical_main_completed_rows")) is not int
+        or len(rows) != population["canonical_main_completed_rows"]
+    ):
+        raise ValueError("holding_observation_projection_population_mismatch")
+    payload["position_outcomes"] = rows
+    payload["completed_population_quality"] = {
+        **population,
+        "db_completed_valid_profit_ids": [
+            r["record_id"] for r in rows if r["completed_valid_profit"]
+        ],
+        "strict_completed_position_ids": [
+            r["record_id"] for r in rows if r["strict_completed_position"]
+        ],
+        "source_gap_ids": [
+            r["record_id"] for r in rows if not r["strict_completed_position"]
+        ],
+    }
+    payload["_observation_projection"] = dict(
+        schema=payload["meta"]["position_outcomes_schema"],
+        rows=len(rows),
+        logical_bytes=logical_bytes,
+        root=str(root),
+        source=payload["position_outcomes_ref"],
+    )
+    return payload
 
 
 def previous_trading_day_with_events(
@@ -889,6 +977,18 @@ def _observation_metrics(observation: dict[str, Any] | None) -> dict[str, Any]:
     funnel = readiness.get("funnel_ids") or {}
     operational_axes = readiness.get("operational_axes") or {}
     population = observation.get("completed_population_quality") or {}
+    if (observation.get("meta") or {}).get(
+        "storage_schema"
+    ) == "main_holding_cohort_reference_v2":
+        return {
+            "completed_valid_count": len(population["db_completed_valid_profit_ids"]),
+            "strict_completed_position_count": len(
+                population["strict_completed_position_ids"]
+            ),
+            "strict_completion_source_gap_count": len(population["source_gap_ids"]),
+            "diagnostic_scope": "actual_receipts_only_legacy_diagnostics_unassessed",
+            "trailing_mechanical_status": mechanical.get("status"),
+        }
     return {
         "completed_valid_count": len(
             population.get("db_completed_valid_profit_ids") or []
@@ -1549,6 +1649,7 @@ def build_holding_exit_sentinel_report(
                 observation.get("_source_sha256") if observation else None
             ),
             "metrics": obs_metrics,
+            "projection": (observation or {}).get("_observation_projection"),
             "decision_authority": "cross_venue_observation_diagnostic_only",
         },
         "profit_exit_semantics": profit_semantics,
