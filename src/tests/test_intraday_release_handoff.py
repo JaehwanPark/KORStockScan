@@ -5424,7 +5424,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_SELL_CANCEL_PROFILE,
+        "current": handoff.REVIEWED_HOLDING_SOURCE_PROFILE,
         "issuer_bytes_source": handoff.REVIEWED_ISSUER_BYTES_PROFILE,
         "inventory_origin_source": handoff.REVIEWED_INVENTORY_ORIGIN_PROFILE,
         "quantity_source": handoff.REVIEWED_QUANTITY_SOURCE_PROFILE,
@@ -6991,3 +6991,9 @@ def test_quantity_cost_handoff_rejects_incomplete_successor(tmp_path, family, de
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, fault, "current", dependency
     )
+
+@pytest.mark.parametrize('family', ['main_stop','holding_vote','pre_submit_delay'])
+@pytest.mark.parametrize('dependency', sorted(handoff.REVIEWED_HOLDING_SOURCE_HASHES))
+@pytest.mark.parametrize('fault', ['missing','dirty','committed_change','parent_mix'])
+def test_integrated_holding_source_rejects_incomplete_successor(tmp_path, family, dependency, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path,family,fault,'current',dependency)

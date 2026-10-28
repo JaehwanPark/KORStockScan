@@ -12790,6 +12790,29 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     for name, current in REVIEWED_SELL_CANCEL_HASHES.items()
 }}
 
+# Exact integrated holding evidence and bounded copy over the complete SELL profile.
+REVIEWED_HOLDING_SOURCE_HASHES = {'src/engine/sniper_state_handlers.py': '0c8c1874583f1ff23993b23e3187289d205c155bc257b3cb89e4f839a26a4d2c', 'src/engine/scalping/trailing_entry_research_source.py': '44b82ff0440a95ed186b49dcbf340099b807850dbe76c15162e501553f07c705', 'src/engine/scalping/universal_trailing_replay.py': '26d175fc0ea9e17122214ce39fcdfd8fb48e6b11d7d26ac6bb97ef1bc9a3d66b', 'src/engine/automation/main_trailing_research_diagnostics.py': 'ed6483510949b113e675532881a3c40ceed40f2103698bfbd40f736bc6b872e5', 'src/engine/automation/main_trailing_source_reuse.py': '04e8748ad7e027b2152d36c90e49b4c300c96e4b546ded76d8537ab1b2701780', 'src/engine/infrastructure/startup_validation_code_context.py': '006ee9f1f7e779826bc7d83983e8ab1da7eb1948a4c6c952e708abfedbd93c54'}
+REVIEWED_HOLDING_SOURCE_ORIGINS = {'src/engine/sniper_state_handlers.py': '739fa0bfc847af66436d59ce1ff15be2959dd5f9f4c69152bbd55b33600ae0ab', 'src/engine/scalping/trailing_entry_research_source.py': '661977bb6561e0a5fbaba8e69d7aea5cebb519c1ebebc19bbafee1cffca03ff0', 'src/engine/scalping/universal_trailing_replay.py': 'e3ae3ca14fab06562c90e28f17cc7565b4fba667e241fecfae18aa6b690923d7', 'src/engine/automation/main_trailing_research_diagnostics.py': '3e89be5cc9f924225ebbd3fc8164c9e3d22f82f2303493c96fbd4df1c4583feb', 'src/engine/automation/main_trailing_source_reuse.py': '1ca065ee8e90c19da97fa49273cefbd36b13ab644ca816c4bffbc733ad449755', 'src/engine/infrastructure/startup_validation_code_context.py': '17294725212fc8a597c22755cbf7c39d7cdcad62435ebad63c98035e2ab97e48'}
+REVIEWED_HOLDING_SOURCE_PROFILE = {**REVIEWED_SELL_CANCEL_PROFILE, **REVIEWED_HOLDING_SOURCE_HASHES}
+REVIEWED_HOLDING_SOURCE_VARIANTS = {
+    (key[0], REVIEWED_HOLDING_SOURCE_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_path": "src/engine/sniper_state_handlers.py",
+        "selector_sha256": REVIEWED_HOLDING_SOURCE_HASHES["src/engine/sniper_state_handlers.py"],
+        "dependencies": {**value["dependencies"], **REVIEWED_HOLDING_SOURCE_HASHES},
+        "contract_extensions": {
+            origin: {name: REVIEWED_HOLDING_SOURCE_HASHES.get(os.path.normpath(name), sha) for name, sha in paths.items()}
+            for origin, paths in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_SELL_CANCEL_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (old, current) for old in {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_HOLDING_SOURCE_ORIGINS[name]})
+    for name, current in REVIEWED_HOLDING_SOURCE_HASHES.items()
+}}
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -13659,6 +13682,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_SELL_CANCEL_PROFILE
         prepared_variants = REVIEWED_SELL_CANCEL_VARIANTS
+    if (
+        (source := candidate_bytes("src/engine/sniper_state_handlers.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_HOLDING_SOURCE_HASHES["src/engine/sniper_state_handlers.py"]
+    ):
+        prepared_hashes = REVIEWED_HOLDING_SOURCE_PROFILE
+        prepared_variants = REVIEWED_HOLDING_SOURCE_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

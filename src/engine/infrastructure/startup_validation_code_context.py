@@ -3110,6 +3110,18 @@ for _name, _sha in REVIEWED_SELL_CANCEL_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# Exact initial context, native quote/GAP and bounded normalized-copy successor.
+REVIEWED_HOLDING_SOURCE_SOURCES = {'src/engine/sniper_state_handlers.py': '0c8c1874583f1ff23993b23e3187289d205c155bc257b3cb89e4f839a26a4d2c', 'src/engine/scalping/trailing_entry_research_source.py': '44b82ff0440a95ed186b49dcbf340099b807850dbe76c15162e501553f07c705', 'src/engine/scalping/universal_trailing_replay.py': '26d175fc0ea9e17122214ce39fcdfd8fb48e6b11d7d26ac6bb97ef1bc9a3d66b', 'src/engine/automation/main_trailing_research_diagnostics.py': 'ed6483510949b113e675532881a3c40ceed40f2103698bfbd40f736bc6b872e5', 'src/engine/automation/main_trailing_source_reuse.py': '04e8748ad7e027b2152d36c90e49b4c300c96e4b546ded76d8537ab1b2701780'}
+REVIEWED_HOLDING_SOURCE_ORIGINS = {'src/engine/sniper_state_handlers.py': '739fa0bfc847af66436d59ce1ff15be2959dd5f9f4c69152bbd55b33600ae0ab', 'src/engine/scalping/trailing_entry_research_source.py': '661977bb6561e0a5fbaba8e69d7aea5cebb519c1ebebc19bbafee1cffca03ff0', 'src/engine/scalping/universal_trailing_replay.py': 'e3ae3ca14fab06562c90e28f17cc7565b4fba667e241fecfae18aa6b690923d7', 'src/engine/automation/main_trailing_research_diagnostics.py': '3e89be5cc9f924225ebbd3fc8164c9e3d22f82f2303493c96fbd4df1c4583feb', 'src/engine/automation/main_trailing_source_reuse.py': '1ca065ee8e90c19da97fa49273cefbd36b13ab644ca816c4bffbc733ad449755'}
+for _name, _sha in REVIEWED_HOLDING_SOURCE_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_HOLDING_SOURCE_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
     # An already reviewed physical pair keeps its original authority; a
     # formatting projection must not replace either endpoint before this check.

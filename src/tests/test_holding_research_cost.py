@@ -348,6 +348,8 @@ def test_native_missing_exact_cost_label_allows_allocated_research_only(
         profit_rate=0.8, main_lifecycle_execution_occurred_at=DAY + "T10:01:01+09:00"
     )
     trade = producer._completed_trade_projection(raw, events, {})
+    # The cost consumer receives the published JSON array, not its writer FD.
+    trade["timeline"] = list(trade["timeline"])
     assert "source_gap_exact_cost_missing" in trade["strict_completion_reasons"]
     if additional_reason:
         trade["strict_completion_reasons"].append(additional_reason)

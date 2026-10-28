@@ -5063,3 +5063,66 @@ Baseline29a3c1475 aggregate delta: source +682/-53, tests +708/-17, docs +544/-0
 adds exact custody/closure checks and failure coverage inside existing owners;
 no new executable entrypoint. Final diff/compile and print-only document parser
 passed. Deployment and natural acceptance are not claimed by this code closure.
+
+#### Integrated holding source and bounded deployment recovery — 2026-10-28
+
+The operator added8700cacbd5f0014586f3cdb2317d014396b43971 to the latest2d4892980
+integration. Cherry-pick e96ba18cf was conflict-free; RFHIC inventory/cancel,
+late-response ownership, startup pending restoration and quantity/cost changes
+remain. Shared handler review covers common INITIAL context capture, native0D
+orderbook/BBO/clock/sequence, ordinary/fast exit observations and terminal state
+ownership. The [source package](../../tmp/ahnlab-trailing-source-repair-20261028/deployment-handoff/HANDOFF.md)
+and [original review](main-holding-exit-opportunity-research-review-2026-10-23.md#8-2026-10-28-안랩-진입-연결재생-원천-수리와-공동-연구)
+are source evidence, not final P5 or PID acceptance. The72-arm diagnostics remain
+report-only; unknown fees/venue, historical missing context and GAP stay unknown.
+
+The source27 quantity successor completed with37 input/34 eligible trades,
+including recovered49415 native research BUY evidence. Original committed stage,
+policy/bootstrap/selector and actual-cost nulls are unchanged. The first long
+invocation exhausted its600-second digest reuse window after successful replay;
+its failure and completed checkpoint remain. A fresh native proof session
+reauthenticated the same census and all feature caches, scanned no raw pipeline
+again, completed timeout/following research and published a code-specific stage.
+[Native successor](../../tmp/rfhic-sell-timeout-20261028/quantity-native-successor.json)
+records81.55 seconds for the remaining stages,15 native read-only candle queries,
+and no order call. Research allocation is not broker-confirmed actual net PnL.
+
+Native trailing preparation then reproduced a causal deployment blocker:
+684,412,384 bytes of normalized input exceeded the existing512MiB copy batch.
+The previous owner raised copy_checkpoint_required before saving any progress,
+so retrying could never finish. The existing prepare owner now seals an exact
+source inventory, copies bounded files atomically under the existing combined
+4GiB disk reservation, preserves completed files across each512MiB batch, and
+publishes its manifest only after full source/target verification. No limit is
+raised; partial progress never means full native replay. Source changes, damaged
+copies, symlinks, interrupted writes and combined-budget exhaustion fail closed.
+Old unconditional rejection/copy dispatch is replaced; native research consumers,
+immutable original inputs/reports and historical code profiles are retained.
+
+Independent preparation and policy handoff readers bind a complete successor
+profile, including all integrated handler/source/replay/copy bytes. Current-source
+mutation and mixed-generation negatives are exercised without self-authenticating
+predecessors. Only invalidated trailing report/code capability generations are
+regenerated; original source27 holding/PREOPEN and active numeric policy stay fixed.
+Final candidate, selected-generation P5 and exact PID consumption are separate
+pending steps until the native transition receipts below establish them.
+
+Natural acceptance remains with HoldingProfitExitSourceContractRepair: after
+actual deployment,10/28 remaining REG09:00~15:30 _AL/SOR and integrated16:00~20:00,
+then10/29 NXT PRE08:00~08:50 _NX/NXT if unobserved. Verify natural INITIAL plan→v3
+link→exact route/item/epoch/clock/sequence quote/GAP→native SELL/valid terminal→
+postclose assembler/replay, retaining the existing>256 observations/closure scope.
+Measure collector/writer/consumer CPU,RSS,queue lag,bytes/time under that same owner.
+No fabricated order/subscription or cross-route acceptance; historical source
+loss, missing actual costs and independent policy economics remain OPEN/null.
+
+Final integrated review:790 tests passed in the combined source/exit run; four
+fixture-contract failures were isolated (writer-backed timeline deepcopy and
+missing native0D ask). The published-array boundary and real0D BBO fixture were
+corrected;128 cost/exit tests then passed, including absent/conflicting ask
+rejection. Independent preparation969, complete profile/mixed-source/closed
+origin94 and actual ordered-phase19 tests passed. The final bounded-copy suite,
+compile/diff and document parser are preserved in [integration evidence](../../tmp/rfhic-sell-timeout-20261028/holding-integrated/source-diff-review.json).
+Against2d4892980, source7 files +508/-53, tests10 files +575/-17 and docs4 files
++120/-0 before this result paragraph. Existing owners are extended; no new engine
+module, worker, automatic research dispatch or numerical policy is introduced.

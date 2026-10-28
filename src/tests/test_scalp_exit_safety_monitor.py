@@ -392,7 +392,8 @@ def test_trailing_grid_heartbeat_exposes_evaluation_gap(monkeypatch):
     assert fields["tuning_grid_source_complete"] is False
 
 
-def test_trailing_grid_uses_exact_route_depth_without_top_level_qty(monkeypatch):
+@pytest.mark.parametrize("depth_ask", [10060, 10070, None])
+def test_trailing_grid_uses_exact_route_depth_without_top_level_qty(monkeypatch, depth_ask):
     events = []
     monkeypatch.setattr(
         handlers,
@@ -405,7 +406,8 @@ def test_trailing_grid_uses_exact_route_depth_without_top_level_qty(monkeypatch)
         "market_route": "krx_only",
         "transport_epoch": 1,
         "observed_epoch": at,
-        "orderbook": {"bids": [{"price": 10050, "volume": 20}]},
+        "orderbook": {"bids": [{"price": 10050, "volume": 20}],
+                      "asks": [{"price": depth_ask, "volume": 10}] if depth_ask is not None else []},
     }
     snapshot = {
         "market_data_transport_epoch": 1,
@@ -445,7 +447,7 @@ def test_trailing_grid_uses_exact_route_depth_without_top_level_qty(monkeypatch)
     )
     fields = events[-1][1]
     assert fields["executable_bid_qty"] == 20
-    assert fields["tuning_grid_source_complete"] is True
+    assert fields["tuning_grid_source_complete"] is (depth_ask == 10060)
 
 
 def test_operational_candidate_boundary_forces_a_transition_event(monkeypatch):

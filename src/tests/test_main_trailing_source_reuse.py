@@ -756,3 +756,111 @@ def test_frozen_master_gzip_transition_preserves_exact_original_bytes(tmp_path, 
         verify()
     assert holding.read_bytes() == before
     assert not path.exists() or damage == "plain_replaced"
+
+
+@pytest.mark.parametrize(
+    "damage", [None, "source_changed", "copied_bytes", "copied_symlink"]
+)
+def test_normalized_copy_resumes_bounded_batches_and_rejects_changed_evidence(
+    tmp_path, monkeypatch, damage
+):
+    from src.engine.lifecycle import research_disk_budget as disk
+
+    data, origin, holding, original = approved(tmp_path)
+    originals = {p: p.read_bytes() for p in origin.parent.rglob("*.json")}
+    files = [
+        p
+        for p in originals
+        if p.name != "manifest.json"
+        and p.relative_to(origin.parent).parts[0]
+        not in {"scratch", "holding_request_index"}
+    ]
+    limit = max(
+        max(p.stat().st_size for p in files), sum(p.stat().st_size for p in files) // 2
+    )
+    monkeypatch.setattr(disk, "INDEX_LIMIT", limit)
+    output_root = tmp_path / "reused"
+    with pytest.raises(reuse.InputPending, match="copy_checkpoint_required"):
+        reuse.prepare(data, origin, output_root)
+    output = next((output_root / "generations").iterdir())
+    checkpoint, _ = reuse.sealed(output / "copy_checkpoint.json")
+    assert checkpoint["complete"] is False
+    assert 0 < checkpoint["verified_bytes"] <= limit
+    assert not (output / "manifest.json").exists()
+    copied = next(p for p in output.rglob("*.json") if p.name != "copy_checkpoint.json")
+    copied_bytes, copied_stat = copied.read_bytes(), copied.stat()
+    if damage == "source_changed":
+        (origin.parent / "added.json").write_text("{}")
+        with pytest.raises(reuse.InputPending, match="copy_source_changed"):
+            reuse.prepare(data, origin, output_root)
+        return
+    if damage == "copied_bytes":
+        copied.write_text("{}")
+    elif damage == "copied_symlink":
+        copied.unlink()
+        copied.symlink_to(origin.parent / copied.relative_to(output))
+    if damage:
+        with pytest.raises(
+            ValueError,
+            match="generation_collision|source_path_invalid|research_disk_symlink_invalid",
+        ):
+            reuse.prepare(data, origin, output_root)
+        assert not (output / "manifest.json").exists()
+        return
+    for _ in range(4):
+        try:
+            manifest = reuse.prepare(data, origin, output_root)
+            break
+        except reuse.InputPending as exc:
+            assert str(exc) == "trailing_reuse_copy_checkpoint_required"
+    else:
+        pytest.fail("bounded copy did not make progress")
+    assert reuse.sealed(output / "copy_checkpoint.json")[0]["complete"] is True
+    assert (
+        copied.read_bytes() == copied_bytes
+        and copied.stat().st_ino == copied_stat.st_ino
+    )
+    assert all(p.read_bytes() == raw for p, raw in originals.items())
+    result = research.run(
+        manifest,
+        input_root=manifest.parent,
+        output_root=tmp_path / "replayed",
+        dry_run=False,
+    )
+    assert result["initial_policy"] == original["initial_policy"]
+    assert result["assembly_census"] == original["assembly_census"]
+
+
+def test_normalized_copy_atomic_failure_resumes_without_partial_publication(
+    tmp_path, monkeypatch
+):
+    data, origin, _, _ = approved(tmp_path)
+    native_replace = reuse.os.replace
+    failed = False
+
+    def interrupted(source, destination):
+        nonlocal failed
+        if Path(source).name.startswith(".copy-") and not failed:
+            failed = True
+            raise OSError("injected_copy_interruption")
+        return native_replace(source, destination)
+
+    monkeypatch.setattr(reuse.os, "replace", interrupted)
+    with pytest.raises(OSError, match="injected_copy_interruption"):
+        reuse.prepare(data, origin, tmp_path / "reused")
+    output = next((tmp_path / "reused/generations").iterdir())
+    assert not (output / "manifest.json").exists()
+    assert not list(output.rglob(".copy-*"))
+    manifest = reuse.prepare(data, origin, tmp_path / "reused")
+    assert reuse.sealed(manifest)[0]["reuse_origin"]["semantic_verdict_reused"] is False
+
+
+def test_normalized_copy_keeps_combined_disk_admission(tmp_path):
+    from src.engine.lifecycle import research_disk_budget as disk
+
+    data, origin, _, _ = approved(tmp_path)
+    output_root = tmp_path / "reused"
+    with disk.use(output_root, durable_limit=1, temp_limit=1):
+        with pytest.raises(ValueError, match="research_combined_disk_budget_exceeded"):
+            reuse.prepare(data, origin, output_root)
+    assert not list(output_root.rglob("manifest.json"))

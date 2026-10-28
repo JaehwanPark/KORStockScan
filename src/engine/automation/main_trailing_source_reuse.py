@@ -566,7 +566,6 @@ def approved_origin(data_root, original_manifest_path):
 
 def prepare(data_root, original_manifest_path, output_root):
     """Copy only normalized objects, preserving every original gap and field."""
-    import shutil
     import time
     from src.engine.automation.main_trailing_all_scope_research import code_contract
     from src.engine.scalping.pre_submit_delay_initial_policy import _atomic
@@ -598,29 +597,90 @@ def prepare(data_root, original_manifest_path, output_root):
                 raise InputPending("trailing_reuse_normalized_partition_required")
             total += size
             files.append((path, relative))
-        from src.engine.lifecycle.research_disk_budget import INDEX_LIMIT
+        from src.engine.lifecycle import research_disk_budget as disk
+        import tempfile
 
-        if total > INDEX_LIMIT:
-            raise InputPending("trailing_reuse_copy_checkpoint_required")
+        files.sort(key=lambda item: str(item[1]))
+        inventory = [(str(relative), file_stat(path)) for path, relative in files]
+        inventory_sha = digest(inventory)
         output.mkdir(parents=True, exist_ok=True)
+        checkpoint = output / "copy_checkpoint.json"
+        expected = dict(
+            schema="main_trailing_normalized_copy_v1",
+            input_generation=signature,
+            inventory_sha256=inventory_sha,
+            file_count=len(files),
+            total_bytes=total,
+        )
+        if checkpoint.exists():
+            prior, _ = sealed(checkpoint)
+            if any(prior.get(key) != value for key, value in expected.items()):
+                raise InputPending("trailing_reuse_copy_source_changed")
+
+        def progress(count, size, complete):
+            value = dict(
+                **expected, verified_files=count, verified_bytes=size, complete=complete
+            )
+            value["artifact_sha256"] = digest(value)
+            _atomic(checkpoint, value)
+
         started = time.monotonic()
-        copied = 0
-        for path, relative in files:
-            destination = output / relative
-            before = file_stat(path)
-            if destination.exists():
-                if destination.read_bytes() != path.read_bytes():
-                    raise ValueError("trailing_reuse_normalized_generation_collision")
-            else:
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(path, destination)
-            if file_stat(path) != before:
+        copied = verified = count = 0
+        # The existing per-batch bound stays unchanged. Durable native files
+        # are resumable checkpoints; no manifest is issued for a partial copy.
+        with disk.use(output):
+            progress(0, 0, False)
+            for (path, relative), (_, before) in zip(files, inventory):
+                destination = output / relative
+                if file_stat(path) != before:
+                    raise InputPending("trailing_reuse_original_projection_changed")
+                with path.open("rb") as stream:
+                    raw = stream.read(before[2] + 1)
+                if len(raw) != before[2] or file_stat(path) != before:
+                    raise InputPending("trailing_reuse_original_projection_changed")
+                if destination.exists() or destination.is_symlink():
+                    observed = file_stat(destination)
+                    with destination.open("rb") as stream:
+                        previous = stream.read(len(raw) + 1)
+                    if (
+                        observed[2] != len(raw)
+                        or previous != raw
+                        or file_stat(destination) != observed
+                    ):
+                        raise ValueError(
+                            "trailing_reuse_normalized_generation_collision"
+                        )
+                else:
+                    if copied + len(raw) > disk.INDEX_LIMIT:
+                        progress(count, verified, False)
+                        raise InputPending("trailing_reuse_copy_checkpoint_required")
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    with disk.atomic(destination, len(raw)):
+                        fd, temporary = tempfile.mkstemp(
+                            dir=destination.parent, prefix=".copy-"
+                        )
+                        try:
+                            with os.fdopen(fd, "wb") as stream:
+                                stream.write(raw)
+                                stream.flush()
+                                os.fsync(stream.fileno())
+                            if file_stat(path) != before:
+                                raise InputPending(
+                                    "trailing_reuse_original_projection_changed"
+                                )
+                            os.replace(temporary, destination)
+                        finally:
+                            if os.path.exists(temporary):
+                                os.unlink(temporary)
+                    copied += len(raw)
+                    pause = copied / (8 * 1024 * 1024) - (time.monotonic() - started)
+                    if pause > 0:
+                        time.sleep(min(pause, 0.5))
+                verified += len(raw)
+                count += 1
+            if [(str(rel), file_stat(path)) for path, rel in files] != inventory:
                 raise InputPending("trailing_reuse_original_projection_changed")
-            copied += before[2]
-            # The source-only copy is capped independently from Main activity.
-            pause = copied / (8 * 1024 * 1024) - (time.monotonic() - started)
-            if pause > 0:
-                time.sleep(min(pause, 0.5))
+            progress(count, verified, True)
         reused = {
             **manifest,
             "assembly_input_generation_sha256": signature,
