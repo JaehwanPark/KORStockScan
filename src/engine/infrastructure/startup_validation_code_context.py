@@ -4020,12 +4020,21 @@ def _active_entry_code_extension(data_root, day, selected, root, commit, invento
     ):
         raise ValueError("startup_main_native_membership_extension_unbound")
     original = _sha(selected / relative)
+    origin_sha = _sha(origin / relative)
+    # After the first reviewed member addition, later releases carry the same
+    # reviewed bytes. Their issued handoff names that actual selected origin,
+    # not the pre-addition source. Preserve both phases without minting another
+    # compatibility pair or accepting arbitrary identical, unreviewed bytes.
+    reviewed_change = (
+        origin_sha == REVIEWED_ENTRY_LIFETIME_ORIGINS.get(relative)
+        and reviewed_preparation_pair(relative, origin_sha, current)
+    )
+    reviewed_carry = origin_sha == current == REVIEWED_ENTRY_LIFETIME_SOURCES.get(relative)
     if (
         receipt.get("origin_commit") != _git_head(origin)
-        or _sha(origin / relative) != REVIEWED_ENTRY_LIFETIME_ORIGINS.get(relative)
         or current != REVIEWED_ENTRY_LIFETIME_SOURCES.get(relative)
-        or not reviewed_preparation_pair(relative, _sha(origin / relative), current)
-        or original != (current if selected == root else _sha(origin / relative))
+        or not (reviewed_change or reviewed_carry)
+        or original != (current if selected == root else origin_sha)
         or receipt.get("code_hashes") != H.code_hashes()
         or receipt.get("code_hashes", {}).get(str(Path(root) / relative)) != current
         or receipt.get("actual_pid_consumed") is not False

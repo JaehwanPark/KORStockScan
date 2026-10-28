@@ -13217,6 +13217,32 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+
+# Exact validation-only successor for an already extended native member. Keep
+# the full issued lifetime profile and select this complete closure only by its
+# reviewed preparation-reader bytes; identical unreviewed members still fail.
+REVIEWED_ENTRY_MEMBER_CARRY_HASHES = {
+    "src/engine/infrastructure/startup_validation_code_context.py": "f1296def3418ab84626cf3a0ced93eaea52f59418e4853923f2ea7a131aeee99",
+}
+REVIEWED_ENTRY_MEMBER_CARRY_PROFILE = {
+    **REVIEWED_ENTRY_LIFETIME_PROFILE, **REVIEWED_ENTRY_MEMBER_CARRY_HASHES,
+}
+REVIEWED_ENTRY_MEMBER_CARRY_VARIANTS = {
+    (key[0], REVIEWED_ENTRY_MEMBER_CARRY_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_sha256": REVIEWED_ENTRY_MEMBER_CARRY_HASHES[value["selector_path"]],
+        "dependencies": {**value["dependencies"], **REVIEWED_ENTRY_MEMBER_CARRY_HASHES},
+    } for key, value in REVIEWED_ENTRY_LIFETIME_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (origin, current) for origin in {
+            value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair
+        } | {REVIEWED_ENTRY_LIFETIME_PROFILE[name]}
+    ) for name, current in REVIEWED_ENTRY_MEMBER_CARRY_HASHES.items()
+}}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -14184,6 +14210,13 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_ENTRY_LIFETIME_PROFILE
         prepared_variants = REVIEWED_ENTRY_LIFETIME_VARIANTS
+    if all(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == sha
+        for name, sha in REVIEWED_ENTRY_MEMBER_CARRY_HASHES.items()
+    ):
+        prepared_hashes = REVIEWED_ENTRY_MEMBER_CARRY_PROFILE
+        prepared_variants = REVIEWED_ENTRY_MEMBER_CARRY_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present
