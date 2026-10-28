@@ -389,6 +389,13 @@ Prepare the reviewed code-preserving release with these wrapper/consumer contrac
 The sentinel cache reader also shares bounded, short immutable field names and string values within one read. It keeps at most 2048 key strings and 8192 value strings of at most192 characters. Containers, JSON types, field values, row population, cache bytes and raw source remain unchanged; larger/unique values decode normally. This reduces repeated-object memory at some CPU cost. Verify peak RSS, full report completion and freshness under the ordinary scheduled workload; a prefix decoder benchmark is not whole-Main performance evidence.
 
 
+The integrated postclose successor binds its reviewed listed-source parser, raw
+intake, pending scoring/deployment consumers, trade fact normalizer and held-SELL
+consumers as one complete code generation in both existing native readers. Keep
+issued predecessors addressable; an absent, dirty or mixed member fails the
+current integration. This code identity review does not convert exit intent into
+execution, reconstruct null costs, or authorize a scoring recipe change.
+
 ## Pending source-first scoring requests
 
 An approved source-first scoring intent is a pending policy consumer. The

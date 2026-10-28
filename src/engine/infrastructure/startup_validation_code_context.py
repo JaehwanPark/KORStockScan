@@ -3343,7 +3343,33 @@ for _name, _sha in REVIEWED_HELD_SELL_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# Exact reviewed postclose integration. Source, report and pending-policy
+# consumers travel together; predecessor generations remain independently bound.
+REVIEWED_POSTCLOSE_INTEGRATED_SOURCES = {'src/engine/automation/ordered_intraday_deploy.py': '779332fbb54665bef40ab39b993c8fcdb3aeb2850ac043b4fd3f668e162162f9', 'src/engine/infrastructure/market_eligibility_source.py': '83351b83534d3f6626b8fb4bc697cda22dd830e0a1863424d4a2619d37cfefdb', 'src/engine/kiwoom_orders.py': '1e957677478847e69931f903b91058836c56b3604eba2bdcd6dccc966a226188', 'src/engine/scalping/reversal_cumulative_registration.py': '644b7522cd4eef093781141e145822d16bffe64669baad6f2dda8ec882b3e540', 'src/engine/sniper_state_handlers.py': 'e8284be9145b83822d35585b19154fbc723f22cdf4c1a4050b92dc04c2e02226', 'src/engine/sniper_trade_review_report.py': 'a13e1b73e76120a4ceb87a5c65b2a714bdc6845d9b38c81f3d1d37ce7be12b08', 'src/utils/kiwoom_utils.py': '57f948fc300aa86aff52b698c7863c1b85ad2afe5d015545df9f6264b93513eb', 'src/utils/update_kospi.py': '11863bd21a626b0212d53670acdcd7293de8334fc45aa8e0cb3474bd82d2e09c'}
+REVIEWED_POSTCLOSE_INTEGRATED_ORIGINS = {'src/engine/automation/ordered_intraday_deploy.py': '9cc092cb1f592b6399ee73a049e07e05cfe613525350fcfdfbb37546a6eabaac', 'src/engine/infrastructure/market_eligibility_source.py': '6cf5edc490d49411307e2ed5b4ac151722b7b92009039e905efecc7bbd7f348a', 'src/engine/kiwoom_orders.py': '75df3ff7d8adfedd9e14ca0fb0d57675dd1279f12d52ff1d9b6c931746cee5a7', 'src/engine/scalping/reversal_cumulative_registration.py': '55a35b7182abef7cb4d863d5befd9a5523169569d6bd7cd8a017195e07db43e5', 'src/engine/sniper_state_handlers.py': '95aa2214c1fe308dc8ebb57f028ac868d314a7df5934b18e338e0a9f0aa73483', 'src/engine/sniper_trade_review_report.py': '07bef13f9464ed388974228ffad5936a65096a2ff88b34a2c854d0cf0191cfb8', 'src/utils/kiwoom_utils.py': '1a1c885edfd0a38921b2c8661c36787ee315d45a299491b63c1452c28545167a', 'src/utils/update_kospi.py': 'e40a8c08a2c43f91d119893f3b2387a379a0de187f192df31999610cc04db98a'}
+for _name, _sha in REVIEWED_POSTCLOSE_INTEGRATED_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_POSTCLOSE_INTEGRATED_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
+    if current == REVIEWED_POSTCLOSE_INTEGRATED_SOURCES.get(relative) and (
+        current != REVIEWED_HELD_SELL_SOURCES.get(relative)
+        or any(
+            (ROOT / name).is_file() and not (ROOT / name).is_symlink()
+            and _sha(ROOT / name) == expected
+            for name, expected in REVIEWED_POSTCLOSE_INTEGRATED_SOURCES.items()
+            if expected != REVIEWED_HELD_SELL_SOURCES.get(name)
+        )
+    ):
+        for name, expected in REVIEWED_POSTCLOSE_INTEGRATED_SOURCES.items():
+            path = ROOT / name
+            if path.is_symlink() or not path.is_file() or _sha(path) != expected:
+                return False
     if current == REVIEWED_HELD_SELL_SOURCES.get(relative):
         for name, expected in REVIEWED_HELD_SELL_SOURCES.items():
             path = ROOT / name

@@ -5424,7 +5424,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_HELD_SELL_PROFILE,
+        "current": handoff.REVIEWED_POSTCLOSE_INTEGRATED_PROFILE,
+        "held_sell": handoff.REVIEWED_HELD_SELL_PROFILE,
         "member_carry": handoff.REVIEWED_ENTRY_MEMBER_CARRY_PROFILE,
         "consumed_delivery_integration": handoff.REVIEWED_DELIVERY_INTEGRATED_PROFILE,
         "p5_diagnostic": handoff.REVIEWED_P5_DIAGNOSTIC_PROFILE,
@@ -5527,6 +5528,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     "show",
                     {
                         "member_carry": "c780d4679",
+                        "held_sell": "ae4c180f3",
                         "consumed_delivery_integration": "f4cdac806",
                         "issuer_bytes_source": "29a3c1475",
                         "holding_expiry": "3171f2a92",
@@ -7241,3 +7243,16 @@ def test_held_sell_complete_candidate_and_native_negative_cases(tmp_path, family
 @pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
 def test_held_sell_preserves_issued_member_carry(tmp_path, family):
     test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, family, None, "member_carry")
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+def test_postclose_integration_keeps_issued_held_sell_predecessor(tmp_path, family):
+    test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, family, None, "held_sell")
+
+
+@pytest.mark.parametrize("dependency", sorted(handoff.REVIEWED_POSTCLOSE_INTEGRATED_HASHES))
+@pytest.mark.parametrize("fault", [None, "missing", "dirty", "committed_change", "parent_mix"])
+def test_postclose_integration_requires_all_consumers(tmp_path, dependency, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, "pre_submit_delay", fault, "current", dependency
+    )

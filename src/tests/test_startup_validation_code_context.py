@@ -3860,15 +3860,15 @@ def test_entry_member_carry_profile_is_complete_and_preserves_issued_predecessor
 
 
 @pytest.mark.parametrize("fault", [None, "missing", "dirty", "parent_mix", "symlink"])
-@pytest.mark.parametrize("relative", sorted(C.REVIEWED_HELD_SELL_SOURCES))
+@pytest.mark.parametrize("relative", sorted(C.REVIEWED_POSTCLOSE_INTEGRATED_SOURCES))
 def test_held_sell_independent_reader_requires_complete_native_pair(tmp_path, monkeypatch, fault, relative):
     import subprocess
-    for name in C.REVIEWED_HELD_SELL_SOURCES:
+    for name in C.REVIEWED_POSTCLOSE_INTEGRATED_SOURCES:
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes((ROOT / name).read_bytes())
     monkeypatch.setattr(C, "ROOT", tmp_path)
-    damaged = next(name for name in C.REVIEWED_HELD_SELL_SOURCES if name != relative)
+    damaged = next(name for name in C.REVIEWED_POSTCLOSE_INTEGRATED_SOURCES if name != relative)
     path = tmp_path / damaged
     if fault == "missing":
         path.unlink()
@@ -3884,6 +3884,6 @@ def test_held_sell_independent_reader_requires_complete_native_pair(tmp_path, mo
         path.unlink()
         path.symlink_to(original)
     assert C.reviewed_preparation_pair(
-        relative, C.REVIEWED_HELD_SELL_ORIGINS[relative],
-        C.REVIEWED_HELD_SELL_SOURCES[relative],
+        relative, C.REVIEWED_POSTCLOSE_INTEGRATED_ORIGINS[relative],
+        C.REVIEWED_POSTCLOSE_INTEGRATED_SOURCES[relative],
     ) is (fault is None)
