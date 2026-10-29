@@ -1007,6 +1007,7 @@ def test_scanner_emits_failed_probe_identity_and_artifact_cause(monkeypatch, tmp
             "entry_machine_input_as_of": 11,
             "entry_machine_input_preparation_ms": 0,
             "entry_machine_input_preparation_stages_ms": {"policy_resolve_ms": 1.5},
+            "entry_local_stage_timings_ms": {"entry_policy": 125.0},
         },
     }
     emitted = []

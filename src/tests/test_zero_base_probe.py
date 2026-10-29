@@ -762,8 +762,9 @@ def test_existing_ws_owner_is_reused_without_changing_registration():
 
 
 @pytest.mark.parametrize("preparation_ms", [None, 0, 12.5])
+@pytest.mark.parametrize("with_stage", [False, True])
 def test_reused_observation_item_reads_exact_view_through_pre_machine_check(
-    monkeypatch, preparation_ms
+    monkeypatch, preparation_ms, with_stage
 ):
     import src.engine.scalping.zero_base_probe as module
 
@@ -795,6 +796,21 @@ def test_reused_observation_item_reads_exact_view_through_pre_machine_check(
         if preparation_ms is not None
         else {}
     )
+    def analyze(*_args, **_kwargs):
+        if with_stage:
+            from src.engine.monitoring.runtime_performance import record_entry_duration
+
+            record_entry_duration("entry_policy", 0.125)
+        return {
+            "machine_evaluation_status": "assessment_contract_invalid",
+            "machine_contract_error": "missing_stock_code",
+            "provider_called": False,
+            "continuous_reversal_rejected_claim_receipt": {
+                "sha256": "preserved-native-proof"
+            },
+            **timing,
+        }
+
     result = run_zero_base_probe(
         {
             "claim": {
@@ -805,17 +821,7 @@ def test_reused_observation_item_reads_exact_view_through_pre_machine_check(
             "candidate": {"code": "123456", "route": "krx_nxt_integrated"},
         },
         ws_manager=ws,
-        ai_engine=SimpleNamespace(
-            analyze_target=lambda *_args, **_kwargs: {
-                "machine_evaluation_status": "assessment_contract_invalid",
-                "machine_contract_error": "missing_stock_code",
-                "provider_called": False,
-                "continuous_reversal_rejected_claim_receipt": {
-                    "sha256": "preserved-native-proof"
-                },
-                **timing,
-            }
-        ),
+        ai_engine=SimpleNamespace(analyze_target=analyze),
         token="token",
         now=lambda: 11,
         tick_fetcher=lambda *_args, **_kwargs: [
@@ -838,13 +844,16 @@ def test_reused_observation_item_reads_exact_view_through_pre_machine_check(
     assert result["continuous_reversal_rejected_claim_receipt"] == {
         "sha256": "preserved-native-proof"
     }
-    assert result.get("machine_input_trace", {}) == timing
+    expected = dict(timing)
+    if with_stage:
+        expected["entry_local_stage_timings_ms"] = {"entry_policy": 125.0}
+    assert result.get("machine_input_trace", {}) == expected
     if timing:
         timing["entry_machine_input_preparation_stages_ms"]["policy_resolve_ms"] = 99
         assert result["machine_input_trace"][
             "entry_machine_input_preparation_stages_ms"
         ] == {"policy_resolve_ms": 1.5}
-    else:
+    elif not with_stage:
         assert "machine_input_trace" not in result
 
 

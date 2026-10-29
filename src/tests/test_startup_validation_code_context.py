@@ -3969,23 +3969,65 @@ def test_preopen_validation_independent_reader_requires_whole_generation(
         C._pairs({relative: before}, {relative: after})
 
 
-def test_holding_history_inventory_reaches_independent_preparation_reader():
+@pytest.mark.parametrize("fault", [None, "missing", "changed", "symlink", "unknown", "missing_handler", "missing_probe"])
+def test_timeout_terminal_independent_reader_requires_complete_generation(tmp_path, monkeypatch, fault):
+    for name in C.REVIEWED_TIMEOUT_TERMINAL_PROFILE:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((ROOT / name).read_bytes())
+    monkeypatch.setattr(C, "ROOT", tmp_path)
+    relative = C.REVIEWED_TIMEOUT_TERMINAL_PATH
+    damaged = tmp_path / "src/engine/scalping/reversal_auxiliary_production_input.py"
+    if fault == "missing":
+        damaged.unlink()
+    elif fault == "changed":
+        damaged.write_bytes(damaged.read_bytes() + b"\n")
+    elif fault == "symlink":
+        outside = tmp_path / "outside.py"
+        outside.write_bytes(damaged.read_bytes())
+        damaged.unlink()
+        damaged.symlink_to(outside)
+    elif fault == "missing_handler":
+        (tmp_path / relative).unlink()
+    elif fault == "missing_probe":
+        (tmp_path / C.REVIEWED_TIMEOUT_PROBE_PATH).unlink()
+    old = "0" * 64 if fault == "unknown" else C.REVIEWED_HOLDING_HISTORY_SOURCES[relative]
+    assert C.reviewed_preparation_pair(relative, old, C.REVIEWED_TIMEOUT_TERMINAL_HANDLER) is (fault is None)
+
+
+def test_holding_history_inventory_reaches_independent_preparation_reader(tmp_path, monkeypatch):
+    import subprocess
+
     assert C.REVIEWED_HOLDING_HISTORY_SOURCES == {
         name: sha for name, sha in H.REVIEWED_HOLDING_HISTORY_HASHES.items()
         if name != "src/engine/infrastructure/startup_validation_code_context.py"
     }
     for name, expected in H.REVIEWED_HOLDING_HISTORY_HASHES.items():
-        assert hashlib.sha256((ROOT / name).read_bytes()).hexdigest() == expected
+        source = subprocess.check_output(
+            ["git", "-C", str(ROOT), "show", "cc4028ba8:" + name]
+        )
+        assert hashlib.sha256(source).hexdigest() == expected
+    for name in C.REVIEWED_HOLDING_HISTORY_PROFILE:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(subprocess.check_output(
+            ["git", "-C", str(ROOT), "show", "cc4028ba8:" + name]
+        ))
+    monkeypatch.setattr(C, "ROOT", tmp_path)
     for name, current in C.REVIEWED_HOLDING_HISTORY_SOURCES.items():
         C._pairs({name: C.REVIEWED_HOLDING_HISTORY_ORIGINS[name]}, {name: current})
 
 
 @pytest.mark.parametrize("fault", [None, "missing", "changed", "symlink", "unknown"])
 def test_holding_history_independent_reader_requires_complete_generation(tmp_path, monkeypatch, fault):
+    import subprocess
+
     for name in C.REVIEWED_HOLDING_HISTORY_PROFILE:
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes((ROOT / name).read_bytes())
+        path.write_bytes(subprocess.check_output(
+            ["git", "-C", str(ROOT), "show", "cc4028ba8:" + name]
+        ))
     monkeypatch.setattr(C, "ROOT", tmp_path)
     relative = "src/engine/scalping/holding_profit_exit_semantics.py"
     damaged = tmp_path / "src/engine/scalping/reversal_auxiliary_production_input.py"

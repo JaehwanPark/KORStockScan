@@ -3407,13 +3407,66 @@ for _name, _sha in REVIEWED_HOLDING_HISTORY_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+REVIEWED_TIMEOUT_TERMINAL_HANDLER = "ecd17595735b6bfe3d5262a256d5fc1d637254a1cf4fecf662bed059932ff372"
+REVIEWED_TIMEOUT_TERMINAL_PATH = "src/engine/sniper_state_handlers.py"
+REVIEWED_TIMEOUT_PROBE_PATH = "src/engine/scalping/zero_base_probe.py"
+REVIEWED_TIMEOUT_PROBE = "3410d2d2cf61c15e2b8c32c873249f8931f8313f27e8f4d0cb5c5dbf2535fed3"
+REVIEWED_TIMEOUT_CHANGED = {
+    REVIEWED_TIMEOUT_TERMINAL_PATH: REVIEWED_TIMEOUT_TERMINAL_HANDLER,
+    REVIEWED_TIMEOUT_PROBE_PATH: REVIEWED_TIMEOUT_PROBE,
+}
+REVIEWED_TIMEOUT_TERMINAL_SOURCES = {
+    **REVIEWED_HOLDING_HISTORY_SOURCES,
+    **REVIEWED_TIMEOUT_CHANGED,
+}
+REVIEWED_TIMEOUT_TERMINAL_PROFILE = {
+    **REVIEWED_HOLDING_HISTORY_PROFILE,
+    **REVIEWED_TIMEOUT_CHANGED,
+}
+# Carry every previously reviewed origin into this one exact successor; no
+# unreviewed current hash or partial predecessor generation is accepted.
+for _name, _current in REVIEWED_TIMEOUT_CHANGED.items():
+    _timeout_origins = {
+        value for pair in REVIEWED_PREPARATION_HISTORY.get(_name, ()) for value in pair
+    }
+    if _name in REVIEWED_HOLDING_HISTORY_SOURCES:
+        _timeout_origins.add(REVIEWED_HOLDING_HISTORY_SOURCES[_name])
+    if _name == REVIEWED_TIMEOUT_PROBE_PATH:
+        _timeout_origins.add("834e020db2e2a14e6daa08153b688867d77d9de07814d5c07189beaa78be2af3")
+    REVIEWED_PREPARATION_HISTORY.setdefault(_name, set()).update(
+        (origin, _current) for origin in _timeout_origins
+    )
+
+
 def reviewed_preparation_pair(relative, old, current):
+    timeout_terminal = (
+        current == REVIEWED_TIMEOUT_TERMINAL_PROFILE.get(relative)
+        and any(
+            (ROOT / name).is_file() and not (ROOT / name).is_symlink()
+            and _sha(ROOT / name) == expected
+            for name, expected in REVIEWED_TIMEOUT_CHANGED.items()
+        )
+    )
+    if (
+        relative in REVIEWED_TIMEOUT_CHANGED
+        and current == REVIEWED_TIMEOUT_CHANGED[relative]
+        and not timeout_terminal
+    ):
+        return False
+    if timeout_terminal and any(
+        (ROOT / name).is_symlink() or not (ROOT / name).is_file()
+        or _sha(ROOT / name) != expected
+        for name, expected in REVIEWED_TIMEOUT_TERMINAL_PROFILE.items()
+    ):
+        return False
     holding_history = current == REVIEWED_HOLDING_HISTORY_PROFILE.get(relative) and any(
         (ROOT / name).is_file() and not (ROOT / name).is_symlink()
         and _sha(ROOT / name) == expected
         for name, expected in REVIEWED_HOLDING_HISTORY_SOURCES.items()
     )
-    if holding_history:
+    if timeout_terminal:
+        pass
+    elif holding_history:
         if any(
             (ROOT / name).is_symlink() or not (ROOT / name).is_file()
             or _sha(ROOT / name) != expected
@@ -3449,7 +3502,7 @@ def reviewed_preparation_pair(relative, old, current):
             path = ROOT / name
             if path.is_symlink() or not path.is_file() or _sha(path) != expected:
                 return False
-    if not holding_history and current == REVIEWED_HELD_SELL_SOURCES.get(relative):
+    if not (holding_history or timeout_terminal) and current == REVIEWED_HELD_SELL_SOURCES.get(relative):
         for name, expected in REVIEWED_HELD_SELL_SOURCES.items():
             path = ROOT / name
             if path.is_symlink() or not path.is_file() or _sha(path) != expected:

@@ -1630,8 +1630,13 @@ def run_zero_base_probe(
                         for k, v in observation_context.items()
                         if k != "snapshot"
                     }
-                machine = (
-                    ai_engine.analyze_target(
+                from src.engine.monitoring.runtime_performance import entry_timing_frame
+
+                # The probe executes on its own worker, outside Main's timing
+                # frame. Retain the engine's existing local stage measurements
+                # on this exact result, including pre-assessment expiry.
+                with entry_timing_frame() as local_timings:
+                    machine = ai_engine.analyze_target(
                         candidate.get("name") or code,
                         ws_data,
                         ticks,
@@ -1655,9 +1660,9 @@ def run_zero_base_probe(
                             "zero_base_route": route,
                         },
                         candle_context=context,
-                    )
-                    or {}
-                )
+                    ) or {}
+                if local_timings:
+                    machine.setdefault("entry_local_stage_timings_ms", dict(local_timings))
                 if calculation_index or observation_context is None:
                     break
                 from src.engine.scalping.entry_machine_source_recovery import (

@@ -5424,7 +5424,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_HOLDING_HISTORY_PROFILE,
+        "current": handoff.REVIEWED_TIMEOUT_TERMINAL_PROFILE,
         "holding_history_consumed": handoff.REVIEWED_HOLDING_HISTORY_PREDECESSOR_PROFILE,
         "preopen_validation": handoff.REVIEWED_PREOPEN_VALIDATION_PROFILE,
         "postclose_integrated": handoff.REVIEWED_POSTCLOSE_INTEGRATED_PROFILE,
@@ -7293,3 +7293,16 @@ def test_holding_history_successor_rechecks_exact_consumed_generation(tmp_path, 
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, fault, "holding_history_consumed",
         "src/engine/infrastructure/startup_validation_code_context.py")
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("fault", [None, "missing", "dirty", "committed_change", "parent_mix"])
+@pytest.mark.parametrize("dependency", [
+    "src/engine/sniper_state_handlers.py",
+    "src/engine/infrastructure/startup_validation_code_context.py",
+    "src/engine/scalping/reversal_auxiliary_production_input.py",
+])
+def test_timeout_terminal_complete_generation_reaches_each_existing_reader(tmp_path, family, fault, dependency):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "current", dependency
+    )

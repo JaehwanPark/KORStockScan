@@ -13372,6 +13372,19 @@ def _holding_history_variants(hashes):
 
 REVIEWED_HOLDING_HISTORY_VARIANTS = _holding_history_variants(REVIEWED_HOLDING_HISTORY_HASHES)
 REVIEWED_HOLDING_HISTORY_PREDECESSOR_VARIANTS = _holding_history_variants(REVIEWED_HOLDING_HISTORY_PREDECESSOR_HASHES)
+# The reviewed timeout-attribution successor changes only the terminal writer
+# its machine-only timing projection and independent preparation reader. All other issued members retain the
+# complete holding-history generation, including the native predecessor.
+REVIEWED_TIMEOUT_TERMINAL_HASHES = {
+    **REVIEWED_HOLDING_HISTORY_HASHES,
+    "src/engine/sniper_state_handlers.py": "ecd17595735b6bfe3d5262a256d5fc1d637254a1cf4fecf662bed059932ff372",
+    "src/engine/scalping/zero_base_probe.py": "3410d2d2cf61c15e2b8c32c873249f8931f8313f27e8f4d0cb5c5dbf2535fed3",
+    "src/engine/infrastructure/startup_validation_code_context.py": "d7f72c1bd7ee47bff521681838467a78a022f7c24fd1eb75ffc590a69136c5b4",
+}
+REVIEWED_TIMEOUT_TERMINAL_PROFILE = {
+    **REVIEWED_PREOPEN_VALIDATION_PROFILE, **REVIEWED_TIMEOUT_TERMINAL_HASHES,
+}
+REVIEWED_TIMEOUT_TERMINAL_VARIANTS = _holding_history_variants(REVIEWED_TIMEOUT_TERMINAL_HASHES)
 REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
         (origin, current) for origin in {
@@ -13388,6 +13401,17 @@ for _name, _prior in REVIEWED_HOLDING_HISTORY_PREDECESSOR_HASHES.items():
     _origins.discard(REVIEWED_HOLDING_HISTORY_HASHES[_name])
     REVIEWED_ENTRY_COST_PAIRS[_name] = _pairs + tuple(
         (_old, _prior) for _old in _origins if (_old, _prior) not in _pairs
+    )
+
+for _name in ("src/engine/sniper_state_handlers.py", "src/engine/scalping/zero_base_probe.py", "src/engine/infrastructure/startup_validation_code_context.py"):
+    _pairs = REVIEWED_ENTRY_COST_PAIRS.get(_name, ())
+    _origins = {value for pair in _pairs for value in pair}
+    if _name in REVIEWED_HOLDING_HISTORY_HASHES:
+        _origins.add(REVIEWED_HOLDING_HISTORY_HASHES[_name])
+    if _name == "src/engine/scalping/zero_base_probe.py":
+        _origins.add("834e020db2e2a14e6daa08153b688867d77d9de07814d5c07189beaa78be2af3")
+    REVIEWED_ENTRY_COST_PAIRS[_name] = _pairs + tuple(
+        (_old, REVIEWED_TIMEOUT_TERMINAL_HASHES[_name]) for _old in _origins
     )
 
 
@@ -14405,6 +14429,17 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_HOLDING_HISTORY_PREDECESSOR_PROFILE
         prepared_variants = REVIEWED_HOLDING_HISTORY_PREDECESSOR_VARIANTS
+    if any(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == REVIEWED_TIMEOUT_TERMINAL_HASHES[name]
+        for name in (
+            "src/engine/sniper_state_handlers.py",
+            "src/engine/scalping/zero_base_probe.py",
+            "src/engine/infrastructure/startup_validation_code_context.py",
+        )
+    ):
+        prepared_hashes = REVIEWED_TIMEOUT_TERMINAL_PROFILE
+        prepared_variants = REVIEWED_TIMEOUT_TERMINAL_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present
