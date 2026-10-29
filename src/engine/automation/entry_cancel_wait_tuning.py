@@ -321,6 +321,119 @@ def _atomic_json(path, value):
     )
 
 
+
+ECONOMIC_STORAGE_SCHEMA = "entry_cancel_wait_economic_state_tree_v1"
+
+
+def encode_report_storage(payload, *, data_root=None):
+    """Keep the diagnostic root bounded; preserve every original state byte."""
+    from src.engine.lifecycle import research_storage as storage
+    from src.engine.monitoring.policy_generation_validation import NATIVE_REPORT_LIMIT
+    import base64
+
+    report_bytes = len(json.dumps(payload, ensure_ascii=False, allow_nan=False).encode())
+    if report_bytes <= NATIVE_REPORT_LIMIT:
+        return payload
+    if report_bytes > MAX_RECONCILIATION_METADATA_BYTES:
+        raise ValueError("cancel_wait_state_storage_budget_exceeded")
+    state = payload["economic_state"]
+    day, state_sha = payload["date"], state["sha256"]
+    raw = bytearray()
+    for part in json.JSONEncoder(sort_keys=True, ensure_ascii=True,
+                                 separators=(",", ":"), allow_nan=False).iterencode(state):
+        encoded = part.encode("ascii")
+        if len(raw) + len(encoded) > MAX_RECONCILIATION_METADATA_BYTES:
+            raise ValueError("cancel_wait_state_storage_budget_exceeded")
+        raw.extend(encoded)
+    root = _state_storage_root(data_root, day, state_sha)
+    root.mkdir(parents=True, exist_ok=True)
+    ref = storage.write_tree(root, (
+        dict(index=index, gzip_base64=base64.b64encode(
+            gzip.compress(bytes(raw[offset:offset+16384]), mtime=0)).decode("ascii"))
+        for index, offset in enumerate(range(0, len(raw), 16384))
+    ), quota=dict(used=0, limit=MAX_RECONCILIATION_METADATA_BYTES))
+    wire = dict(payload, economic_state=dict(
+        schema=ECONOMIC_STORAGE_SCHEMA, through_date=day, sha256=state_sha,
+        storage_root=str(root), serialized_bytes=len(raw), serialized_sha256=hashlib.sha256(raw).hexdigest(),
+        tree=ref))
+    if len(json.dumps(wire, ensure_ascii=False, allow_nan=False).encode()) > NATIVE_REPORT_LIMIT:
+        raise ValueError("cancel_wait_report_root_partition_required")
+    if decode_report_storage(wire, data_root=data_root) != payload:
+        raise ValueError("cancel_wait_state_storage_roundtrip_invalid")
+    return wire
+
+
+def _state_storage_root(data_root, day, sha):
+    import re
+    if (not isinstance(day, str) or date.fromisoformat(day).isoformat() != day
+            or not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{64}", sha)):
+        raise ValueError("cancel_wait_state_storage_scope_invalid")
+    base = Path(REPORT_DIR) if data_root is None else Path(data_root) / "report/entry_cancel_wait_tuning"
+    root = base.resolve() / "economic_states" / day / sha
+    if root.resolve() != root:
+        raise ValueError("cancel_wait_state_storage_path_invalid")
+    return root
+
+
+def decode_report_storage(payload, *, data_root=None):
+    """Read native evidence shards, then verify the original semantic state."""
+    state = payload.get("economic_state") or {}
+    if not isinstance(state, dict):
+        raise ValueError("cancel_wait_state_storage_object_invalid")
+    if state.get("schema") != ECONOMIC_STORAGE_SCHEMA:
+        if "tree" in state or "storage_root" in state:
+            raise ValueError("cancel_wait_state_storage_schema_invalid")
+        return payload
+    from src.engine.lifecycle import research_storage as storage
+    from src.engine.monitoring.policy_generation_validation import NATIVE_REPORT_LIMIT
+    import base64, io, zlib
+
+    if len(json.dumps(payload, ensure_ascii=False, allow_nan=False).encode()) > NATIVE_REPORT_LIMIT:
+        raise ValueError("cancel_wait_report_root_partition_required")
+    if (set(state) != {"schema", "through_date", "sha256", "storage_root", "serialized_bytes",
+                       "serialized_sha256", "tree"}
+            or state["through_date"] != payload.get("date")
+            or type(state["serialized_bytes"]) is not int
+            or not 0 < state["serialized_bytes"] <= MAX_RECONCILIATION_METADATA_BYTES
+            or not isinstance(state["tree"], dict)
+            or type(state["tree"].get("count")) is not int
+            or state["tree"]["count"] != (state["serialized_bytes"] + 16383) // 16384):
+        raise ValueError("cancel_wait_state_storage_contract_invalid")
+    root = _state_storage_root(data_root, state["through_date"], state["sha256"])
+    if state["storage_root"] != str(root):
+        raise ValueError("cancel_wait_state_storage_root_mismatch")
+    raw = bytearray()
+    for index, row in enumerate(storage.iter_tree(root, state["tree"])):
+        if (not isinstance(row, dict) or set(row) != {"index", "gzip_base64"}
+                or type(row["index"]) is not int or row["index"] != index
+                or not isinstance(row["gzip_base64"], str) or len(row["gzip_base64"]) > 32768):
+            raise ValueError("cancel_wait_state_storage_row_invalid")
+        try:
+            encoded = base64.b64decode(row["gzip_base64"], validate=True)
+            with gzip.GzipFile(fileobj=io.BytesIO(encoded)) as stream:
+                chunk = stream.read(16385)
+        except (ValueError, OSError, EOFError, zlib.error) as exc:
+            raise ValueError("cancel_wait_state_storage_encoding_invalid") from exc
+        if (not 0 < len(chunk) <= 16384
+                or len(raw) + len(chunk) > state["serialized_bytes"]):
+            raise ValueError("cancel_wait_state_storage_chunk_invalid")
+        raw.extend(chunk)
+    if (len(raw) != state["serialized_bytes"]
+            or hashlib.sha256(raw).hexdigest() != state["serialized_sha256"]):
+        raise ValueError("cancel_wait_state_storage_content_invalid")
+    restored = json.loads(raw)
+    if (not isinstance(restored, dict) or restored.get("through_date") != payload["date"]
+            or restored.get("sha256") != state["sha256"]
+            or restored["sha256"] != _digest({k:v for k,v in restored.items() if k != "sha256"})):
+        raise ValueError("cancel_wait_state_storage_semantics_invalid")
+    result = dict(payload, economic_state=restored)
+    if len(json.dumps(result, ensure_ascii=False, allow_nan=False).encode()) > MAX_RECONCILIATION_METADATA_BYTES:
+        raise ValueError("cancel_wait_state_storage_budget_exceeded")
+    if result.get("proof_sha256") != _digest({k:v for k,v in result.items()
+                                            if k not in ("generated_at", "proof_sha256")}):
+        raise ValueError("cancel_wait_state_storage_report_proof_invalid")
+    return result
+
 def _incumbent(target_date):
     keys = (
         "SCALPING_ENTRY_TIMEOUT_SEC",
@@ -2854,7 +2967,7 @@ def build_report(
         and receipt_path.is_file()
         and not current_path.is_symlink()
     ):
-        cached = json.loads(current_path.read_text())
+        cached = decode_report_storage(json.loads(current_path.read_text()))
         receipt = json.loads(receipt_path.read_text())
         if (
             cached.get("preflight_fingerprint") == preflight
@@ -3198,7 +3311,12 @@ def _bounded_semantic_json(path):
     value = json.loads(raw)
     if not isinstance(value, dict):
         raise ValueError("cancel_wait_artifact_object_invalid")
-    return value, hashlib.sha256(raw).hexdigest()
+    data_root = (path.parents[2] if path.parent.name == "entry_cancel_wait_tuning"
+                 and path.parent.parent.name == "report" else None)
+    decoded = decode_report_storage(value, data_root=data_root)
+    if stamp(path.lstat()) != stamp(before):
+        raise ValueError("semantic_generation_changed_during_read")
+    return decoded, hashlib.sha256(raw).hexdigest()
 
 
 def _validate_recovery_receipt(
@@ -3607,6 +3725,7 @@ def validated_reconciliation_view(
         )
         return result
     try:
+        payload = decode_report_storage(payload, data_root=data_root)
         day = payload["date"]
         if day > datetime.now(KST).date().isoformat():
             raise ValueError("cancel_wait_future_source_date_invalid")
@@ -4319,6 +4438,10 @@ def _without_registry_tail(payload):
 
 
 def verify_report(payload, *, recompute=True):
+    try:
+        payload = decode_report_storage(payload)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return False, str(exc)
     from src.engine.scalping.entry_cancel_wait_runtime import ECONOMIC_SCHEMA
 
     if payload.get("economic_schema") != ECONOMIC_SCHEMA:
@@ -4488,7 +4611,7 @@ def upsert_checklist_handoff(content, source_date, target_date, report_dir):
 def verify_handoff(target_date, *, require_summary=True):
     issues = []
     try:
-        payload = json.loads(report_paths(target_date)[0].read_text())
+        payload = decode_report_storage(json.loads(report_paths(target_date)[0].read_text()))
         valid, reason = verify_report(payload)
         if not valid:
             issues.append(reason)
@@ -4577,7 +4700,7 @@ def write_report(
     payload = build_report(target_date)
     json_path, md_path = report_paths(target_date)
     json_path.parent.mkdir(parents=True, exist_ok=True)
-    _atomic_json(json_path, payload)
+    _atomic_json(json_path, encode_report_storage(payload))
     if target_date >= EXECUTABLE_EVIDENCE_DATE:
         _atomic_json(
             json_path.with_suffix(".reuse-contract.json"),

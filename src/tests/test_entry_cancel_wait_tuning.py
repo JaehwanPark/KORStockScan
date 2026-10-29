@@ -3251,3 +3251,27 @@ def test_native_input_selection_preserves_consumed_generation_checks(
         rows, models, bindings = mod._replay_parents([parent], [], [], {})
         assert rows == [] and models[0]["blocker"] == "native_scope_or_seed_unsupported"
         assert bindings[day] == micro._source_generation_contract({}, extra_paths=paths)
+
+
+def test_partitioned_report_reaches_existing_reconciliation_and_handoff_readers(tmp_path, monkeypatch):
+    from src.engine.monitoring import policy_generation_validation as validation
+    report, policy, report_path, policy_path = _reconciliation_fixture(tmp_path, monkeypatch)
+    original = json.dumps(report).encode()
+    head = len(json.dumps(dict(report, economic_state={})).encode())
+    limit = (head + len(original)) // 2
+    assert limit > head + 512
+    monkeypatch.setattr(validation, 'NATIVE_REPORT_LIMIT', limit)
+    expected = mod.validated_reconciliation_view(report, policy, data_root=tmp_path/'data')
+    result = mod.write_report(report['date'], effective_date=policy['effective_date'],
+                              publication_date=policy['publication_date'])
+    wire = json.loads(report_path.read_bytes())
+    assert wire['economic_state']['schema'] == mod.ECONOMIC_STORAGE_SCHEMA
+    assert report_path.stat().st_size <= limit
+    assert result == report
+    assert mod._bounded_semantic_json(report_path)[0] == report
+    assert mod.validated_reconciliation_view(wire, policy, data_root=tmp_path/'data') == expected
+    assert mod.verify_report(wire, recompute=False)[0]
+    view = mod.load_handoff_view(report['date'], report_path.parent.parent)
+    assert view['report_proof_sha256'] == report['proof_sha256']
+    assert view['reconciliation']['findings'] == []
+    assert view['actual_pid_consumed'] is False

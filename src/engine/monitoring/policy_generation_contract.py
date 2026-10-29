@@ -19,6 +19,7 @@ ENGINE = Path(__file__).parents[1]
 COMPONENTS = {
     "entry_cancel_wait": (
         "automation/entry_cancel_wait_tuning.py",
+        "lifecycle/research_storage.py",
         "scalping/entry_cancel_wait_runtime.py",
         "scalping/main_custody_checkpoint.py",
         "sniper_sync.py",

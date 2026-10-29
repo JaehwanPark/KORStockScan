@@ -424,3 +424,27 @@ remain unchanged. Complete reviewed code profiles are advanced as one generation
 all issued predecessor profiles remain immutable. Candidate/selected P5 and
 actual consumer checks are required again for this new code, while unchanged
 calculation, policy and capability evidence is read-only revalidated.
+
+### Postclose source29 recovery and report storage - 2026-10-29
+
+The bd174c754 ordered transition completed22:40:27. Main3517968/start92569228
+consumed the intended policy/bootstrap; candidate P5
+84d55797e6b643cd9bc27618c4593273 and selected P5
+05b7519403ba4e169896aed346176ce3 passed. Its first producer15.507s/exit0 and
+observer21.507s/exit0 passed. First health retained4PASS/1WARNING/2FAIL, including
+the original postclose failure and unresolved semantic incident classification.
+Native post-EOD stop then completed policy/actor/supervisor/collector closure
+and bounded cleanup; no Main remains running. Cleanup removed15 closed logs,
+121,188,473 logical bytes; actual allocated-space delta was not independently
+measured and is not inferred from that number. Tmp remains protected at about
+9.2GB; no broad data/worktree/release deletion has started.
+
+Source29 machine policy, outcome labels and pre-submit delay succeeded with
+original immutable stage receipts. The main wrapper failed in cancellation
+report projection; the exact producer/consumer repair and bounded reconstruction
+proof are in the [existing cancellation source review](entry-cancel-wait-source-reconciliation-implementation-review-2026-10-02.md#bounded-economic-state-storage-repair---2026-10-29).
+Preserve the completed prefix, disabled weakness research and original deadlines.
+Use the native stopped-source workflow with current active-parent custody; do
+not start Main merely to create evidence. Restore the controller only after
+causal repair/preflight, with its remaining original budget. Core recovery still
+precedes schedule-delay contract repair and maximal verified storage cleanup.

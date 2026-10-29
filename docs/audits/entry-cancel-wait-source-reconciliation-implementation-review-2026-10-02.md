@@ -56,3 +56,70 @@ PYTHONPATH=. .venv/bin/python -m pytest -q --tb=short src/tests/test_entry_cance
 다음 조치는 작업본 통합 범위가 확정된 실행 세대에서 고정 10/2 원천으로 새 ledger/report/policy를 생성한 뒤, 동일 generation의 summary→tower→10/6 checklist→cancel-wait strict 및 의미감시 projection을 한 번 대조하는 것이다. 이는 새 실행 세대 수용이며 이번 격리 코드 검증의 PASS와 구분한다. 원천 결손은 artifact/owner/closure test를 가진 source_gap/null로 유지한다. 무표본은 유효 empty/carry로 닫으며 실제 체결·양의 EV를 코드 수리 종료 조건으로 요구하지 않는다. 정책 준비·PREOPEN·PID 소비·경제성 승인은 기존 owner의 별도 수용이다.
 
 10/3 현행 daily checklist는 존재하지 않는다. 승인된 10/2 분석 대상의 코드 마무리·검증만 수행했고 신규 운영 작업을 시작하지 않았다. 10/2 항목은 코드 종료와 이력으로 남기고 잔여 세대 수용을 기존 10/6 checklist의 동일 stable ID로 인계했다. 완료한 과거 항목을 현재 실행 소유자로 사용하지 않는다.
+
+## Bounded economic-state storage repair - 2026-10-29
+
+Source29 native postclose run ec19e5c395074cc090b16312967d5241 failed22:50:20
+in entry_cancel_wait_tuning after calculation and before policy publication.
+The cumulative economic_state made its report17,837,661 bytes; the existing
+validation publisher refused its16MiB logical JSON bound. The original17.8MB
+report SHA2565bb1e0969ab92e17ac66508a1ef9078d068040189cad44533ffa6ba0236f5a33,
+failed status and exact traceback are preserved in
+data/audit/startup_storage/2026-10-29/postclose-recovery/report-projection-failure/.
+The childless controller waiter3530937/start92597467 was contained to prevent an
+unchanged whole-wrapper retry. Its original22:43:48/43200s predecessor budget
+remains the resume ceiling. Independent native machine/outcome/delay workers
+continued and produced successful original receipts; no full rerun is authorized
+by their existence alone. Revalidate each original source/code receipt before reuse.
+
+The existing report producer now stores an oversized economic_state through the
+existing bounded_research_evidence_tree owner.16KiB serialized fragments use
+lossless gzip/base64 inside bounded native leaves; the small root binds date,
+state digest, explicit storage root, serialized length/SHA and the complete tree.
+Every fragment/count/CRC/hash and the original semantic state/report proof must
+validate on read. The8MiB root,16MiB legacy archive and64MiB family metadata
+bounds are unchanged; the restored whole report also retains the64MiB bound.
+IDs, full raw context, order/cost/quantity fields and nulls are preserved exactly.
+Policy values, sample eligibility, economics and runtime authority are unchanged.
+
+The native generation reader, predecessor/cache intake, reconciliation view and
+last-consumer handoff all decode through this existing producer owner. The new
+research_storage dependency is registered in the family capability inventory.
+Legacy inline reports and other families retain their original readers; the
+whole-report gzip owner remains for historical cancellation reports and other
+current families. No new module, wrapper, registry or source-only PASS is added.
+Protected historical reports and failed attempts are not rewritten. Evidence
+shards and their explicit root remain retention dependencies through their last
+policy/strict/PREOPEN consumer. A clean recovery reader is required for this new
+wire representation; old readers must not interpret it as an empty state.
+
+Exact production-shape isolation reproduced the old rejection and restored all
+fields identically through the new native reader, with no production writes.
+Initial partition/reconciliation/handoff11 tests passed; related1906 regressions
+passed after review fixes, and independent current/issued-source45 tests passed.
+The initial missing fixture-root failure is retained and repaired by deriving
+the report's actual data context. Corrupt/missing parts, foreign/unknown scope,
+expanded chunks, original-pointer advancement and invalid proof remain rejected.
+
+Independent review also exposed a predecessor dispatch defect: a reviewed byte
+reversion in ordered deployment was mistaken for a newer partial generation.
+The existing preparation reader now authenticates complete historical generations
+before ambiguous partial triggers and limits those roots to their own physical
+consumer endpoint. Current full-generation authentication remains mandatory.
+The dated-report fixture is pinned to its exact a1ef8c897 Git generation instead
+of copying current files. Historical acceptance and missing/mixed/unknown/future
+endpoint negatives pass; no broad hash exception or guard relaxation was added.
+
+Remaining sequence: immutable candidate and source/code review; native active
+parent custody; fresh affected capability fixtures; verified stopped workflow
+source29 repair and downstream-only summary/strict/controller/preparation; native
+candidate/selected P5 at their owning phase; approved cold code selection; actual
+next-session PID consumption/current observer/health. Keep semantic/source/cost
+findings and natural/economic acceptance separate from execution completion.
+
+Change accounting against bd174c754: non-test source5 files +214/-5; tests4
+files +106/-10; audits2 files +84/-0 before this accounting paragraph. No file
+moves or new modules/entrypoints. Growth adds lossless bounded storage and its
+original proof checks, complete generation custody and failure coverage. Inline
+legacy intake and gzip remain for named historical/other-family consumers; no
+displaced forwarding wrapper or duplicate implementation is retained.

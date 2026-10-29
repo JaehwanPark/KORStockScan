@@ -2096,3 +2096,70 @@ def test_source_review_preserves_original_auxiliary_inventory_while_binding_new_
         assert result["pairs"]["auxiliary"][1] == generation.code_generation(
             "auxiliary"
         )
+
+
+@pytest.mark.parametrize('damage', [None, 'missing', 'bytes', 'state', 'proof', 'count', 'path', 'schema', 'chunk', 'encoding', 'generation'])
+def test_partitioned_cancel_report_native_intake_preserves_exact_semantics(tmp_path, monkeypatch, damage):
+    """The native generation reader must consume the producer's bounded root."""
+    import base64, gzip
+    from src.engine.automation import entry_cancel_wait_tuning as owner
+    from src.engine.lifecycle import research_storage as storage
+    data = tmp_path / 'data'
+    _, report, _, _, _, _ = _fixture(data, 'entry_cancel_wait')
+    payload = json.loads(report.read_bytes())
+    state = dict(through_date=DAY, source_events=[dict(
+        evaluation_attempt_id='exact-attempt-'+str(i), cost=None,
+        raw_context='original source context '+str(i)+'x'*1024) for i in range(50)])
+    state['sha256'] = owner._digest(state)
+    payload['economic_state'] = state
+    payload['policy_generation'] = generation.native(
+        payload, family='entry_cancel_wait', day=DAY, data_root=data,
+        source_state='source_gap', comparison_state='insufficient_sample',
+        handoff_state='incumbent_carried')
+    payload['proof_sha256'] = owner._digest({k:v for k,v in payload.items()
+        if k not in ('generated_at','proof_sha256')})
+    monkeypatch.setattr(validation, 'NATIVE_REPORT_LIMIT', 16384)
+    wire = owner.encode_report_storage(payload, data_root=data)
+    assert wire != payload and wire['economic_state']['schema'] == owner.ECONOMIC_STORAGE_SCHEMA
+    root = owner._state_storage_root(data, DAY, state['sha256'])
+    if damage == 'missing':
+        (root / wire['economic_state']['tree']['path']).unlink()
+    elif damage == 'bytes':
+        (root / wire['economic_state']['tree']['path']).write_text('{}')
+    elif damage == 'state':
+        wire['economic_state']['sha256'] = 'f'*64
+    elif damage == 'proof':
+        wire['proof_sha256'] = 'f'*64
+    elif damage == 'count':
+        wire['economic_state']['serialized_bytes'] -= 1
+    elif damage == 'path':
+        wire['economic_state']['tree']['path'] = '../foreign.json'
+    elif damage == 'schema':
+        wire['economic_state']['schema'] += '_unknown'
+    elif damage in {'chunk', 'encoding'}:
+        wire['economic_state']['tree'] = storage.write_tree(root, [dict(index=i,
+            gzip_base64=base64.b64encode((b'not gzip' if damage == 'encoding' and i == 0 else gzip.compress(b'x'*(16385 if i == 0 else 1), mtime=0))).decode())
+            for i in range(wire['economic_state']['tree']['count'])])
+    report.write_text(json.dumps(wire))
+    original = report.read_bytes()
+    if damage == 'generation':
+        real = owner.decode_report_storage
+        def advance(value, **kwargs):
+            restored = real(value, **kwargs)
+            report.write_bytes(original + b'\n')
+            return restored
+        monkeypatch.setattr(owner, 'decode_report_storage', advance)
+    if damage:
+        with pytest.raises((ValueError, OSError)):
+            validation.read_native_report(data, 'entry_cancel_wait', DAY)
+    else:
+        actual, sha = validation.read_native_report(data, 'entry_cancel_wait', DAY)
+        assert actual == payload
+        assert sha == hashlib.sha256(original).hexdigest()
+        assert report.stat().st_size < validation.NATIVE_REPORT_LIMIT
+        assert generation.inspect(actual['policy_generation'], family='entry_cancel_wait',
+            day=DAY, payload=actual, data_root=data)['observation_complete']
+        assert actual['economic_state']['source_events'][0]['cost'] is None
+        assert owner._bounded_semantic_json(report)[1] == sha
+    if damage != 'generation':
+        assert report.read_bytes() == original

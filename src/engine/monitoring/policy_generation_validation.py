@@ -151,6 +151,9 @@ def publish_native_report_projection(data, family, day):
         before = archive.file_identity(path.lstat())
         raw = file_bytes(path, NATIVE_REPORT_LOGICAL_LIMIT)
         payload = json.loads(raw)
+        if family == "entry_cancel_wait":
+            from src.engine.automation.entry_cancel_wait_tuning import decode_report_storage
+            payload = decode_report_storage(payload, data_root=data)
         native = (
             payload["holding_path_vote_replay"] if family == "holding_vote" else payload
         )
@@ -237,7 +240,13 @@ def read_native_report(data, family, day):
         raise ValueError("native_report_canonical_path_required")
     before = archive.file_identity(path.lstat())
     if before["size"] <= NATIVE_REPORT_LIMIT:
-        return bounded_object(path, NATIVE_REPORT_LIMIT)
+        payload, sha = bounded_object(path, NATIVE_REPORT_LIMIT)
+        if family == "entry_cancel_wait":
+            from src.engine.automation.entry_cancel_wait_tuning import decode_report_storage
+            payload = decode_report_storage(payload, data_root=data)
+        if archive.file_identity(path.lstat()) != before:
+            raise ValueError("native_report_original_generation_changed")
+        return payload, sha
     if before["size"] > NATIVE_REPORT_LOGICAL_LIMIT:
         raise ValueError("native_report_logical_source_budget_exceeded")
     archived = Path(str(path) + ".gz")
@@ -247,6 +256,7 @@ def read_native_report(data, family, day):
     # Hash/decode the bounded compressed bytes first, then bind their actual
     # logical generation through the existing archive verifier without a
     # second unbounded physical hash if a concurrent writer changed the file.
+    archive_before = archive.file_identity(archived.lstat())
     encoded = file_bytes(archived, NATIVE_REPORT_LIMIT)
     with gzip.GzipFile(fileobj=io.BytesIO(encoded)) as stream:
         raw = stream.read(before["size"] + 1)
@@ -267,6 +277,12 @@ def read_native_report(data, family, day):
     payload = json.loads(raw)
     if not isinstance(payload, dict):
         raise ValueError("native_report_object_required")
+    if family == "entry_cancel_wait":
+        from src.engine.automation.entry_cancel_wait_tuning import decode_report_storage
+        payload = decode_report_storage(payload, data_root=data)
+    if (archive.file_identity(path.lstat()) != before
+            or archive.file_identity(archived.lstat()) != archive_before):
+        raise ValueError("native_report_archive_source_changed")
     return payload, receipt["logical_content_sha256"]
 
 
