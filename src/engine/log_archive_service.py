@@ -903,6 +903,8 @@ def save_monitor_snapshot_manifest(
         },
     }
     if verified_prefix is not None:
+        if _read_verified_postclose_exit_prefix(target_date, data_root=DATA_DIR)[1] != verified_prefix:
+            raise ValueError("postclose_exit_prefix_handoff_invalid")
         if (
             profile != "postclose_exit"
             or set(tracked_paths)
@@ -916,6 +918,9 @@ def save_monitor_snapshot_manifest(
         payload["postclose_phase"] = "holding_suffix"
         payload["completion_prefix_manifest_sha256"] = verified_prefix[
             "artifact_sha256"
+        ]
+        payload["completion_prefix_actual_cost_source_generation"] = verified_prefix[
+            "actual_cost_source_generation"
         ]
     if profile == "postclose_exit" and target_date >= "2026-09-28":
         from src.engine.lifecycle.broker_cost_reconciliation import source_generation
@@ -939,7 +944,7 @@ def save_monitor_snapshot_manifest(
             projected_costs = (projection.get("meta") or {}).get(
                 "actual_cost_source_generation"
             )
-        if projected_costs != payload["actual_cost_source_generation"] and (
+        if verified_prefix is None and projected_costs != payload["actual_cost_source_generation"] and (
             projected_costs is not None
             or payload["actual_cost_source_generation"]["count"]
             or payload["actual_cost_source_generation"].get("official_source_sha256")
@@ -1089,6 +1094,30 @@ def _postclose_prefix_guard(data_root, day, manifest_path=None):
     return result
 
 
+def _verified_original_cost_generation(data_root, day, original_cost_generation):
+    """Authenticate the exact original scope through its native cost reader."""
+    from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+
+    if (
+        not isinstance(original_cost_generation, dict)
+        or original_cost_generation.get("schema")
+        != "holding_actual_cost_source_generation_v1"
+        or original_cost_generation.get("completion_date") != day
+    ):
+        raise ValueError("postclose_exit_prefix_original_cost_invalid")
+    research = original_cost_generation.get("quantity_research_cost_generation")
+    if research is not None and not isinstance(research, dict):
+        raise ValueError("postclose_exit_prefix_original_cost_invalid")
+    declared = False if research is None else {
+        "source_dates": research.get("source_dates"),
+        "receipts": research.get("receipts"),
+    }
+    verified = source_generation(Path(data_root), day, declared_research=declared)
+    if verified != original_cost_generation:
+        raise ValueError("postclose_exit_prefix_original_cost_changed")
+    return verified
+
+
 def _postclose_prefix_native_proof(data_root, day, *, original_cost_generation=None):
     from src.engine.lifecycle.holding_window_generation import (
         _capture_day,
@@ -1098,29 +1127,9 @@ def _postclose_prefix_native_proof(data_root, day, *, original_cost_generation=N
 
     options = {}
     if original_cost_generation is not None:
-        # This immutable prefix precedes quantity's later research allocation.
-        # Authenticate its consumed receipts through the native original-scope
-        # reader. The holding suffix still validates current costs separately.
-        from src.engine.lifecycle.broker_cost_reconciliation import source_generation
-
-        if (
-            not isinstance(original_cost_generation, dict)
-            or original_cost_generation.get("schema")
-            != "holding_actual_cost_source_generation_v1"
-            or original_cost_generation.get("completion_date") != day
-        ):
-            raise ValueError("postclose_exit_prefix_original_cost_invalid")
-        research = original_cost_generation.get("quantity_research_cost_generation")
-        if research is not None and not isinstance(research, dict):
-            raise ValueError("postclose_exit_prefix_original_cost_invalid")
-        declared = False if research is None else {
-            "source_dates": research.get("source_dates"),
-            "receipts": research.get("receipts"),
-        }
-        verified = source_generation(Path(data_root), day, declared_research=declared)
-        if verified != original_cost_generation:
-            raise ValueError("postclose_exit_prefix_original_cost_changed")
-        options["original_cost_generation"] = verified
+        options["original_cost_generation"] = _verified_original_cost_generation(
+            data_root, day, original_cost_generation
+        )
     native = _capture_day(
         Path(data_root), Path(data_root) / "report/monitor_snapshots", day, **options
     )
@@ -1234,9 +1243,9 @@ def _read_verified_postclose_exit_prefix(target_date, *, data_root):
             or set(original) != set(current)
             or any(original[key] != current[key] for key in current if key != name)
             or original.get(name)
-            != code.REVIEWED_PREFIX_COST_CONTEXT_PRODUCER_ORIGINS.get(relative)
+            != code.REVIEWED_PREFIX_COST_HANDOFF_PRODUCER_ORIGINS.get(relative)
             or current.get(name)
-            != code.REVIEWED_PREFIX_COST_CONTEXT_CHANGED.get(relative)
+            != code.REVIEWED_PREFIX_COST_HANDOFF_CHANGED.get(relative)
             or not code.reviewed_preparation_pair(relative, original.get(name), current.get(name))
         ):
             raise ValueError("postclose_exit_prefix_producer_generation_changed")
@@ -1343,6 +1352,16 @@ def _verified_postclose_exit_snapshot_manifest(
             or set(manifest.get("snapshot_kinds") or []) != expected
         ):
             return None
+        projection_costs = costs
+        if (manifest.get("postclose_phase") == "holding_suffix"
+                and "completion_prefix_actual_cost_source_generation" in manifest):
+            # The sealed full manifest consumes original snapshot bytes and
+            # costs. Its publication-time raw-prefix stat seal is not a later
+            # startup dependency: native lossless archiving may advance it.
+            projection_costs = _verified_original_cost_generation(
+                data_root, target_date,
+                manifest["completion_prefix_actual_cost_source_generation"],
+            )
         pipeline = (
             Path(data_root) / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
         )
@@ -1365,15 +1384,16 @@ def _verified_postclose_exit_snapshot_manifest(
             target_date,
             data_root=Path(data_root),
             metadata_only=True,
+            original_cost_generation=projection_costs,
         )
         if projection is None:
             return None
         recorded_costs = (projection.get("meta") or {}).get(
             "actual_cost_source_generation"
         )
-        if recorded_costs != costs and (
-            costs["count"]
-            or costs.get("official_source_sha256")
+        if recorded_costs != projection_costs and (
+            projection_costs["count"]
+            or projection_costs.get("official_source_sha256")
             or recorded_costs is not None
         ):
             return None

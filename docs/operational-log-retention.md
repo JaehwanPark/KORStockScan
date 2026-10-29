@@ -203,3 +203,13 @@ Installers preserve unrelated cron entries. Deployment uses the normal ordered
 transition and separately records selected commit, actual PID, immutable policy
 hashes and post-start detector results. Applying retention is not evidence of a
 successful order or improved economics.
+
+
+Structured snapshot semantic/shape failures (`ValueError`, `TypeError`, `KeyError`,
+`JSONDecodeError`) preserve failure output and stop immediate full-calculation
+retries. Recovery requires repaired or changed inputs through the same owner;
+transient retries and original resource/deadline limits remain unchanged.
+A full postclose manifest binds original completion-prefix costs separately
+from current holding costs. Its last reader verifies original native receipts,
+current costs and logical archive identities; a publication-time raw inode/stat
+seal is not reused as a future startup predicate.

@@ -526,6 +526,12 @@ run_snapshot_once() {
       if grep -Eq '"error_kind"[[:space:]]*:[[:space:]]*"MemoryError"' "$attempt_output"; then
         non_retryable_resource_exit=1
       fi
+      # A structured semantic/shape rejection needs repaired or changed inputs.
+      # Repeating the complete calculation cannot repair the rejected contract.
+      if grep -Eq '"status"[[:space:]]*:[[:space:]]*"failed"' "$attempt_output" \
+          && grep -Eq '"error_kind"[[:space:]]*:[[:space:]]*"(ValueError|TypeError|KeyError|JSONDecodeError)"' "$attempt_output"; then
+        non_retryable_resource_exit=1
+      fi
     fi
     if [[ "$KEEP_OUTPUT_FILE" == "1" ]]; then
       cat "$attempt_output" >> "$output_file"

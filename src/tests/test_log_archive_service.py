@@ -101,7 +101,7 @@ def _postclose_phase_fixture(tmp_path, monkeypatch):
 
     def held(**kwargs):
         calls.append("holding_exit_observation")
-        window = capture_window(tmp_path, [day])
+        window = capture_window(tmp_path, [day], allow_cost_revision=True)
         return dict(
             date=day,
             meta={},
@@ -320,6 +320,17 @@ def test_prefix_authenticates_original_cost_scope_after_later_research_publicati
         # The later holding consumer must still bind the new current costs.
         window = capture_window(tmp_path, [day], allow_cost_revision=True)
         assert window["dependencies"][day]["cost_generation"] != original
+        suffix = service.save_monitor_snapshots_for_date_with_profile(
+            day, profile="postclose_exit", postclose_phase="holding_suffix"
+        )
+        full = Path(suffix["snapshot_manifest"])
+        assert service.verified_postclose_exit_snapshot_manifest(day, data_root=tmp_path) == full
+        published = json.loads(full.read_bytes())
+        assert published["completion_prefix_actual_cost_source_generation"] == original
+        assert published["actual_cost_source_generation"] == cost.source_generation(tmp_path, day)
+        published["completion_prefix_actual_cost_source_generation"] = published["actual_cost_source_generation"]
+        full.write_text(json.dumps(published))
+        assert service.verified_postclose_exit_snapshot_manifest(day, data_root=tmp_path) is None
 
 
 @pytest.mark.parametrize("damage", [None, "unreviewed", "other_producer", "unknown_origin"])
@@ -346,10 +357,10 @@ def test_prefix_reader_successor_requires_exact_reviewed_producer_pair(
         return value
 
     monkeypatch.setattr(service, "_postclose_prefix_guard", guard)
-    monkeypatch.setattr(code, "REVIEWED_PREFIX_COST_CONTEXT_PRODUCER_ORIGINS", {
+    monkeypatch.setattr(code, "REVIEWED_PREFIX_COST_HANDOFF_PRODUCER_ORIGINS", {
         relative: "c" * 64 if damage == "unknown_origin" else original["log_archive_service.py"],
     })
-    monkeypatch.setattr(code, "REVIEWED_PREFIX_COST_CONTEXT_CHANGED", {relative: "a" * 64})
+    monkeypatch.setattr(code, "REVIEWED_PREFIX_COST_HANDOFF_CHANGED", {relative: "a" * 64})
     monkeypatch.setattr(code, "reviewed_preparation_pair", lambda *args: damage != "unreviewed")
     if damage:
         with pytest.raises(ValueError, match="producer_generation_changed"):
@@ -897,9 +908,13 @@ def test_snapshot_async_wait_propagates_actual_failed_child_status(tmp_path):
     assert invoked.read_text() == "failed"
 
 
-@pytest.mark.parametrize("normalized_status", ["success", "failed"])
+@pytest.mark.parametrize("normalized_status,producer_error,expected_attempts", [
+    ("success", None, 1), ("failed", None, 1),
+    *[("failed", kind, 1) for kind in ("ValueError", "TypeError", "KeyError", "JSONDecodeError", "MemoryError")],
+    ("failed", "RuntimeError", 3),
+])
 def test_snapshot_sync_cooldown_and_exit_follow_normalized_completion(
-    tmp_path, normalized_status
+    tmp_path, normalized_status, producer_error, expected_attempts
 ):
     import os, subprocess
 
@@ -915,7 +930,8 @@ def test_snapshot_sync_cooldown_and_exit_follow_normalized_completion(
     cooldown = tmp_path / "success.state"
     stubs = """
 check_recent_success() { return 1; }
-build_throttled_command() { SNAPSHOT_CMD=(bash -c 'printf "{\\\"status\\\":\\\"success\\\"}\\n"'); }
+build_throttled_command() { SNAPSHOT_CMD=(bash -c 'printf "%s\\n" "$PRODUCER_PAYLOAD"; exit "$PRODUCER_EXIT"'); }
+append_failure_payload() { :; }
 print_summary() { :; }
 write_completion_artifact() { :; }
 completion_artifact_status() { printf "%s" "$NORMALIZED_STATUS"; }
@@ -926,7 +942,10 @@ if run_snapshot_once "$OUTPUT_FILE"; then exit 0; else exit $?; fi
         "NORMALIZED_STATUS": normalized_status,
         "OUTPUT_FILE": str(output),
         "COOLDOWN_STATE_FILE": str(cooldown),
-        "MAX_RETRIES": "1",
+        "MAX_RETRIES": "3",
+        "RETRY_DELAY_SEC": "0",
+        "PRODUCER_PAYLOAD": json.dumps(dict(status="failed" if producer_error else "success", error_kind=producer_error)),
+        "PRODUCER_EXIT": "1" if producer_error else "0",
         "LOCK_WAIT_SEC": "0",
         "LOCK_FILE": str(tmp_path / "snapshot.lock"),
         "LOG_FILE": str(tmp_path / "snapshot.log"),
@@ -954,6 +973,7 @@ if run_snapshot_once "$OUTPUT_FILE"; then exit 0; else exit $?; fi
     )
     assert cooldown.exists() == (normalized_status == "success")
     assert output.exists()
+    assert (tmp_path / "snapshot.log").read_text().count("run_snapshot_once start attempt=") == expected_attempts
 
 
 def test_monitor_snapshot_roundtrip(tmp_path, monkeypatch):
