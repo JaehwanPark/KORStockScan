@@ -206,10 +206,13 @@ def test_terminal_native_wait_binds_ingest_without_granting_readiness(
 
 
 def test_probe_rejects_cross_route_or_old_transport_without_machine_call():
+    snapshot = _snapshot()
+    snapshot["liquidity_field_sources"] = {"curr": {"item": "123456_AL"}}
     good, reason = exact_probe_ws_data(
-        _snapshot(), code="123456", route="krx_only", after_epoch=10
+        snapshot, code="123456", route="krx_only", after_epoch=10
     )
     assert reason == "ready" and good["curr"] == 10000
+    assert "liquidity_field_sources" not in good
     missing_transport = _snapshot()
     missing_transport.pop("market_data_transport_epoch")
     missing_transport["realtime_type_snapshots_by_route"]["KRX|krx_only"]["0B"][

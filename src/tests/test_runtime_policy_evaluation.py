@@ -892,6 +892,7 @@ def test_post_response_prepared_claim_rechecks_source_and_native_eligibility(
     from src.engine.scalping import (
         reversal_current_backend as D,
         reversal_extended_union as A,
+        reversal_source_diagnostics as DIAG,
     )
     from src.utils import constants
 
@@ -925,6 +926,10 @@ def test_post_response_prepared_claim_rechecks_source_and_native_eligibility(
         return ({"branch_signals": {"legacy_dd5_ge_0_4_v1": {}}}, {})
 
     monkeypatch.setattr(D, "validate_any_claim", validate)
+    monkeypatch.setattr(
+        DIAG, "validate_claim_with_receipt",
+        lambda claim, generation, *, now, **kw: validate(claim, generation, now=now),
+    )
     monkeypatch.setattr(
         V,
         "validate_family",

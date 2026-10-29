@@ -5559,3 +5559,118 @@ def test_probe_connection_activity_keeps_empty_item_unknown_and_rejects_old_tran
         trace["connection_activity"]["counts_by_route_type"]["krx_nxt_integrated:0B"]
         == 1
     )
+
+
+def test_liquidity_field_receipts_preserve_each_actual_writer_and_partial_frame():
+    import copy
+    from datetime import timedelta
+    from src.engine.sniper_state_handlers import _liquidity_observation
+
+    manager = KiwoomWSManager("test-token")
+    manager.subscribed_codes.add("017900")
+    manager._market_data_transport_epoch = 7
+    clock = datetime.fromisoformat("2026-10-29T17:11:34+09:00")
+
+    def receive(kind, fields, offset):
+        packet = {
+            "trnm": "REAL",
+            "data": [{"type": kind, "item": "017900_AL", "values": fields}],
+        }
+        asyncio.run(
+            manager._handle_message(
+                json.dumps(packet),
+                received_at=clock + timedelta(seconds=offset),
+                transport_epoch=7,
+            )
+        )
+
+    receive("0B", {"10": "+9390"}, 0)
+    receive("0D", {"121": "100", "125": "200"}, 1)
+    original = manager.get_latest_data("017900")
+    receive("0D", {"121": "150"}, 2)
+    receive("0B", {"10": "bad"}, 3)
+    latest = manager.get_latest_data("017900")
+    assert original["ask_tot"] == 100 and original["bid_tot"] == 200
+    assert (
+        latest["ask_tot"] == 150 and latest["bid_tot"] == 200 and latest["curr"] == 9390
+    )
+    receipts = latest["liquidity_field_sources"]
+    assert receipts["curr"]["received_epoch"] == clock.timestamp()
+    assert (
+        receipts["ask_tot"]["received_epoch"]
+        == (clock + timedelta(seconds=2)).timestamp()
+    )
+    assert (
+        receipts["bid_tot"]["received_epoch"]
+        == (clock + timedelta(seconds=1)).timestamp()
+    )
+    assert (
+        receipts["ask_tot"]["item"] == "017900_AL"
+        and receipts["ask_tot"]["transport_epoch"] == 7
+    )
+    assert receipts["ask_tot"]["route"] == "krx_nxt_integrated"
+    obs = _liquidity_observation(
+        latest, price=9390, value=(150 + 200) * 9390, observed_at=clock.timestamp() + 3
+    )
+    assert obs["field_level_source_binding"] == "matching_upstream_field_receipts"
+    assert obs["field_source_identity_status"] == "consistent"
+    mixed = copy.deepcopy(latest)
+    mixed["liquidity_field_sources"]["ask_tot"]["item"] = "017900_NX"
+    assert (
+        _liquidity_observation(
+            mixed, price=9390, value=None, observed_at=clock.timestamp() + 3
+        )["field_source_identity_status"]
+        == "conflict"
+    )
+    changed_epoch = copy.deepcopy(latest)
+    changed_epoch["market_data_transport_epoch"] = 8
+    assert (
+        _liquidity_observation(
+            changed_epoch, price=9390, value=None, observed_at=clock.timestamp() + 3
+        )["field_source_identity_status"]
+        == "stale_transport_epoch"
+    )
+    assert (
+        obs["field_sources"]["ask_tot"]["received_epoch"]
+        != obs["field_sources"]["bid_tot"]["received_epoch"]
+    )
+    assert original["liquidity_field_sources"]["ask_tot"]["raw_value"] == "100"
+    receive("0D", {"125": "invalid"}, 4)
+    invalid = manager.get_latest_data("017900")
+    assert invalid["liquidity_field_sources"]["bid_tot"]["parse_valid"] is False
+    assert (
+        _liquidity_observation(
+            invalid, price=9390, value=None, observed_at=clock.timestamp() + 4
+        )["field_level_source_binding"]
+        == "unavailable"
+    )
+
+
+def test_liquidity_field_receipts_keep_untrusted_clock_and_missing_epoch_unknown():
+    from src.engine.sniper_state_handlers import _liquidity_observation
+
+    manager = KiwoomWSManager("test-token")
+    manager.subscribed_codes.add("017900")
+    packet = {
+        "trnm": "REAL",
+        "data": [
+            {
+                "type": "0D",
+                "item": "017900_AL",
+                "values": {"10": "9390", "121": "100", "125": "200"},
+            }
+        ],
+    }
+    asyncio.run(manager._handle_message(json.dumps(packet)))
+    latest = manager.get_latest_data("017900")
+    source = latest["liquidity_field_sources"]["ask_tot"]
+    assert source["transport_epoch"] is None
+    assert latest["liquidity_field_sources"]["curr"]["documented_type_fid"] is False
+    assert (
+        source["receive_time_source"]
+        == kiwoom_websocket._ORDER_EXECUTION_UNTRUSTED_RECEIVE_TIME_SOURCE
+    )
+    observed = _liquidity_observation(
+        latest, price=9390, value=300 * 9390, observed_at=source["received_epoch"]
+    )
+    assert observed["field_source_identity_status"] == "unknown"

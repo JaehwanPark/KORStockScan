@@ -966,6 +966,9 @@ def _route_partitioned_ws_view(
     view["best_ask"] = 0
     view["ask_tot"] = 0
     view["bid_tot"] = 0
+    # This view replaces flat fields from a route partition. Their original
+    # per-field writers cannot be inferred from the canonical frame.
+    view.pop("liquidity_field_sources", None)
     for key in (
         "ask_price",
         "bid_price",

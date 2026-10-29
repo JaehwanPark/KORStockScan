@@ -362,6 +362,9 @@ def exact_probe_ws_data(
     ):
         return {}, "required_bbo_trade_missing"
     result = dict(snapshot)
+    # The exact-route trade/BBO projection below can replace the flat values;
+    # canonical field receipts do not authenticate that projection.
+    result.pop("liquidity_field_sources", None)
     route_buffers = snapshot.get("recent_trade_ticks_by_route")
     route_ticks = (
         route_buffers.get(route_key) if isinstance(route_buffers, dict) else None

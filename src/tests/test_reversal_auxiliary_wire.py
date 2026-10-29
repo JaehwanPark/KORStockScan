@@ -425,7 +425,16 @@ def test_full_analyze_target_records_raw_then_decodes(
                     from src.engine.scalping.entry_deadline import EntryDeadline
 
                     monkeypatch.setattr(EntryDeadline, "remaining", lambda self: 0.0)
-                raise ValueError("reversal_signal_path_changed")
+                error = ValueError("reversal_signal_path_changed")
+                error.reversal_source_receipt = {
+                    "schema": "continuous_reversal_claim_source_receipt_v1",
+                    "status": "observed",
+                    "validation_error": "reversal_signal_path_changed",
+                    "failed_native_predicates": ["ready_membership_present"],
+                    "evaluation_attempt_id": args[0].get("evaluation_attempt_id"),
+                    "runtime_effect": False,
+                }
+                raise error
             return a["matched_policy_refs"]
 
         monkeypatch.setattr(V, "validate_active_claim", changed_after_reply)
@@ -481,10 +490,25 @@ def test_full_analyze_target_records_raw_then_decodes(
             )
             assert result["entry_auxiliary_response_contract_valid"] is True
             assert result["entry_post_response_execution_valid"] is False
+            assert result["continuous_reversal_rejected_claim_receipt"][
+                "failed_native_predicates"
+            ] == ["ready_membership_present"]
+            assert result["continuous_reversal_rejected_claim_receipt"][
+                "evaluation_attempt_id"
+            ] == result["evaluation_attempt_id"]
             assert circuit.snapshot()["state"] == "CLOSED"
             assert circuit.snapshot()["consecutive_failures"] == 0
     if native_changed_after_reply:
         assert len(calls) == 5 and not engine.ai_disabled
+        traces = [
+            json.loads(line)
+            for path in (tmp_path / "ai_decision_trace").glob("*.jsonl")
+            for line in path.read_text().splitlines()
+        ]
+        assert traces and all(
+            row["continuous_reversal_rejected_claim_receipt"]["validation_error"]
+            == "reversal_signal_path_changed" for row in traces
+        )
         return
     if response_kind in {"unsent_budget", "timeout_native_mix", "revoked"}:
         assert result["action"] != "BUY" and not engine.ai_disabled

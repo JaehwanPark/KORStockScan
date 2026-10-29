@@ -1,0 +1,660 @@
+{
+  "case": "aims-eebfc7824f5e43949618",
+  "logical_input": {
+    "common_context": {
+      "as_of": "2026-10-29T16:53:29.526+09:00",
+      "confirmation_price": 6730.0,
+      "entry_ask": 6730,
+      "entry_geometry": {
+        "soft_stop_price": 6543.149243259496,
+        "target_price": 6772.4967425077675
+      },
+      "epoch": 1793260409.526714,
+      "market": "AFTER",
+      "native_epoch": 1793252344947604,
+      "native_sequence": 400,
+      "objective": {
+        "cost_rate": 0.0023,
+        "horizon_seconds": 1800,
+        "net_soft_stop_pct": -3.0,
+        "net_target_pct": 0.4
+      },
+      "opportunity_key": "a583c05db08f2310c637409774bb189c2ca6de2bd437bc131022db70c4429c4a",
+      "source_item": "030960_AL",
+      "symbol": "030960",
+      "venue": "SOR"
+    },
+    "entry_setup_evidence_v1": {
+      "context_facts": [],
+      "contradicting_facts": [
+        {
+          "id": "manual_cumulative_5201661cf56a82183fd53a52:5201661cf56a82183fd53a52fd9942699f8465561fb4ab91e34c9c4644672175/observed_spread",
+          "unit": "percent",
+          "value": 0.2971768202080238
+        }
+      ],
+      "facts": {
+        "confirmation_price": 6730.0,
+        "entry_ask": 6730
+      },
+      "positive_facts": [
+        {
+          "id": "manual_cumulative_5201661cf56a82183fd53a52:5201661cf56a82183fd53a52fd9942699f8465561fb4ab91e34c9c4644672175/observed_machine_signal",
+          "unit": "price",
+          "value": 6730.0
+        },
+        {
+          "id": "observed_machine_signal",
+          "unit": "signal_count",
+          "value": 1
+        }
+      ],
+      "risk_fact_bindings": {
+        "ENTRY_SPREAD_CONCERN": [
+          "manual_cumulative_5201661cf56a82183fd53a52:5201661cf56a82183fd53a52fd9942699f8465561fb4ab91e34c9c4644672175/observed_spread"
+        ]
+      },
+      "setup_state": "READY",
+      "source_quality": "price_and_entry_quote_valid"
+    },
+    "observation_phase": {
+      "rolling_windows_end": "AT_CONFIRMATION",
+      "stage": "UNION"
+    },
+    "schema": "continuous_reversal_union_auxiliary_v3",
+    "signals": [
+      {
+        "definition_sha256": "5201661cf56a82183fd53a52fd9942699f8465561fb4ab91e34c9c4644672175",
+        "facts": {
+          "buy_pressure_10t": 67.31328806983511,
+          "buy_pressure_30s": 28.571428571428573,
+          "confirmation_price": 6730.0,
+          "drawdown_5m_pct": 0.14858841010401136,
+          "entry_ask": 6730,
+          "return_10t_pct": -0.14836795252225476,
+          "return_60s_pct": null,
+          "session_return_pct": 1.5082956259426794,
+          "spread_pct": 0.2971768202080238,
+          "volume_ratio_60s": null,
+          "vs_vwap_60s_pct": null
+        },
+        "observation_phase": {
+          "post_trigger_observations": "OBSERVED_THROUGH_CONFIRMATION",
+          "rolling_windows_end": "AT_CONFIRMATION",
+          "stage": "FIRST_UPTICK"
+        },
+        "observed_signal": {
+          "feature_version": "manual_cumulative_confirmation_prefix_v2",
+          "original_confirmation": {
+            "branch_definition_sha256": null,
+            "confirmation_price": 6730.0,
+            "decision_phase": "FIRST_UPTICK",
+            "entry_ask": 6730,
+            "epoch": 1793260409.526714,
+            "event_id": "2026-10-29:SOR:SOR_AFTERMARKET:030960:1793252344947604:400",
+            "native_epoch": 1793252344947604,
+            "native_sequence": 400,
+            "signal_id": "2026-10-29:SOR:SOR_AFTERMARKET:030960:1793252344947604:400"
+          },
+          "original_definition_ref": {
+            "branch_id": "legacy_drop_0_4_rebound_le_0_3_v1",
+            "definition_sha256": "7c8a172da1be0aef9152d102dc95d94fd64966a91f6cb563bbfa7472dc9802e1"
+          },
+          "refinement_features": {
+            "buy10": 67.31328806983511,
+            "dd": 0.14858841010401136,
+            "ret": null,
+            "session": 1.5082956259426794,
+            "spread": 0.2971768202080238,
+            "structure": null,
+            "volume": null,
+            "vwap": null
+          },
+          "refinement_truth": "UNKNOWN",
+          "root_contract": {
+            "signal": "original_confirmation"
+          }
+        },
+        "phase": "FIRST_UPTICK",
+        "policy_id": "manual_cumulative_5201661cf56a82183fd53a52",
+        "recent_observed_prices": [
+          {
+            "age_sec": 53.00014019012451,
+            "price": 6740.0,
+            "qty": 427,
+            "side": "BUY"
+          },
+          {
+            "age_sec": 41.598304986953735,
+            "price": 6730.0,
+            "qty": 3,
+            "side": "SELL"
+          },
+          {
+            "age_sec": 39.000061988830566,
+            "price": 6730.0,
+            "qty": 1,
+            "side": "BUY"
+          },
+          {
+            "age_sec": 38.49824905395508,
+            "price": 6730.0,
+            "qty": 186,
+            "side": "BUY"
+          },
+          {
+            "age_sec": 36.29658508300781,
+            "price": 6730.0,
+            "qty": 50,
+            "side": "SELL"
+          },
+          {
+            "age_sec": 35.40058898925781,
+            "price": 6730.0,
+            "qty": 84,
+            "side": "SELL"
+          },
+          {
+            "age_sec": 24.300244092941284,
+            "price": 6730.0,
+            "qty": 189,
+            "side": "SELL"
+          },
+          {
+            "age_sec": 12.785001039505005,
+            "price": 6730.0,
+            "qty": 10,
+            "side": "SELL"
+          },
+          {
+            "age_sec": 12.000611066818237,
+            "price": 6710.0,
+            "qty": 1,
+            "side": "SELL"
+          },
+          {
+            "age_sec": 0.0,
+            "price": 6730.0,
+            "qty": 80,
+            "side": "BUY"
+          }
+        ],
+        "ref": "manual_cumulative_5201661cf56a82183fd53a52:5201661cf56a82183fd53a52fd9942699f8465561fb4ab91e34c9c4644672175"
+      }
+    ]
+  },
+  "machine_capture_sha256": "59ba7e6f802117c5e09d6264b8a06642556ef4c0ea08f81668608237bed86d5f",
+  "native_event": {
+    "branch_signals": {
+      "manual_cumulative_5201661cf56a82183fd53a52": {
+        "at": "2026-10-29T16:53:29.526+09:00",
+        "branch_definition_sha256": "5201661cf56a82183fd53a52fd9942699f8465561fb4ab91e34c9c4644672175",
+        "branch_features": {
+          "buy10": 67.31328806983511,
+          "dd": 0.14858841010401136,
+          "ret": null,
+          "session": 1.5082956259426794,
+          "spread": 0.2971768202080238,
+          "structure": null,
+          "volume": null,
+          "vwap": null
+        },
+        "confirmation_pct": 0.29806259314455463,
+        "confirmation_price": 6730.0,
+        "decision_phase": "FIRST_UPTICK",
+        "decline_seconds": 40.999529123306274,
+        "down_steps": 2,
+        "drawdown_5m_pct": 0.14858841010401136,
+        "drop_pct": 0.4451038575667643,
+        "entry_ask": 6730,
+        "epoch": 1793260409.526714,
+        "event_id": "2026-10-29:SOR:SOR_AFTERMARKET:030960:1793252344947604:400",
+        "extended_definition_id": "manual_cumulative_5201661cf56a82183fd53a52",
+        "group": "other",
+        "low_price": 6710.0,
+        "market": "AFTER",
+        "native_epoch": 1793252344947604,
+        "native_sequence": 400,
+        "price_band": "LT_20000",
+        "registry_generation": "b2acbce10efa9008c1be086b8c89aae10f0c9d3a8162424231846650eaf1eb64",
+        "session": "SOR_AFTERMARKET",
+        "signal_id": "2026-10-29:SOR:SOR_AFTERMARKET:030960:1793252344947604:400",
+        "signal_kind": "FIRST_UPTICK",
+        "signal_proof": {
+          "feature_version": "manual_cumulative_confirmation_prefix_v2",
+          "original_confirmation": {
+            "at": "2026-10-29T16:53:29.526+09:00",
+            "branch_features": {
+              "buy10": 67.31328806983511,
+              "high_rising": null,
+              "low_rising": null,
+              "ret": null,
+              "ret60": null,
+              "session": 1.5082956259426794,
+              "session_anchor_epoch": 1793258516.327239,
+              "session_anchor_price": 6630.0,
+              "session_trend": "UP",
+              "structure": null,
+              "vwap": null
+            },
+            "confirmation_pct": 0.29806259314455463,
+            "confirmation_price": 6730.0,
+            "decision_phase": "FIRST_UPTICK",
+            "decline_seconds": 40.999529123306274,
+            "down_steps": 2,
+            "drawdown_5m_pct": 0.4451038575667643,
+            "drop_pct": 0.4451038575667643,
+            "entry_ask": 6730,
+            "epoch": 1793260409.526714,
+            "event_id": "2026-10-29:SOR:SOR_AFTERMARKET:030960:1793252344947604:400",
+            "group": "other",
+            "low_price": 6710.0,
+            "market": "AFTER",
+            "native_epoch": 1793252344947604,
+            "native_sequence": 400,
+            "price_band": "LT_20000",
+            "registry_generation": "b2acbce10efa9008c1be086b8c89aae10f0c9d3a8162424231846650eaf1eb64",
+            "session": "SOR_AFTERMARKET",
+            "signal_id": "2026-10-29:SOR:SOR_AFTERMARKET:030960:1793252344947604:400",
+            "source_item": "030960_AL",
+            "spread_pct": 0.29806259314455463,
+            "symbol": "030960",
+            "venue": "SOR",
+            "volume_ratio_60s": null
+          },
+          "original_definition_ref": {
+            "branch_id": "legacy_drop_0_4_rebound_le_0_3_v1",
+            "definition_sha256": "7c8a172da1be0aef9152d102dc95d94fd64966a91f6cb563bbfa7472dc9802e1"
+          },
+          "refinement_features": {
+            "buy10": 67.31328806983511,
+            "dd": 0.14858841010401136,
+            "ret": null,
+            "session": 1.5082956259426794,
+            "spread": 0.2971768202080238,
+            "structure": null,
+            "volume": null,
+            "vwap": null
+          },
+          "refinement_truth": "UNKNOWN",
+          "root_contract": {
+            "signal": "original_confirmation"
+          }
+        },
+        "source_item": "030960_AL",
+        "spread_pct": 0.2971768202080238,
+        "symbol": "030960",
+        "venue": "SOR",
+        "volume_ratio_60s": null
+      }
+    }
+  },
+  "native_snapshot": [
+    {
+      "anchor_lineage": {
+        "manual_cumulative_5201661cf56a82183fd53a52": [
+          "2026-10-29:SOR:SOR_AFTERMARKET:030960:1793252344947604:400"
+        ]
+      },
+      "at": "2026-10-29T16:53:29.526+09:00",
+      "branch_definition_sha256": "5201661cf56a82183fd53a52fd9942699f8465561fb4ab91e34c9c4644672175",
+      "branch_features": {
+        "buy10": 67.31328806983511,
+        "dd": 0.14858841010401136,
+        "ret": null,
+        "session": 1.5082956259426794,
+        "spread": 0.2971768202080238,
+        "structure": null,
+        "volume": null,
+        "vwap": null
+      },
+      "branch_signals": {
+        "manual_cumulative_5201661cf56a82183fd53a52": {
+          "at": "2026-10-29T16:53:29.526+09:00",
+          "branch_definition_sha256": "5201661cf56a82183fd53a52fd9942699f8465561fb4ab91e34c9c4644672175",
+          "branch_features": {
+            "buy10": 67.31328806983511,
+            "dd": 0.14858841010401136,
+            "ret": null,
+            "session": 1.5082956259426794,
+            "spread": 0.2971768202080238,
+            "structure": null,
+            "volume": null,
+            "vwap": null
+          },
+          "confirmation_pct": 0.29806259314455463,
+          "confirmation_price": 6730.0,
+          "decision_phase": "FIRST_UPTICK",
+          "decline_seconds": 40.999529123306274,
+          "down_steps": 2,
+          "drawdown_5m_pct": 0.14858841010401136,
+          "drop_pct": 0.4451038575667643,
+          "entry_ask": 6730,
+          "epoch": 1793260409.526714,
+          "event_id": "2026-10-29:SOR:SOR_AFTERMARKET:030960:1793252344947604:400",
+          "extended_definition_id": "manual_cumulative_5201661cf56a82183fd53a52",
+          "group": "other",
+          "low_price": 6710.0,
+          "market": "AFTER",
+          "native_epoch": 1793252344947604,
+          "native_sequence": 400,
+          "price_band": "LT_20000",
+          "registry_generation": "b2acbce10efa9008c1be086b8c89aae10f0c9d3a8162424231846650eaf1eb64",
+          "session": "SOR_AFTERMARKET",
+          "signal_id": "2026-10-29:SOR:SOR_AFTERMARKET:030960:1793252344947604:400",
+          "signal_kind": "FIRST_UPTICK",
+          "signal_proof": {
+            "feature_version": "manual_cumulative_confirmation_prefix_v2",
+            "original_confirmation": {
+              "at": "2026-10-29T16:53:29.526+09:00",
+              "branch_features": {
+                "buy10": 67.31328806983511,
+                "high_rising": null,
+                "low_rising": null,
+                "ret": null,
+                "ret60": null,
+                "session": 1.5082956259426794,
+                "session_anchor_epoch": 1793258516.327239,
+                "session_anchor_price": 6630.0,
+                "session_trend": "UP",
+                "structure": null,
+                "vwap": null
+              },
+              "confirmation_pct": 0.29806259314455463,
+              "confirmation_price": 6730.0,
+              "decision_phase": "FIRST_UPTICK",
+              "decline_seconds": 40.999529123306274,
+              "down_steps": 2,
+              "drawdown_5m_pct": 0.4451038575667643,
+              "drop_pct": 0.4451038575667643,
+              "entry_ask": 6730,
+              "epoch": 1793260409.526714,
+              "event_id": "2026-10-29:SOR:SOR_AFTERMARKET:030960:1793252344947604:400",
+              "group": "other",
+              "low_price": 6710.0,
+              "market": "AFTER",
+              "native_epoch": 1793252344947604,
+              "native_sequence": 400,
+              "price_band": "LT_20000",
+              "registry_generation": "b2acbce10efa9008c1be086b8c89aae10f0c9d3a8162424231846650eaf1eb64",
+              "session": "SOR_AFTERMARKET",
+              "signal_id": "2026-10-29:SOR:SOR_AFTERMARKET:030960:1793252344947604:400",
+              "source_item": "030960_AL",
+              "spread_pct": 0.29806259314455463,
+              "symbol": "030960",
+              "venue": "SOR",
+              "volume_ratio_60s": null
+            },
+            "original_definition_ref": {
+              "branch_id": "legacy_drop_0_4_rebound_le_0_3_v1",
+              "definition_sha256": "7c8a172da1be0aef9152d102dc95d94fd64966a91f6cb563bbfa7472dc9802e1"
+            },
+            "refinement_features": {
+              "buy10": 67.31328806983511,
+              "dd": 0.14858841010401136,
+              "ret": null,
+              "session": 1.5082956259426794,
+              "spread": 0.2971768202080238,
+              "structure": null,
+              "volume": null,
+              "vwap": null
+            },
+            "refinement_truth": "UNKNOWN",
+            "root_contract": {
+              "signal": "original_confirmation"
+            }
+          },
+          "source_item": "030960_AL",
+          "spread_pct": 0.2971768202080238,
+          "symbol": "030960",
+          "venue": "SOR",
+          "volume_ratio_60s": null
+        }
+      },
+      "canonical_opportunity_id": "903234cd96c8d8ce4b9142084974b5ea20af0f5f2dda739a1932ef8a87e2da8d",
+      "confirmation_pct": 0.29806259314455463,
+      "confirmation_price": 6730.0,
+      "confirmed_set": [
+        "manual_cumulative_5201661cf56a82183fd53a52"
+      ],
+      "decision_phase": "FIRST_UPTICK",
+      "decline_seconds": 40.999529123306274,
+      "down_steps": 2,
+      "drawdown_5m_pct": 0.14858841010401136,
+      "drop_pct": 0.4451038575667643,
+      "entry_ask": 6730,
+      "epoch": 1793260409.526714,
+      "event_id": "2026-10-29:SOR:SOR_AFTERMARKET:030960:1793252344947604:400",
+      "extended_definition_id": "manual_cumulative_5201661cf56a82183fd53a52",
+      "group": "other",
+      "low_price": 6710.0,
+      "market": "AFTER",
+      "native_epoch": 1793252344947604,
+      "native_sequence": 400,
+      "opportunity_key": "a583c05db08f2310c637409774bb189c2ca6de2bd437bc131022db70c4429c4a",
+      "price_band": "LT_20000",
+      "registry_generation": "b2acbce10efa9008c1be086b8c89aae10f0c9d3a8162424231846650eaf1eb64",
+      "registry_sha256": "2d94b2f9dbf86b722ad3fa06d87636b23dc8b80eb74aff484e5bcc5291c7d22f",
+      "session": "SOR_AFTERMARKET",
+      "signal_id": "2026-10-29:SOR:SOR_AFTERMARKET:030960:1793252344947604:400",
+      "signal_kind": "FIRST_UPTICK",
+      "signal_proof": {
+        "feature_version": "manual_cumulative_confirmation_prefix_v2",
+        "original_confirmation": {
+          "at": "2026-10-29T16:53:29.526+09:00",
+          "branch_features": {
+            "buy10": 67.31328806983511,
+            "high_rising": null,
+            "low_rising": null,
+            "ret": null,
+            "ret60": null,
+            "session": 1.5082956259426794,
+            "session_anchor_epoch": 1793258516.327239,
+            "session_anchor_price": 6630.0,
+            "session_trend": "UP",
+            "structure": null,
+            "vwap": null
+          },
+          "confirmation_pct": 0.29806259314455463,
+          "confirmation_price": 6730.0,
+          "decision_phase": "FIRST_UPTICK",
+          "decline_seconds": 40.999529123306274,
+          "down_steps": 2,
+          "drawdown_5m_pct": 0.4451038575667643,
+          "drop_pct": 0.4451038575667643,
+          "entry_ask": 6730,
+          "epoch": 1793260409.526714,
+          "event_id": "2026-10-29:SOR:SOR_AFTERMARKET:030960:1793252344947604:400",
+          "group": "other",
+          "low_price": 6710.0,
+          "market": "AFTER",
+          "native_epoch": 1793252344947604,
+          "native_sequence": 400,
+          "price_band": "LT_20000",
+          "registry_generation": "b2acbce10efa9008c1be086b8c89aae10f0c9d3a8162424231846650eaf1eb64",
+          "session": "SOR_AFTERMARKET",
+          "signal_id": "2026-10-29:SOR:SOR_AFTERMARKET:030960:1793252344947604:400",
+          "source_item": "030960_AL",
+          "spread_pct": 0.29806259314455463,
+          "symbol": "030960",
+          "venue": "SOR",
+          "volume_ratio_60s": null
+        },
+        "original_definition_ref": {
+          "branch_id": "legacy_drop_0_4_rebound_le_0_3_v1",
+          "definition_sha256": "7c8a172da1be0aef9152d102dc95d94fd64966a91f6cb563bbfa7472dc9802e1"
+        },
+        "refinement_features": {
+          "buy10": 67.31328806983511,
+          "dd": 0.14858841010401136,
+          "ret": null,
+          "session": 1.5082956259426794,
+          "spread": 0.2971768202080238,
+          "structure": null,
+          "volume": null,
+          "vwap": null
+        },
+        "refinement_truth": "UNKNOWN",
+        "root_contract": {
+          "signal": "original_confirmation"
+        }
+      },
+      "source_item": "030960_AL",
+      "spread_pct": 0.2971768202080238,
+      "symbol": "030960",
+      "venue": "SOR",
+      "volume_ratio_60s": null
+    },
+    {
+      "branch_inputs": {
+        "manual_cumulative_5201661cf56a82183fd53a52": {
+          "as_of": "2026-10-29T16:53:29.526+09:00",
+          "facts": {
+            "buy_pressure_10t": 67.31328806983511,
+            "buy_pressure_30s": 28.571428571428573,
+            "confirmation_price": 6730.0,
+            "drawdown_5m_pct": 0.14858841010401136,
+            "entry_ask": 6730,
+            "return_10t_pct": -0.14836795252225476,
+            "return_60s_pct": null,
+            "session_return_pct": 1.5082956259426794,
+            "spread_pct": 0.2971768202080238,
+            "volume_ratio_60s": null,
+            "vs_vwap_60s_pct": null
+          },
+          "market": "AFTER",
+          "price_band": "LT_20000",
+          "recent_observed_prices": [
+            {
+              "age_sec": 53.00014019012451,
+              "price": 6740.0,
+              "qty": 427,
+              "side": "BUY"
+            },
+            {
+              "age_sec": 41.598304986953735,
+              "price": 6730.0,
+              "qty": 3,
+              "side": "SELL"
+            },
+            {
+              "age_sec": 39.000061988830566,
+              "price": 6730.0,
+              "qty": 1,
+              "side": "BUY"
+            },
+            {
+              "age_sec": 38.49824905395508,
+              "price": 6730.0,
+              "qty": 186,
+              "side": "BUY"
+            },
+            {
+              "age_sec": 36.29658508300781,
+              "price": 6730.0,
+              "qty": 50,
+              "side": "SELL"
+            },
+            {
+              "age_sec": 35.40058898925781,
+              "price": 6730.0,
+              "qty": 84,
+              "side": "SELL"
+            },
+            {
+              "age_sec": 24.300244092941284,
+              "price": 6730.0,
+              "qty": 189,
+              "side": "SELL"
+            },
+            {
+              "age_sec": 12.785001039505005,
+              "price": 6730.0,
+              "qty": 10,
+              "side": "SELL"
+            },
+            {
+              "age_sec": 12.000611066818237,
+              "price": 6710.0,
+              "qty": 1,
+              "side": "SELL"
+            },
+            {
+              "age_sec": 0.0,
+              "price": 6730.0,
+              "qty": 80,
+              "side": "BUY"
+            }
+          ],
+          "schema": "continuous_path_prefix_v1",
+          "signal_kind": "FIRST_UPTICK",
+          "signal_proof": {
+            "feature_version": "manual_cumulative_confirmation_prefix_v2",
+            "original_confirmation": {
+              "at": "2026-10-29T16:53:29.526+09:00",
+              "branch_features": {
+                "buy10": 67.31328806983511,
+                "high_rising": null,
+                "low_rising": null,
+                "ret": null,
+                "ret60": null,
+                "session": 1.5082956259426794,
+                "session_anchor_epoch": 1793258516.327239,
+                "session_anchor_price": 6630.0,
+                "session_trend": "UP",
+                "structure": null,
+                "vwap": null
+              },
+              "confirmation_pct": 0.29806259314455463,
+              "confirmation_price": 6730.0,
+              "decision_phase": "FIRST_UPTICK",
+              "decline_seconds": 40.999529123306274,
+              "down_steps": 2,
+              "drawdown_5m_pct": 0.4451038575667643,
+              "drop_pct": 0.4451038575667643,
+              "entry_ask": 6730,
+              "epoch": 1793260409.526714,
+              "event_id": "2026-10-29:SOR:SOR_AFTERMARKET:030960:1793252344947604:400",
+              "group": "other",
+              "low_price": 6710.0,
+              "market": "AFTER",
+              "native_epoch": 1793252344947604,
+              "native_sequence": 400,
+              "price_band": "LT_20000",
+              "registry_generation": "b2acbce10efa9008c1be086b8c89aae10f0c9d3a8162424231846650eaf1eb64",
+              "session": "SOR_AFTERMARKET",
+              "signal_id": "2026-10-29:SOR:SOR_AFTERMARKET:030960:1793252344947604:400",
+              "source_item": "030960_AL",
+              "spread_pct": 0.29806259314455463,
+              "symbol": "030960",
+              "venue": "SOR",
+              "volume_ratio_60s": null
+            },
+            "original_definition_ref": {
+              "branch_id": "legacy_drop_0_4_rebound_le_0_3_v1",
+              "definition_sha256": "7c8a172da1be0aef9152d102dc95d94fd64966a91f6cb563bbfa7472dc9802e1"
+            },
+            "refinement_features": {
+              "buy10": 67.31328806983511,
+              "dd": 0.14858841010401136,
+              "ret": null,
+              "session": 1.5082956259426794,
+              "spread": 0.2971768202080238,
+              "structure": null,
+              "volume": null,
+              "vwap": null
+            },
+            "refinement_truth": "UNKNOWN",
+            "root_contract": {
+              "signal": "original_confirmation"
+            }
+          },
+          "source_item": "030960_AL",
+          "symbol_group": "other_non_fixed",
+          "venue": "SOR"
+        }
+      }
+    }
+  ],
+  "trace_line_sha256": "70fe803366d414e913e5aeb749ff4118ddb0e323d5c0928b5095a2e8944574e5"
+}

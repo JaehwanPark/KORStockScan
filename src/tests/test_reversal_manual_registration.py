@@ -411,3 +411,59 @@ def test_selected_lifetime_keeps_first_breach_terminal_after_recovery(cap):
     assert proof["original_deadline"] == signal_deadline_epoch(event)
     assert all(x["event"]["signal_id"] != event["signal_id"] for x in state.ready)
     assert proof["branches"][bid]["observation"][3] == 99.49
+def test_post_provider_claim_receipt_retains_first_breach_after_recovery(monkeypatch):
+    from src.engine.scalping import reversal_extended_runtime as RT
+    from src.engine.scalping import reversal_current_backend as D
+    from src.engine.scalping import reversal_source_diagnostics as DIAG
+
+    bid = bid_for("other_non_fixed", "FIRST_HOLD3")
+    values = hold_rows()
+    state = R.State(branch_ids=[bid], session_anchor=values[0], generation="a" * 64)
+    observe(state, values)
+    event, source = RT.snapshot(state, state.ready[-1])
+    snap = (event, source)
+    scope = ("000001", "NXT", "000001_NX", "PRE", "2026-10-12", "cell")
+    token = RT.digest([state.generation, event["signal_id"], snap])
+    claim = dict(
+        token=token, snapshot=snap, generation=state.generation, backend="operating_v6"
+    )
+    monkeypatch.setattr(
+        RT,
+        "_CLAIMS",
+        {
+            token: dict(
+                snapshot=copy.deepcopy(snap),
+                generation=state.generation,
+                scope=scope,
+                envelope_sha256="b" * 64,
+            )
+        },
+    )
+    monkeypatch.setattr(RT, "_STATES", {scope: state})
+    monkeypatch.setattr(
+        RT,
+        "_FAMILY",
+        {
+            "machine_cells": {
+                "cell": {"routes": {"NXT": {"scope_execution_hash": state.generation}}}
+            }
+        },
+    )
+    monkeypatch.setattr(RT, "_GENERATION", "b" * 64)
+    monkeypatch.setattr(D, "_ACTIVE", RT)
+    observe(state, [row(126, 99.49), row(127, 99.5001)])
+    with pytest.raises(ValueError, match="reversal_signal_path_changed") as rejected:
+        DIAG.validate_claim_with_receipt(
+            claim,
+            "b" * 64,
+            now=values[-1][0] + 2,
+            evaluation_attempt_id="exact-attempt",
+            machine_bundle_sha256="c" * 64,
+        )
+    receipt = rejected.value.reversal_source_receipt
+    assert receipt["evaluation_attempt_id"] == "exact-attempt"
+    assert receipt["failed_native_predicates"] == ["ready_membership_present"]
+    assert (
+        receipt["first_signal_invalidation"]["branches"][bid]["observation"][3] == 99.49
+    )
+    assert receipt["runtime_effect"] is False

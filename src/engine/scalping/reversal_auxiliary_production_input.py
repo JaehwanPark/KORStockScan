@@ -28,9 +28,10 @@ CANDLE_VERSION = "auxiliary_completed_candle_risk_production_v2"
 CANDLE_FIELD = "completed_candle_risk_source"
 CANDLE_FACT = "observed_completed_candle_structure"
 CANDLE_RISK = "OBSERVED_COMPLETED_CANDLE_CONCERN"
+CONFIRMATION_VERSION = "auxiliary_first_uptick_confirmation_production_v1"
 
 
-def contract(scope_ids, *, completed_candles=False):
+def contract(scope_ids, *, completed_candles=False, confirmation_only=False):
     from src.engine.scalping import continuous_reversal_policy_v5 as V
 
     valid = {V.scope_id(key, route) for key, route in V.scopes()}
@@ -42,6 +43,19 @@ def contract(scope_ids, *, completed_candles=False):
         or not set(scope_ids) <= valid
     ):
         raise ValueError("auxiliary_production_input_scope_invalid")
+    if completed_candles and confirmation_only:
+        raise ValueError("auxiliary_production_input_mode_conflict")
+    if confirmation_only:
+        return dict(
+            version=CONFIRMATION_VERSION,
+            mode="FIRST_UPTICK_CONFIRMATION",
+            input_version=U.VERSION,
+            source_sha256=P.file_hash(__file__),
+            scope_ids=scope_ids[:],
+            source_boundary="MATCHED_NATIVE_FIRST_UPTICK_ONLY",
+            decision_authority="AUXILIARY_RISK_SCREEN_NO_MACHINE_PROMOTION",
+            activation_authority="EXISTING_NATIVE_POLICY_PUBLISHER_ONLY",
+        )
     if P.file_hash(X.__file__) != REVIEWED_TRANSFORM_SHA256:
         raise ValueError("auxiliary_production_input_transform_changed")
     return dict(
@@ -65,8 +79,17 @@ def contract(scope_ids, *, completed_candles=False):
 def validate(value):
     from src.engine.scalping import reversal_auxiliary_compatibility as C
 
+    if isinstance(value, dict) and value.get("version") == CONFIRMATION_VERSION:
+        if value != contract(value.get("scope_ids"), confirmation_only=True):
+            raise ValueError("auxiliary_confirmation_contract_changed")
+        return value
     if isinstance(value, dict) and value.get("version") == CANDLE_VERSION:
-        if value != contract(value.get("scope_ids"), completed_candles=True):
+        current = contract(value.get("scope_ids"), completed_candles=True)
+        predecessor = "642381efec468d62a1ba68582b6a74b35fc36ee8cc2738c8cc2271eed80214bb"
+        if value != current and not (
+            C.source_matches(predecessor, __file__)
+            and value == dict(current, source_sha256=predecessor)
+        ):
             raise ValueError("auxiliary_completed_candle_contract_changed")
         return value
     if not isinstance(value, dict) or not C.contract_matches(
@@ -103,8 +126,101 @@ def _scope(logical_input, value):
         raise ValueError("auxiliary_production_input_scope_mismatch")
 
 
-def project(logical_input, *, expected_contract, entry_context=None):
+def _confirmation_projection(logical_input, native_event):
+    """Carry only a native FIRST_UPTICK value; unknown remains unknown."""
+    from src.engine.scalping import reversal_extended_auxiliary as A
+
+    if not isinstance(native_event, dict) or not isinstance(
+        native_event.get("branch_signals"), dict
+    ):
+        raise ValueError("auxiliary_confirmation_native_event_missing")
+    result = copy.deepcopy(logical_input)
+    common = result["common_context"]
+    for signal in result["signals"]:
+        if (
+            "confirmation_pct" in signal["facts"]
+            or "confirmation_observation" in signal
+        ):
+            raise ValueError("auxiliary_confirmation_already_projected")
+        event = native_event["branch_signals"].get(signal["policy_id"])
+        if (
+            not isinstance(event, dict)
+            or any(
+                event.get(k) != common.get(k)
+                for k in (
+                    "epoch",
+                    "symbol",
+                    "market",
+                    "venue",
+                    "source_item",
+                    "native_epoch",
+                    "native_sequence",
+                    "confirmation_price",
+                    "entry_ask",
+                )
+            )
+            or event.get("decision_phase") != signal.get("phase")
+        ):
+            raise ValueError("auxiliary_confirmation_native_identity_conflict")
+        if event.get("extended_definition_id") and signal.get(
+            "observed_signal"
+        ) != A.project_signal(event):
+            raise ValueError("auxiliary_confirmation_native_proof_conflict")
+        phase = signal["phase"]
+        observation = dict(status="not_applicable", value=None, low_price=None)
+        if phase == "FIRST_UPTICK":
+            observation["status"] = "unavailable"
+            value, low, price = (
+                event.get("confirmation_pct"),
+                event.get("low_price"),
+                event.get("confirmation_price"),
+            )
+            if (
+                all(
+                    type(v) in (int, float) and math.isfinite(v)
+                    for v in (value, low, price)
+                )
+                and low > 0
+                and price > 0
+            ):
+                original = (event.get("signal_proof") or {}).get(
+                    "original_confirmation"
+                )
+                if original is not None:
+                    if not isinstance(original, dict):
+                        raise ValueError(
+                            "auxiliary_confirmation_original_identity_conflict"
+                        )
+                    required = (
+                        "event_id",
+                        "signal_id",
+                        "native_epoch",
+                        "native_sequence",
+                        "confirmation_price",
+                        "low_price",
+                        "confirmation_pct",
+                    )
+                    if any(k not in original or original[k] is None for k in required):
+                        signal["confirmation_observation"] = observation
+                        continue
+                    if any(original[k] != event.get(k) for k in required):
+                        raise ValueError(
+                            "auxiliary_confirmation_original_identity_conflict"
+                        )
+                if not math.isclose(
+                    value, 100 * (price / low - 1), rel_tol=1e-12, abs_tol=1e-12
+                ):
+                    raise ValueError("auxiliary_confirmation_value_conflict")
+                observation.update(status="observed", value=value, low_price=low)
+                signal["facts"]["confirmation_pct"] = value
+        signal["confirmation_observation"] = observation
+    return result
+
+
+def project(logical_input, *, expected_contract, entry_context=None, native_event=None):
     _scope(logical_input, expected_contract)
+    if expected_contract["version"] == CONFIRMATION_VERSION:
+        return _confirmation_projection(logical_input, native_event)
     # Call the immutable pure transformation only. Its report-only research
     # flags never enter the registry, request, or policy activation contract.
     result = X.project(logical_input, expected_contract=X.contract(MODE))
@@ -132,6 +248,46 @@ def validate_projected(logical_input, *, expected_contract):
     """
     _scope(logical_input, expected_contract)
     W.encode(logical_input)
+    if expected_contract["version"] == CONFIRMATION_VERSION:
+        for signal in logical_input["signals"]:
+            observation = signal.get("confirmation_observation")
+            if not isinstance(observation, dict) or set(observation) != {
+                "status",
+                "value",
+                "low_price",
+            }:
+                raise ValueError("auxiliary_confirmation_observation_invalid")
+            value, low = observation["value"], observation["low_price"]
+            if signal["phase"] != "FIRST_UPTICK":
+                valid = (
+                    observation
+                    == dict(status="not_applicable", value=None, low_price=None)
+                    and "confirmation_pct" not in signal["facts"]
+                )
+            elif observation["status"] == "unavailable":
+                valid = (
+                    value is None
+                    and low is None
+                    and "confirmation_pct" not in signal["facts"]
+                )
+            else:
+                price = signal["facts"].get("confirmation_price")
+                valid = (
+                    observation["status"] == "observed"
+                    and all(
+                        type(v) in (int, float) and math.isfinite(v)
+                        for v in (value, low, price)
+                    )
+                    and low > 0
+                    and price > 0
+                    and signal["facts"].get("confirmation_pct") == value
+                    and math.isclose(
+                        value, 100 * (price / low - 1), rel_tol=1e-12, abs_tol=1e-12
+                    )
+                )
+            if not valid:
+                raise ValueError("auxiliary_confirmation_observation_changed")
+        return logical_input
     base = copy.deepcopy(logical_input)
     setup = base["entry_setup_evidence_v1"]
     candle_source = base.pop(CANDLE_FIELD, None)

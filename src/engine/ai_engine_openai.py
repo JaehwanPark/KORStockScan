@@ -11172,6 +11172,11 @@ class GPTSniperEngine:
                 from src.engine.monitoring.runtime_performance import observe
 
                 observe("capture_append", time.perf_counter() - capture_started_perf)
+                # The post-provider native claim diagnostic belongs to this
+                # exact captured attempt; never alter the frozen assessment.
+                entry_setup_live_policy["evaluation_attempt_id"] = machine_capture.get(
+                    "evaluation_attempt_id"
+                )
                 # Circuit/lock/common-provider exits occur after this assessment.
                 # Preserve its original capture on every terminal return without
                 # changing the WAIT/DROP decision or authorizing a provider call.

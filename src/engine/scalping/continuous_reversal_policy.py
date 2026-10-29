@@ -487,6 +487,7 @@ def compose(response, policy):
     )
 
     assessment = policy["continuous_reversal_assessment"]
+    rejected_claim_receipt = None
     action = assessment["action"]
     inp = policy.get("continuous_reversal_input")
     arm = policy.get("continuous_reversal_arm")
@@ -573,6 +574,9 @@ def compose(response, policy):
                 )
         except (ValueError, OSError, KeyError, TypeError) as exc:
             errors.append(str(exc))
+            rejected_claim_receipt = copy.deepcopy(
+                getattr(exc, "reversal_source_receipt", None)
+            )
     else:
         errors = (
             validate_response(response, inp, complete_source_only=arm == ARMS[-1])
@@ -643,6 +647,7 @@ def compose(response, policy):
         ),
         entry_ai_advisory_contract_valid=not errors,
         entry_ai_advisory_contract_errors=errors,
+        continuous_reversal_rejected_claim_receipt=rejected_claim_receipt,
         entry_ai_contract_valid=not errors,
         entry_ai_contract_errors=errors,
         entry_ai_screen_required=action == "ENTER_NOW",

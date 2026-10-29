@@ -1222,6 +1222,7 @@ def _claim_failure_receipt(B, claim, family_sha256, now, reason):
             "native_state_present": state is not None,
             "legacy_last_present": bool(last),
             "latest_source_valid": bool(last[8]) if last else None,
+            "latest_quote_valid": B.K.good_quote(last) if last else None,
             "native_epoch_matches": (
                 last[1] == event.get("native_epoch") if last else None
             ),

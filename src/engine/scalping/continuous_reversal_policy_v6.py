@@ -1639,8 +1639,16 @@ def validate_active_claim(policy, active, *, now):
         data_root=DATA_DIR,
         day=datetime.fromtimestamp(now, K.KST).date().isoformat(),
     )
-    snap = D.validate_any_claim(
-        policy["continuous_reversal_claim"], f["family_sha256"], now=now
+    from src.engine.scalping.reversal_source_diagnostics import (
+        validate_claim_with_receipt,
+    )
+
+    snap = validate_claim_with_receipt(
+        policy["continuous_reversal_claim"],
+        f["family_sha256"],
+        now=now,
+        evaluation_attempt_id=policy.get("evaluation_attempt_id"),
+        machine_bundle_sha256=policy.get("machine_bundle_sha256"),
     )
     remaining = {
         bid + ":" + A.definition_hash(bid) for bid in snap[0]["branch_signals"]

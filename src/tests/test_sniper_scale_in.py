@@ -23135,6 +23135,16 @@ def test_scalping_pre_ai_context_reaches_ai_and_blocks_low_liquidity_at_submit(
     assert by_stage["blocked_vpw"]["gate_action"] == "risk_context_only"
     assert by_stage["blocked_liquidity"]["gate_action"] == "risk_context_only"
     assert "pre_submit_liquidity_guard_block" in by_stage
+    liquidity_observation = json.loads(
+        by_stage["pre_submit_liquidity_guard_block"][
+            "pre_submit_liquidity_consumed_observation"
+        ]
+    )
+    assert liquidity_observation["value"] == 2_000_000
+    assert (
+        liquidity_observation["ask_total"] == liquidity_observation["bid_total"] == 100
+    )
+    assert liquidity_observation["field_level_source_binding"] == "unavailable"
     assert (
         by_stage["pre_submit_liquidity_guard_block"]["broker_order_forbidden"] is True
     )
@@ -41763,3 +41773,47 @@ def test_shared_rebound_passes_loaded_vote_receipt_and_still_requires_vote(monke
         == "shared_main_rebound_add_vote_vote_veto"
     )
     assert "_main_rebound_entry_permit" not in stock
+
+
+def test_liquidity_observation_records_consumed_inputs_without_assuming_field_custody():
+    data = {
+        "curr": 100,
+        "ask_tot": 10,
+        "bid_tot": 20,
+        "last_realtime_type_ts": {"0D": 123.0},
+        "last_realtime_type_item": {"0D": "017900_AL"},
+        "last_realtime_type_market_route": {"0D": "krx_nxt_integrated"},
+        "last_realtime_type_transport_epoch": {"0D": 456},
+    }
+    obs = state_handlers._liquidity_observation(
+        data, price=100, value=3000, observed_at=124.0
+    )
+    data["ask_tot"] = 999
+    assert (obs["price"], obs["ask_total"], obs["bid_total"], obs["value"]) == (
+        100,
+        10,
+        20,
+        3000,
+    )
+    assert (
+        obs["0D_item"],
+        obs["0D_route"],
+        obs["0D_received_epoch"],
+        obs["0D_transport_epoch"],
+    ) == ("017900_AL", "krx_nxt_integrated", 123.0, 456)
+    assert obs["field_level_source_binding"] == "unavailable"
+    missing = state_handlers._liquidity_observation(
+        {}, price=None, value=None, observed_at=124.0
+    )
+    assert missing["ask_total"] is None and missing["0D_received_epoch"] is None
+    final = state_handlers._liquidity_final_observation(
+        data, consumed_value=3000, observed_at=124.0
+    )
+    assert final["value"] == 101_900 and final["comparison_to_consumed"] == "different"
+    assert final["decision_authority"] == "observation_only"
+    unknown = state_handlers._liquidity_final_observation(
+        {"curr": 100}, consumed_value=3000, observed_at=124.0
+    )
+    assert (
+        unknown["value"] is None and unknown["comparison_to_consumed"] == "unobservable"
+    )

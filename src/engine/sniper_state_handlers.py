@@ -56413,6 +56413,128 @@ def _sim_submit_liquidity_value(
     ) * curr_price
 
 
+def _liquidity_observation(ws_data, *, price, value, observed_at):
+    """Describe the inputs actually used, without asserting field-level custody."""
+    data = ws_data if isinstance(ws_data, dict) else {}
+    result = {
+        "schema": "pre_submit_liquidity_observation_v1",
+        "observed_at_epoch": observed_at,
+        "price": price,
+        "ask_total": data.get("ask_tot"),
+        "bid_total": data.get("bid_tot"),
+        "value": value,
+        # These type clocks do not themselves prove optional FID presence.
+        "field_level_source_binding": "unavailable",
+    }
+    sources = data.get("liquidity_field_sources")
+    result["field_source_identity_status"] = "unknown"
+    if isinstance(sources, dict):
+        bindings = {}
+        for name, expected in (
+            ("curr", price),
+            ("ask_tot", result["ask_total"]),
+            ("bid_tot", result["bid_total"]),
+        ):
+            source = sources.get(name)
+            bindings[name] = (
+                {
+                    key: source.get(key)
+                    for key in (
+                        "fid",
+                        "real_type",
+                        "item",
+                        "route",
+                        "transport_epoch",
+                        "active_transport_epoch",
+                        "received_epoch",
+                        "receive_time_source",
+                        "raw_value",
+                        "parse_valid",
+                        "parsed_value",
+                        "documented_type_fid",
+                    )
+                }
+                if isinstance(source, dict)
+                else None
+            )
+            if bindings[name] is not None:
+                bindings[name]["matches_used_value"] = (
+                    source.get("parsed_value") == expected
+                )
+        result["field_sources"] = bindings
+        if all(
+            source is not None
+            and source.get("parse_valid") is True
+            and source.get("matches_used_value") is True
+            for source in bindings.values()
+        ):
+            result["field_level_source_binding"] = "matching_upstream_field_receipts"
+            identities = [
+                (source.get("item"), source.get("route"), source.get("transport_epoch"))
+                for source in bindings.values()
+            ]
+            if all(
+                isinstance(item, str)
+                and item
+                and isinstance(route, str)
+                and route
+                and type(epoch) is int and epoch > 0
+                for item, route, epoch in identities
+            ):
+                if len(set(identities)) != 1:
+                    result["field_source_identity_status"] = "conflict"
+                elif type(data.get("market_data_transport_epoch")) is not int or data["market_data_transport_epoch"] <= 0:
+                    result["field_source_identity_status"] = "unknown_current_transport"
+                elif identities[0][2] != data["market_data_transport_epoch"]:
+                    result["field_source_identity_status"] = "stale_transport_epoch"
+                else:
+                    result["field_source_identity_status"] = "consistent"
+    for typ in ("0B", "0D"):
+        for field, suffix in (
+            ("last_realtime_type_ts", "received_epoch"),
+            ("last_realtime_type_item", "item"),
+            ("last_realtime_type_market_route", "route"),
+            ("last_realtime_type_transport_epoch", "transport_epoch"),
+        ):
+            values = data.get(field)
+            result[typ + "_" + suffix] = (
+                values.get(typ) if isinstance(values, dict) else None
+            )
+    return result
+
+
+def _liquidity_observation_wire(value):
+    """Pipeline fields are strings; preserve parseable, non-authoritative JSON."""
+    try:
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        return '{"status":"observation_serialization_failed"}'
+
+
+def _liquidity_final_observation(ws_data, *, consumed_value, observed_at):
+    """Compare the final frame for diagnostics, never replace the guard input."""
+    data = ws_data if isinstance(ws_data, dict) else {}
+    price, ask, bid = (data.get("curr"), data.get("ask_tot"), data.get("bid_tot"))
+    calculated = (
+        (ask + bid) * price
+        if all(type(v) is int for v in (price, ask, bid))
+        and price > 0
+        and ask >= 0
+        and bid >= 0
+        else None
+    )
+    result = _liquidity_observation(
+        data, price=price, value=calculated, observed_at=observed_at
+    )
+    result["comparison_to_consumed"] = (
+        "unobservable"
+        if calculated is None or consumed_value is None
+        else "equal" if calculated == consumed_value else "different"
+    )
+    result["decision_authority"] = "observation_only"
+    return result
+
+
 def _real_pre_submit_liquidity_value(
     ws_data: dict | None,
     runtime: dict | None,
@@ -65713,6 +65835,12 @@ def _handle_watching_strategy_branch(
         )
         runtime["liquidity_value"] = int(liquidity_value)
         runtime["scalp_liquidity_value"] = int(liquidity_value)
+        runtime["scalp_liquidity_observation"] = _liquidity_observation(
+            ws_data,
+            price=curr_price,
+            value=int(liquidity_value),
+            observed_at=time.time(),
+        )
         runtime["scalp_min_liquidity"] = int(min_liquidity)
         runtime["scalp_liquidity_source_quality"] = (
             "valid_orderbook_totals"
@@ -65802,6 +65930,12 @@ def _handle_watching_strategy_branch(
                     liquidity_value = (ask_tot + bid_tot) * curr_price
                     runtime["liquidity_value"] = int(liquidity_value)
                     runtime["scalp_liquidity_value"] = int(liquidity_value)
+                    runtime["scalp_liquidity_observation"] = _liquidity_observation(
+                        ws_data,
+                        price=curr_price,
+                        value=int(liquidity_value),
+                        observed_at=time.time(),
+                    )
                     runtime["scalp_liquidity_source_quality"] = (
                         "valid_orderbook_totals"
                         if liquidity_totals_present
@@ -72389,6 +72523,26 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     )
     real_pre_submit_guard_fields = _pre_submit_guard_verdict_log_fields(
         real_pre_submit_guard_verdicts
+    )
+    liquidity_observation = runtime.get("scalp_liquidity_observation")
+    real_pre_submit_guard_fields.update(
+        pre_submit_liquidity_consumed_observation=_liquidity_observation_wire(
+            liquidity_observation
+            if isinstance(liquidity_observation, dict)
+            and liquidity_observation.get("value") == liquidity_value
+            else None
+        ),
+        pre_submit_liquidity_consumed_binding=(
+            "captured_calculation_value_matches"
+            if isinstance(liquidity_observation, dict)
+            and liquidity_observation.get("value") == liquidity_value
+            else "unbound"
+        ),
+        pre_submit_liquidity_final_observation=_liquidity_observation_wire(
+            _liquidity_final_observation(
+                ws_data, consumed_value=liquidity_value, observed_at=time.time()
+            )
+        ),
     )
 
     if submit_revalidation_fields.get("entry_submit_revalidation_warning"):

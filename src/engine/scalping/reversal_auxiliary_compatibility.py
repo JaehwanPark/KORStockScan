@@ -25,8 +25,9 @@ REVIEWED_CONTRACT_SOURCE_PAIRS = {
             "29bcf083d4849d0c8ca883c75a4397caba47448aa2c4951671e669eeeb638003",
             "324b2d6e41bafaf0eddb1b65069de8f140325bb84e4e3aa42941e397d75d3464",
             "0e576decb06aa17fff3548cdf15f4f23a2a87db57596b67095b7f8313d2f920f",
+            "642381efec468d62a1ba68582b6a74b35fc36ee8cc2738c8cc2271eed80214bb",
         ),
-        "642381efec468d62a1ba68582b6a74b35fc36ee8cc2738c8cc2271eed80214bb",
+        "0620ff56cb6074efc2e1c2fca4443d7f731b1d4f6f4e0b6d4a799d1951c270b7",
     ),
 }
 

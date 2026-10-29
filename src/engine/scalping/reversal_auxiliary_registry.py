@@ -455,6 +455,7 @@ def production_request(snapshot, value, *, entry_context=None):
             inp,
             expected_contract=value["production_input_contract"],
             entry_context=entry_context,
+            native_event=event,
         )
         schema = A.response_schema(inp)
     return inp, value["prompt"], schema

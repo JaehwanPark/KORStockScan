@@ -4112,6 +4112,46 @@ class KiwoomWSManager:
                                 target["ask_tot"] = safe_int(values["121"])
                             if "125" in values:
                                 target["bid_tot"] = safe_int(values["125"])
+                            # Record the actual writer of each retained scalar.
+                            # A later partial frame must not renew another FID's
+                            # timestamp or turn its item into this frame's item.
+                            for fid, name in (
+                                ("10", "curr"),
+                                ("121", "ask_tot"),
+                                ("125", "bid_tot"),
+                            ):
+                                if fid not in values:
+                                    continue
+                                raw = str(values[fid]).strip()
+                                parsed = (
+                                    raw.replace("+", "")
+                                    .replace("-", "")
+                                    .strip()
+                                    .isdigit()
+                                )
+                                if fid == "10" and not parsed:
+                                    # Current-price parsing keeps the previous
+                                    # value on malformed input; keep its owner too.
+                                    continue
+                                target.setdefault("liquidity_field_sources", {})[
+                                    name
+                                ] = {
+                                    "fid": fid,
+                                    "real_type": real_type,
+                                    "item": str(raw_item_code or ""),
+                                    "route": self._ws_item_route(raw_item_code),
+                                    "transport_epoch": transport_epoch,
+                                    "active_transport_epoch": self._market_data_transport_epoch,
+                                    "received_epoch": packet_received_at.timestamp(),
+                                    "receive_time_source": packet_receive_time_source,
+                                    "raw_value": raw,
+                                    "parse_valid": parsed,
+                                    "parsed_value": target.get(name),
+                                    "documented_type_fid": (
+                                        (real_type == "0B" and fid == "10")
+                                        or (real_type == "0D" and fid in {"121", "125"})
+                                    ),
+                                }
                             if "128" in values:
                                 target["net_bid_depth"] = self._safe_signed_int(
                                     values["128"], target.get("net_bid_depth", 0)

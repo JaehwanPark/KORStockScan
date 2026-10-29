@@ -577,6 +577,7 @@ def test_prepared_native_claim_matches_original_dynamic_validator(
     from src.engine.scalping import reversal_evaluation_context as E
     from src.engine.scalping import continuous_reversal_policy_v6 as V
     from src.engine.scalping import reversal_current_backend as D
+    from src.engine.scalping import reversal_source_diagnostics as DIAG
 
     bid = "legacy_dd5_ge_0_4_v1"
     family = {
@@ -628,6 +629,10 @@ def test_prepared_native_claim_matches_original_dynamic_validator(
         D, "configure_bundle", lambda *a, **kw: calls.append("configure")
     )
     monkeypatch.setattr(D, "validate_any_claim", native)
+    monkeypatch.setattr(
+        DIAG, "validate_claim_with_receipt",
+        lambda claim, sha, *, now, **kw: native(claim, sha, now=now),
+    )
     monkeypatch.setattr(
         D, "backend", lambda: SimpleNamespace(_GENERATION=family["family_sha256"])
     )

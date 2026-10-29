@@ -494,7 +494,7 @@ def test_identifier_successor_keeps_frozen_contracts_without_mixing_generations(
     # Exercise the actual physical readers, including the current frozen source.
     prod = C._source_generations(I.__file__)
     wire = C._source_generations(W.__file__)
-    assert len(prod) == 5 and len(wire) == 3
+    assert len(prod) == 6 and len(wire) == 3
     actual = dict(source_sha256=prod[0], wire_sha256=wire[0], mode="unchanged")
     sources = dict(source_sha256=I.__file__, wire_sha256=W.__file__)
     for p, w in (
@@ -698,3 +698,213 @@ def test_forming_suffix_does_not_hide_completed_predecessors():
         )
     )
     assert M.completed_candle_source(context, common) == before
+
+
+def test_aftermarket_first_uptick_exact_capture_projection_and_old_response():
+    from pathlib import Path
+    from src.engine.scalping import reversal_extended_union as U
+
+    fixture = json.loads(
+        (
+            Path(__file__).parent
+            / "fixtures/reversal_extended/aftermarket_030960_confirmation.json"
+        ).read_text()
+    )
+    inp = fixture["logical_input"]
+    event = fixture["native_event"]
+    common = inp["common_context"]
+    sid = (
+        M.C.cell_key(common["symbol"], common["market"], common["confirmation_price"])
+        + "|"
+        + common["venue"]
+    )
+    contract = M.contract([sid], confirmation_only=True)
+    untouched = copy.deepcopy(inp)
+    out = M.project(inp, expected_contract=contract, native_event=event)
+    signal = out["signals"][0]
+    assert inp == untouched and "confirmation_pct" not in inp["signals"][0]["facts"]
+    assert signal["confirmation_observation"]["status"] == "observed"
+    assert signal["facts"]["confirmation_pct"] == pytest.approx(0.29806259314455463)
+    assert signal["facts"]["confirmation_pct"] > signal["facts"]["spread_pct"]
+    assert out["entry_setup_evidence_v1"] == inp["entry_setup_evidence_v1"]
+    assert M.validate_projected(out, expected_contract=contract) == out
+    wire, _, _ = W.encode(out)
+    assert (
+        wire["signals"][0]["facts"]["confirmation_pct"]
+        == signal["facts"]["confirmation_pct"]
+    )
+    response = dict(
+        schema=U.VERSION,
+        decision_scope="COMMON_OPPORTUNITY",
+        assessed_signal_refs=[signal["ref"]],
+        risk_verdict="CAUTION",
+        risk_codes=["ENTRY_SPREAD_CONCERN"],
+        supporting_fact_ids=[],
+        contradicting_fact_ids=out["entry_setup_evidence_v1"]["risk_fact_bindings"][
+            "ENTRY_SPREAD_CONCERN"
+        ][:1],
+        confidence=50,
+    )
+    assert U.validate_response(response, out, arm=U.V1.ARMS[-1]) == []
+
+
+@pytest.mark.parametrize(
+    "defect", ["missing", "epoch", "original", "value", "projection"]
+)
+def test_aftermarket_confirmation_provenance_fails_closed(defect):
+    from pathlib import Path
+
+    fixture = json.loads(
+        (
+            Path(__file__).parent
+            / "fixtures/reversal_extended/aftermarket_030960_confirmation.json"
+        ).read_text()
+    )
+    inp, event = fixture["logical_input"], fixture["native_event"]
+    c = inp["common_context"]
+    contract = M.contract(
+        [
+            M.C.cell_key(c["symbol"], c["market"], c["confirmation_price"])
+            + "|"
+            + c["venue"]
+        ],
+        confirmation_only=True,
+    )
+    signal = next(iter(event["branch_signals"].values()))
+    if defect == "missing":
+        signal.pop("confirmation_pct")
+        projected = M.project(inp, expected_contract=contract, native_event=event)
+        assert (
+            projected["signals"][0]["confirmation_observation"]["status"]
+            == "unavailable"
+        )
+        assert "confirmation_pct" not in projected["signals"][0]["facts"]
+        M.validate_projected(projected, expected_contract=contract)
+        return
+    if defect == "epoch":
+        signal["native_epoch"] += 1
+    if defect == "original":
+        signal["signal_proof"]["original_confirmation"]["low_price"] += 1
+    if defect == "value":
+        signal["confirmation_pct"] += 0.1
+        signal["signal_proof"]["original_confirmation"]["confirmation_pct"] += 0.1
+    if defect == "projection":
+        projected = M.project(inp, expected_contract=contract, native_event=event)
+        projected["signals"][0]["facts"]["confirmation_pct"] += 0.1
+        with pytest.raises(ValueError, match="confirmation_observation_changed"):
+            M.validate_projected(projected, expected_contract=contract)
+        return
+    with pytest.raises(ValueError, match="auxiliary_confirmation"):
+        M.project(inp, expected_contract=contract, native_event=event)
+
+
+def test_confirmation_nonfirst_is_explicitly_not_applicable():
+    fixture = next(
+        x for x in FIXTURES.values() if x["event"]["decision_phase"] != "FIRST_UPTICK"
+    )
+    event, source = fixture["event"], fixture["source"]
+    inp = M.U.production_request(source, M.U.V1.ARMS[1], event=event)[0]
+    c = inp["common_context"]
+    contract = M.contract(
+        [
+            M.C.cell_key(c["symbol"], c["market"], c["confirmation_price"])
+            + "|"
+            + c["venue"]
+        ],
+        confirmation_only=True,
+    )
+    out = M.project(inp, expected_contract=contract, native_event=event)
+    assert all(
+        s["confirmation_observation"]["status"] == "not_applicable"
+        and "confirmation_pct" not in s["facts"]
+        for s in out["signals"]
+    )
+    M.validate_projected(out, expected_contract=contract)
+
+
+def test_exact_aftermarket_capture_through_native_registry_and_wire(tmp_path):
+    from pathlib import Path
+
+    fixture = json.loads(
+        (
+            Path(__file__).parent
+            / "fixtures/reversal_extended/aftermarket_030960_confirmation.json"
+        ).read_text()
+    )
+    snapshot = fixture["native_snapshot"]
+    original = G.definition(M.U.V1.ARMS[-1], input_version=M.U.VERSION)
+    parent = G.compact_definition(original, research_wire_contract=OLD_W.contract())
+    event = snapshot[0]
+    sid = (
+        M.C.cell_key(event["symbol"], event["market"], event["confirmation_price"])
+        + "|"
+        + event["venue"]
+    )
+    contract = M.contract([sid], confirmation_only=True)
+    current = G.production_definition(
+        parent, scope_ids=[sid], production_contract=contract
+    )
+    for value in (original, parent, current):
+        G.register(tmp_path, value)
+    assert G.load(tmp_path, current["registry_sha256"]) == current
+    baseline, _, _ = G.production_request(snapshot, parent)
+    assert baseline == fixture["logical_input"]
+    projected, prompt, schema = G.production_request(snapshot, current)
+    assert projected["signals"][0]["facts"]["confirmation_pct"] == pytest.approx(
+        0.29806259314455463
+    )
+    env = G.envelope(projected, current)
+    assert env["wire_input"]["signals"][0]["facts"][
+        "confirmation_pct"
+    ] == pytest.approx(0.29806259314455463)
+    request = G.request(snapshot, current)
+    assert request["candidate_input"] == env["wire_input"]
+    assert request["candidate"]["response_schema"] == env["wire_schema"]
+    assert request["candidate"]["system_prompt"] == env["final_prompt"]
+    assert schema == M.U.response_schema(projected)
+
+
+def test_missing_original_confirmation_is_unknown_without_synthetic_value():
+    from pathlib import Path
+
+    fixture = json.loads(
+        (
+            Path(__file__).parent
+            / "fixtures/reversal_extended/aftermarket_030960_confirmation.json"
+        ).read_text()
+    )
+    inp, event = fixture["logical_input"], fixture["native_event"]
+    original = next(iter(event["branch_signals"].values()))["signal_proof"][
+        "original_confirmation"
+    ]
+    original.pop("low_price")
+    c = inp["common_context"]
+    contract = M.contract(
+        [
+            M.C.cell_key(c["symbol"], c["market"], c["confirmation_price"])
+            + "|"
+            + c["venue"]
+        ],
+        confirmation_only=True,
+    )
+    out = M.project(inp, expected_contract=contract, native_event=event)
+    assert out["signals"][0]["confirmation_observation"]["status"] == "unavailable"
+    assert "confirmation_pct" not in out["signals"][0]["facts"]
+    M.validate_projected(out, expected_contract=contract)
+
+
+def test_completed_candle_predecessor_remains_exactly_bound():
+    _, parent, current = definitions()
+    scopes = current["production_input_contract"]["scope_ids"]
+    candle = M.contract(scopes, completed_candles=True)
+    predecessor = dict(
+        candle,
+        source_sha256="642381efec468d62a1ba68582b6a74b35fc36ee8cc2738c8cc2271eed80214bb",
+    )
+    assert M.validate(predecessor) == predecessor
+    for changed in (
+        dict(predecessor, source_sha256="0" * 64),
+        dict(predecessor, source_boundary="changed"),
+    ):
+        with pytest.raises(ValueError):
+            M.validate(changed)

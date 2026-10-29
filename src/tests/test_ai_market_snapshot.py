@@ -416,6 +416,7 @@ def test_krx_snapshot_selects_candle_route_partition_without_mixing_0b_0d():
 def test_route_partition_never_reuses_other_route_price_or_bbo_when_missing():
     now = datetime(2026, 7, 23, 10, 0, tzinfo=KST).timestamp()
     ws = _ws(now)
+    ws["liquidity_field_sources"] = {"curr": {"item": "005930"}}
     ws.update(
         {
             "curr": 9990,
@@ -461,6 +462,7 @@ def test_route_partition_never_reuses_other_route_price_or_bbo_when_missing():
     assert selected["best_bid"] == 0
     assert selected["best_ask"] == 0
     assert selected["orderbook"] == {}
+    assert "liquidity_field_sources" not in selected
 
 
 def test_route_partition_status_requires_executable_price_and_bbo():
