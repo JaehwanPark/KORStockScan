@@ -3004,3 +3004,165 @@ def test_historical_policy_audit_cannot_accept_today():
     today = datetime.now(ZoneInfo("Asia/Seoul")).date().isoformat()
     with pytest.raises(ValueError, match="requires_closed_date"):
         sentinel.build_holding_exit_sentinel_report(today, historical_policy=True)
+
+
+def _next_day_collection_fixture(tmp_path, monkeypatch):
+    from copy import deepcopy
+    from src.engine.scalping.entry_split_monitor_projection import _digest
+
+    detector, original, path, _ = _historical_resolution_fixture(tmp_path, monkeypatch)
+    collection = deepcopy(original)
+    old_row = original["profit_exit_semantics"]["lifecycle"][0]
+    old_row["signal_at"] -= 120
+    old_row["signal_id"] = str(old_row["signal_at"]) + ":SCALP_TRAILING_LIMIT_WEAK"
+    path.write_text(json.dumps(original))
+    day = "2026-10-10"
+    cutoff = day + "T10:02:00+09:00"
+    collection.update(target_date=day, as_of=cutoff, source_generation="c" * 64)
+    semantic = collection["profit_exit_semantics"]
+    semantic.update(
+        target_date=day,
+        as_of=cutoff,
+        source_generation="c" * 64,
+        status="pass",
+        semantic_status="pass",
+        source_gaps=[],
+        source_gap_details=[],
+        findings=[],
+        consumed_pids=[42],
+    )
+    row = semantic["lifecycle"][0]
+    row["signal_at"] += 86400
+    row["signal_id"] = str(row["signal_at"]) + ":SCALP_TRAILING_LIMIT_WEAK"
+    current = path.with_name(f"holding_exit_sentinel_{day}.json")
+    current.write_text(json.dumps(collection))
+    archive = (
+        tmp_path / "data/runtime/policy_bootstrap/verified_holding_profit_pid" / day
+    )
+    archive.mkdir(parents=True)
+    pid = dict(
+        schema="holding_profit_pid_verification_v1",
+        pid=42,
+        target_date=day,
+        verified_at=day + "T09:00:00+09:00",
+        manifest_sha256="a" * 64,
+        mechanical_policy_receipt={},
+    )
+    pid["receipt_sha256"] = _digest(pid)
+    pid_path = archive / f"holding_profit_pid_42_{pid['manifest_sha256']}.json"
+    pid_path.write_text(json.dumps(pid))
+    monkeypatch.setattr(
+        sentinel,
+        "build_holding_exit_sentinel_report",
+        lambda target, **kw: deepcopy(collection if target == day else original),
+    )
+    now = datetime.fromisoformat(day + "T10:03:00+09:00")
+    return detector, original, path, collection, current, pid_path, now
+
+
+def test_later_collection_closes_only_frozen_loss_and_survives_latest_report_advance(
+    tmp_path, monkeypatch
+):
+    detector, original, path, collection, current, _, now = (
+        _next_day_collection_fixture(tmp_path, monkeypatch)
+    )
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="holding_current_collection_unproven"):
+        sentinel.publish_historical_buy_resolution("2026-10-09", ["21"], now=now)
+    receipt = sentinel.publish_historical_buy_resolution(
+        "2026-10-09", ["21"], now=now, collection_date="2026-10-10"
+    )
+    observed = detector._holding_profit_exit_semantics(tmp_path, "2026-10-09", now=now)
+    assert observed["status"] == "historical_diagnostic", observed
+    assert (
+        observed["source_gap_count"] == 2
+        and observed["economics_status"] == "unavailable"
+    )
+    assert receipt["resolution"]["original_decision_lineage_recovered"] is False
+    assert path.read_bytes() == before
+    # A mutable latest publication is not the already verified observation.
+    current.write_text(json.dumps(dict(collection, source_generation="d" * 64)))
+    assert (
+        detector._holding_profit_exit_semantics(tmp_path, "2026-10-09", now=now)[
+            "status"
+        ]
+        == "historical_diagnostic"
+    )
+    # Even the same position's different signal/hash is a new incident.
+    original["profit_exit_semantics"]["source_gap_details"][0][
+        "signal_source_sha256"
+    ] = ("f" * 64)
+    path.write_text(json.dumps(original))
+    assert (
+        detector._holding_profit_exit_semantics(tmp_path, "2026-10-09", now=now)[
+            "status"
+        ]
+        != "historical_diagnostic"
+    )
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "future",
+        "gap",
+        "missing_pid",
+        "pid_hash",
+        "reaudit",
+        "witness_bytes",
+        "new_current_loss",
+    ],
+)
+def test_later_collection_invalid_evidence_and_new_losses_remain_actionable(
+    tmp_path, monkeypatch, fault
+):
+    detector, original, path, collection, current, pid_path, now = (
+        _next_day_collection_fixture(tmp_path, monkeypatch)
+    )
+    if fault == "future":
+        collection["as_of"] = "2026-10-10T10:04:00+09:00"
+    elif fault == "gap":
+        collection["profit_exit_semantics"]["source_gaps"] = [
+            {"position_id": "22", "reason": "tp_signal_buy_generation_missing"}
+        ]
+    elif fault == "missing_pid":
+        pid_path.unlink()
+    elif fault == "pid_hash":
+        pid_path.write_text(pid_path.read_text().replace('"pid": 42', '"pid": 43'))
+    elif fault == "reaudit":
+        monkeypatch.setattr(
+            sentinel,
+            "build_holding_exit_sentinel_report",
+            lambda target, **kw: original,
+        )
+    current.write_text(json.dumps(collection))
+    if fault not in {"witness_bytes", "new_current_loss"}:
+        with pytest.raises((ValueError, KeyError)):
+            sentinel.publish_historical_buy_resolution(
+                "2026-10-09", ["21"], now=now, collection_date="2026-10-10"
+            )
+    else:
+        receipt = sentinel.publish_historical_buy_resolution(
+            "2026-10-09", ["21"], now=now, collection_date="2026-10-10"
+        )
+        if fault == "witness_bytes":
+            from pathlib import Path
+
+            witness = Path(receipt["collection_witness"]["path"])
+            witness.write_bytes(witness.read_bytes() + b"\n")
+        else:
+            # The old receipt cannot classify any newly dated report.
+            current.write_text(json.dumps(dict(original, target_date="2026-10-10")))
+            assert (
+                detector._holding_profit_exit_semantics(
+                    tmp_path, "2026-10-10", now=now
+                )["status"]
+                != "historical_diagnostic"
+            )
+            return
+    assert (
+        detector._holding_profit_exit_semantics(tmp_path, "2026-10-09", now=now)[
+            "status"
+        ]
+        != "historical_diagnostic"
+    )

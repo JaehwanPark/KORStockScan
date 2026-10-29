@@ -1731,7 +1731,9 @@ def build_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def publish_historical_buy_resolution(target_date, accepted_position_ids, *, now=None):
+def publish_historical_buy_resolution(
+    target_date, accepted_position_ids, *, now=None, collection_date=None
+):
     """Re-audit original inputs and preserve a separate native disposition.
 
     No original report, policy or source bytes are replaced. This explicit
@@ -1788,11 +1790,76 @@ def publish_historical_buy_resolution(target_date, accepted_position_ids, *, now
             or rebuilt["profit_exit_semantics"] != original["profit_exit_semantics"]
         ):
             raise ValueError("holding_historical_native_reaudit_changed")
+        collection = None
+        witness = None
+        if collection_date is not None:
+            if (
+                not target_date
+                < collection_date
+                <= now.astimezone(ZoneInfo("Asia/Seoul")).date().isoformat()
+            ):
+                raise ValueError("holding_collection_witness_date_invalid")
+            collection_path = (
+                directory / f"holding_exit_sentinel_{collection_date}.json"
+            )
+            collection, collection_ref = _read(collection_path, 8 * 1024 * 1024)
+            # The new observation has its own cutoff. It never repairs the old
+            # signal, changes the old source generation or imports later votes.
+            audited = build_holding_exit_sentinel_report(
+                collection_date,
+                as_of=datetime.fromisoformat(collection["as_of"]),
+                use_cache=True,
+                dry_run=False,
+                historical_policy=collection_date
+                < now.astimezone(ZoneInfo("Asia/Seoul")).date().isoformat(),
+            )
+            if (
+                audited["source_generation"] != collection["source_generation"]
+                or audited["profit_exit_semantics"]
+                != collection["profit_exit_semantics"]
+                or _read(collection_path, 8 * 1024 * 1024)[1] != collection_ref
+            ):
+                raise ValueError("holding_collection_native_reaudit_changed")
+            pid_sources = {}
+            archive = (
+                DATA_DIR
+                / "runtime/policy_bootstrap/verified_holding_profit_pid"
+                / collection_date
+            )
+            for pid_path in sorted(archive.glob("*.json")):
+                if len(pid_sources) >= 256:
+                    raise ValueError("holding_collection_pid_inventory_unbounded")
+                body, identity = _read(pid_path, 32768)
+                if (
+                    body.get("pid")
+                    in collection["profit_exit_semantics"]["consumed_pids"]
+                ):
+                    pid_sources[str(pid_path)] = identity["sha256"]
+            snapshot = dict(
+                schema="holding_collection_witness_v1",
+                report=collection,
+                report_sha256=_digest(collection),
+                original_report_path=str(collection_path),
+                original_report_sha256=collection_ref["sha256"],
+                pid_sources=pid_sources,
+            )
+            from src.engine.scalping.entry_split_monitor_projection import _canonical
+
+            witness_sha = hashlib.sha256(_canonical(snapshot) + b"\n").hexdigest()
+            witness_path = (
+                directory
+                / "historical_resolutions/collection_witnesses"
+                / (witness_sha + ".json")
+            )
+            _write_atomic(witness_path, snapshot, 8 * 1024 * 1024, immutable=True)
+            witness = dict(path=str(witness_path), sha256=witness_sha)
+            collection = semantics.read_collection_witness(witness, DATA_DIR)
         resolution = semantics.historical_buy_gap_resolution(
             original,
             data_root=DATA_DIR,
             accepted_position_ids=accepted_position_ids,
             now=now,
+            collection_report=collection,
         )
         value = dict(
             schema="holding_historical_resolution_receipt_v1",
@@ -1802,6 +1869,8 @@ def publish_historical_buy_resolution(target_date, accepted_position_ids, *, now
             accepted_position_ids=sorted(map(str, accepted_position_ids)),
             resolution=resolution,
         )
+        if witness is not None:
+            value["collection_witness"] = witness
         value["receipt_sha256"] = _digest(value)
         if (
             _read(path, 8 * 1024 * 1024)[1] != reference

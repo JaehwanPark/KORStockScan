@@ -37,7 +37,9 @@ LIFECYCLE_STATES = {
 ECONOMICS_STATES = {"pending", "verified", "unavailable"}
 
 
-def historical_buy_gap_resolution(report, *, data_root, accepted_position_ids, now):
+def historical_buy_gap_resolution(
+    report, *, data_root, accepted_position_ids, now, collection_report=None
+):
     """Resolve only original missing-decision lineage, after native re-audit.
 
     The caller is the Sentinel producer. BUY receipts can restore future
@@ -70,16 +72,39 @@ def historical_buy_gap_resolution(report, *, data_root, accepted_position_ids, n
     latest_loss = max(
         float(row["signal_id"].split(":", 1)[0]) for row in losses.values()
     )
+    collection = semantics
+    if collection_report is not None:
+        collection = collection_report["profit_exit_semantics"]
+        collected_at = datetime.fromisoformat(collection_report["as_of"])
+        if collected_at.tzinfo is None:
+            collected_at = collected_at.replace(tzinfo=KST)
+        collection_day = collection_report["target_date"]
+        if (
+            not day < collection_day <= now.astimezone(KST).date().isoformat()
+            or collected_at > now
+            or collected_at.astimezone(KST).date().isoformat() != collection_day
+            or collection_report.get("dry_run") is not False
+            or collection.get("target_date") != collection_day
+            or collection.get("source_generation")
+            != collection_report.get("source_generation")
+            or collection.get("semantic_status") != "pass"
+            or collection.get("status") != "pass"
+            or collection.get("source_gaps")
+            or collection.get("findings")
+            or collection.get("policy_status")
+            not in {"verified_incumbent_carried", "validated_successor_verified"}
+        ):
+            raise ValueError("holding_collection_witness_invalid")
     healthy = [
         row
-        for row in semantics["lifecycle"]
+        for row in collection["lifecycle"]
         if row.get("lifecycle_state") == "completed"
         and row.get("blocking_reason") is None
         and row.get("signal_at", 0) > latest_loss
         and row.get("orders")
         and row["position_key"][7:] not in losses
     ]
-    if not healthy or not semantics.get("consumed_pids"):
+    if not healthy or not collection.get("consumed_pids"):
         raise ValueError("holding_current_collection_unproven")
     receipts = {}
     for record in sorted(set(ids + [row["position_key"][7:] for row in healthy])):
@@ -153,6 +178,68 @@ def historical_buy_gap_resolution(report, *, data_root, accepted_position_ids, n
         actual_order_submitted=False,
         economic_eligibility=False,
     )
+
+
+def read_collection_witness(reference, data_root):
+    """Read a native re-audited immutable observation, not a mutable latest alias."""
+    from pathlib import Path
+    from src.engine.scalping.entry_split_monitor_projection import _read, _digest
+
+    root = Path(data_root).resolve()
+    path = Path(reference["path"])
+    directory = (
+        root
+        / "report/holding_exit_sentinel/historical_resolutions/collection_witnesses"
+    )
+    if (
+        path.parent != directory
+        or path.name != reference["sha256"] + ".json"
+        or any(parent.is_symlink() for parent in path.parents)
+    ):
+        raise ValueError("holding_collection_witness_path_invalid")
+    value, source = _read(path, 8 * 1024 * 1024)
+    if (
+        source["sha256"] != reference["sha256"]
+        or value.get("schema") != "holding_collection_witness_v1"
+    ):
+        raise ValueError("holding_collection_witness_changed")
+    report = value["report"]
+    if value.get("report_sha256") != _digest(report):
+        raise ValueError("holding_collection_witness_report_invalid")
+    # These are immutable native PID receipts, not live bootstrap pointers.
+    verified_pids = set()
+    for name, sha in value["pid_sources"].items():
+        body, identity = _read(Path(name), 32768)
+        at = datetime.fromisoformat(body["verified_at"])
+        cutoff = datetime.fromisoformat(report["as_of"])
+        if cutoff.tzinfo is None:
+            cutoff = cutoff.replace(tzinfo=KST)
+        expected = (
+            root
+            / "runtime/policy_bootstrap/verified_holding_profit_pid"
+            / report["target_date"]
+        )
+        if (
+            Path(name).parent != expected
+            or Path(name).name
+            != f"holding_profit_pid_{body['pid']}_{body['manifest_sha256']}.json"
+            or identity["sha256"] != sha
+            or body.get("schema") != "holding_profit_pid_verification_v1"
+            or body.get("target_date") != report["target_date"]
+            or body.get("receipt_sha256")
+            != _digest({k: v for k, v in body.items() if k != "receipt_sha256"})
+            or at.tzinfo is None
+            or at > cutoff
+            or type(body.get("pid")) is not int
+            or body["pid"] <= 0
+        ):
+            raise ValueError("holding_collection_witness_pid_invalid")
+        verified_pids.add(body["pid"])
+    if not verified_pids or not set(
+        report["profit_exit_semantics"]["consumed_pids"]
+    ).issubset(verified_pids):
+        raise ValueError("holding_collection_witness_pid_missing")
+    return report
 
 
 def historical_resolution_code():
@@ -251,14 +338,25 @@ def read_historical_resolution(report, *, report_path, report_sha256, data_root,
     accepted = datetime.fromisoformat(resolution["accepted_at"])
     if now is None or accepted.tzinfo is None or now.tzinfo is None or accepted > now:
         raise ValueError("holding_historical_resolution_clock_invalid")
+    collection_report = (
+        read_collection_witness(value["collection_witness"], data_root)
+        if "collection_witness" in value
+        else None
+    )
     expected = historical_buy_gap_resolution(
         report,
         data_root=data_root,
         accepted_position_ids=value["accepted_position_ids"],
         now=accepted,
+        collection_report=collection_report,
     )
     if (
         resolution != expected
+        or (
+            collection_report is not None
+            and read_collection_witness(value["collection_witness"], data_root)
+            != collection_report
+        )
         or _read(path, 262144)[1] != reference
         or _read(Path(report_path), 8 * 1024 * 1024)[1]["sha256"] != report_sha256
         or value["sources"] != historical_resolution_sources(report, data_root)

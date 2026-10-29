@@ -13338,6 +13338,37 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 }}
 
 
+# Source-only paired research and exact historical diagnostics; no policy adoption.
+REVIEWED_HOLDING_HISTORY_HASHES = {'src/engine/ai/holding_exit_vote.py': 'f0b1aac8e07417748caeac0098086f24c95901a2471bab6c3bdece5bf78f7770', 'src/engine/ai_engine_openai.py': 'e6ffee39c0b99d73cf3ef3203f43a4d5946d88e6674258d2de58f5ef1e423f20', 'src/engine/holding_exit_sentinel.py': 'b2190e1435e8d0834202a808e3232ffdf9145499c95a139005156270fd43cde7', 'src/engine/scalping/holding_decision_context.py': '620f1f2b9792c377597fbb50905fbc131ca85cc45951480a827b58484aa6c6fb', 'src/engine/scalping/holding_profit_exit_semantics.py': '64e8d0b7099b0db70f990e48ddab0c2f622116c1273921e6d12034759ce1146b', 'src/engine/scalping/main_stop_replay.py': '0ab852c1320e43df4662e51072836b71eba4088c03aee75e303cbf2899748632', 'src/engine/scalping/reversal_auxiliary_compatibility.py': 'df74d438bcdcf7472d7c856ced01d551f00ad951a1aaeb31e17bf89aae63d5bf', 'src/engine/scalping/reversal_auxiliary_intraday.py': '02ec66f262e98123de56165890cb11c1a0464d44e4cff227845637be6e130ff9', 'src/engine/scalping/reversal_auxiliary_production_input.py': '642381efec468d62a1ba68582b6a74b35fc36ee8cc2738c8cc2271eed80214bb', 'src/engine/scalping/reversal_auxiliary_registry.py': '05d8a9d276bba9d76aec24c869427a422b2c56378a6d22bacc01c06338cd94b7', 'src/engine/scalping/reversal_auxiliary_research_population.py': 'b3e3ee8c30c15a98d88839c5f167ce79930d2b295856919a08e0b728cbbe25b0', 'src/engine/scalping/reversal_auxiliary_tuning.py': '973032158d823ca2a2a96f413f4fd44acd88876c5485b366f7ec61a7e2a10211', 'src/engine/sniper_state_handlers.py': 'dd51075488ae00e544358905b7140710bbd046e42ea7bf8a236e79142adf98ff', 'src/trading/market/completed_history.py': '4c300481759830843a9a3077f0690fcb6264a4e4d5ef9ce6c0eb35e7ef05dfbb', 'src/engine/infrastructure/startup_validation_code_context.py': '28ed8e64f56d0668319e00f856bceaac3b67b06171907f5972ca5174940255bc'}
+REVIEWED_HOLDING_HISTORY_ORIGINS = {'src/engine/ai/holding_exit_vote.py': '71a10ceba6d02af93c8295aec826566d3730990f7c44ca5b9c8fcae1a4e51b73', 'src/engine/ai_engine_openai.py': '424a6ae8e6c904430b9fbb601a6fdf9d9eec6aa3ab8b2c68be2f4c6919291940', 'src/engine/holding_exit_sentinel.py': '39bc9d11bbc66fc4dd59325ef4c7a3e30f467ab9b855d5ef46dc1522f8488d23', 'src/engine/scalping/holding_decision_context.py': '879cf1d27bfa993e30edbf9bcce97510869d547f54ec673ee1535b5524bd63c2', 'src/engine/scalping/holding_profit_exit_semantics.py': '34e654bf8cfc979783b3966b96b952f900cdd67fc21a98ae107c87b2f91b0542', 'src/engine/scalping/main_stop_replay.py': '6f8764a3b6485ce4eb66b6d47c600620d74405e246e52a78de2f3311a90ea594', 'src/engine/scalping/reversal_auxiliary_compatibility.py': '459d74a5314fdab6a3adb5ce89e445429ca4c9377739e1941755c7e2ad1f932a', 'src/engine/scalping/reversal_auxiliary_intraday.py': 'be51fd48fe976e61f6ebeefa76f81ff480c8401470e0efdfe2360307fcbe85cc', 'src/engine/scalping/reversal_auxiliary_production_input.py': '0e576decb06aa17fff3548cdf15f4f23a2a87db57596b67095b7f8313d2f920f', 'src/engine/scalping/reversal_auxiliary_registry.py': 'e0ef036e8451e3ca867fbe274ff26fa747f281907cbee2470183b307350a5b77', 'src/engine/scalping/reversal_auxiliary_research_population.py': '9baabb21fe9099fa963776b38a00f124b79d371aec8bab254ae17afd65bef690', 'src/engine/scalping/reversal_auxiliary_tuning.py': '620b24ab335edd62d0d21cd0d7523ee6fa386ea9bb97da48e0dc12a507ca2911', 'src/engine/sniper_state_handlers.py': 'e8284be9145b83822d35585b19154fbc723f22cdf4c1a4050b92dc04c2e02226', 'src/trading/market/completed_history.py': 'b5ed23ac54b9dbaf5e74ddde92716c479447a49bc5595871c7141e6628bafc1a', 'src/engine/infrastructure/startup_validation_code_context.py': 'aa6237699df227d261790190aa227a8d538f617c3e9ed54a2f6700f8eec73bde'}
+REVIEWED_HOLDING_HISTORY_ISSUED_ORIGINS = {'src/engine/ai/holding_exit_vote.py': 'd8c9de0ae5270c0e40f8494941def50c69d52fbab887b5c38c6b1fd73129514c', 'src/engine/ai_engine_openai.py': '4a70967c006a6dba29d06ba8409d346b782d7e2fe09656e1fbfc9807f17cc162', 'src/engine/holding_exit_sentinel.py': 'a02066a6f6538f7b4f855c5cc93ed3b5b4e661f4516c6191cd4859542cc5afdb', 'src/engine/scalping/holding_decision_context.py': '5d7577896850988b6419996a76db24344f7a612c59ecac339331ca2e841607d2', 'src/engine/scalping/holding_profit_exit_semantics.py': 'c3c2d58e97c99f24e37001622874ec294b4e8424e3dc22052495f35ec564b93a', 'src/engine/scalping/main_stop_replay.py': '4121f176553433e2d07cdc1b8466c4a54edfa6cf00bbe09bde4e12a74258730d', 'src/engine/scalping/reversal_auxiliary_compatibility.py': '9cc4e362967b0294c0ee43b92cb4ced24f8d40946257567d6becf72253940bce', 'src/engine/scalping/reversal_auxiliary_intraday.py': 'f4e59f492decd157b4e81df67ff485d3ed949c243278d16b49dad73b78918e97', 'src/engine/scalping/reversal_auxiliary_production_input.py': 'ac517cab3a60a6a224cbabe1ef3b162edf9dfa1992b6ebfa0b4fafbf9e34428a', 'src/engine/scalping/reversal_auxiliary_registry.py': '80d91c4cd7758621236403d2f4ae4596317d9fa10a8624a616c3699775aedea0', 'src/engine/scalping/reversal_auxiliary_research_population.py': '79953b70d771de44252d0cacd4ef1ddab7a19d9f2a45512e9fb47574c898c0c6', 'src/engine/scalping/reversal_auxiliary_tuning.py': 'a8ac3de954b2d6e89e3a46bb49501edc0d35df47621900a1d22b6d8492672412', 'src/engine/sniper_state_handlers.py': 'eaca4d2d23d2764c42e3f7cc2f73d04db0b29bb8115cabac4f10cf48e89d57aa', 'src/trading/market/completed_history.py': 'dec2b7afcb5fdaab16980d046a124ddac384515b7e3400249d73acaacaf348e7'}
+REVIEWED_HOLDING_HISTORY_PROFILE = {
+    **REVIEWED_PREOPEN_VALIDATION_PROFILE, **REVIEWED_HOLDING_HISTORY_HASHES,
+}
+REVIEWED_HOLDING_HISTORY_VARIANTS = {
+    (key[0], REVIEWED_HOLDING_HISTORY_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_sha256": REVIEWED_HOLDING_HISTORY_HASHES.get(value["selector_path"], value["selector_sha256"]),
+        "dependencies": {**value["dependencies"], **REVIEWED_HOLDING_HISTORY_HASHES},
+        "contract_extensions": {
+            origin: {
+                name: REVIEWED_HOLDING_HISTORY_HASHES.get(os.path.normpath(name), sha)
+                for name, sha in members.items()
+            } for origin, members in value["contract_extensions"].items()
+        },
+    } for key, value in REVIEWED_PREOPEN_VALIDATION_VARIANTS.items()
+}
+REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
+    name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
+        (origin, current) for origin in {
+            value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair
+        } | {REVIEWED_HOLDING_HISTORY_ORIGINS[name]}
+        | ({REVIEWED_HOLDING_HISTORY_ISSUED_ORIGINS[name]} if name in REVIEWED_HOLDING_HISTORY_ISSUED_ORIGINS else set())
+    ) for name, current in REVIEWED_HOLDING_HISTORY_HASHES.items()
+}}
+
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -14335,6 +14366,13 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_PREOPEN_VALIDATION_PROFILE
         prepared_variants = REVIEWED_PREOPEN_VALIDATION_VARIANTS
+    if any(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == sha
+        for name, sha in REVIEWED_HOLDING_HISTORY_HASHES.items()
+    ):
+        prepared_hashes = REVIEWED_HOLDING_HISTORY_PROFILE
+        prepared_variants = REVIEWED_HOLDING_HISTORY_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

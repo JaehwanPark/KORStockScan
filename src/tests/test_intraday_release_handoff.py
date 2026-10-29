@@ -5424,7 +5424,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_PREOPEN_VALIDATION_PROFILE,
+        "current": handoff.REVIEWED_HOLDING_HISTORY_PROFILE,
+        "preopen_validation": handoff.REVIEWED_PREOPEN_VALIDATION_PROFILE,
         "postclose_integrated": handoff.REVIEWED_POSTCLOSE_INTEGRATED_PROFILE,
         "held_sell": handoff.REVIEWED_HELD_SELL_PROFILE,
         "member_carry": handoff.REVIEWED_ENTRY_MEMBER_CARRY_PROFILE,
@@ -5528,6 +5529,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     str(canonical),
                     "show",
                     {
+                        "preopen_validation": "6d9ed3575",
                         "postclose_integrated": "8ad99e22a",
                         "member_carry": "c780d4679",
                         "held_sell": "ae4c180f3",
@@ -7269,3 +7271,15 @@ def test_preopen_validation_preserves_issued_postclose_predecessor(tmp_path, fam
 @pytest.mark.parametrize("fault", [None, "missing", "dirty", "committed_change", "parent_mix"])
 def test_preopen_validation_requires_complete_reviewed_generation(tmp_path, dependency, fault):
     test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, "pre_submit_delay", fault, "current", dependency)
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("fault", [None, "missing", "dirty", "committed_change", "parent_mix"])
+def test_holding_history_complete_handoff_preserves_all_readers(tmp_path, family, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "current", "src/engine/scalping/holding_profit_exit_semantics.py")
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+def test_holding_history_keeps_consumed_preopen_predecessor(tmp_path, family):
+    test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, family, None, "preopen_validation")
