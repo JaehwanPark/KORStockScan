@@ -4127,3 +4127,49 @@ def test_stopped_recovery_preflight_preserves_pending_selection(stopped_recovery
     with pytest.raises(ValueError,match='deployment_pending_scoring_code_changed'):
         driver.preflight()
     assert driver.hold.read_bytes()==before
+
+
+@pytest.mark.parametrize('invalid', [None, 'date', 'not_consumed', 'failed'])
+def test_postclose_stop_initial_admission_uses_current_selected_consumer(tmp_path, monkeypatch, invalid):
+    from datetime import datetime
+    day = '2026-10-29'
+    root = Path(D.__file__).resolve().parents[3]
+    runtime = tmp_path / 'data/runtime'
+    runtime.mkdir(parents=True)
+    actor = dict(pid=123, start_ticks='456', cwd=str(root / 'src'))
+    (runtime / 'runtime_release_selection.json').write_text(json.dumps(dict(
+        release_root=str(root), git_commit='c'*40, actual_pid_consumed=True,
+        actual_pid_receipt=dict(pid=123, start_ticks='456'))))
+    eod = runtime / 'update_kospi_status' / f'update_kospi_{day}.json'
+    eod.parent.mkdir()
+    eod.write_text(json.dumps(dict(target_date=day, status='completed',
+        finished_at=day+'T20:07:00+09:00',
+        db_state=dict(latest_quote_date=day, rows_on_latest_date=10))))
+    monkeypatch.setattr(D.R, 'selected_release', lambda workspace: (root, 'c'*40))
+    monkeypatch.setattr(D.H, '_identity', lambda pid: actor)
+    monkeypatch.setattr(D.H, 'verify_predecessor_consumption', lambda *a, **kw:
+        pytest.fail('intraday_predecessor_candidate_already_selected'))
+    calls = []
+    def consume(target, *, pid):
+        assert (target, pid) == (day, 123)
+        calls.append('current_consumer')
+        return dict(status='fail' if invalid=='failed' else 'pass',
+                    target_date='2026-10-28' if invalid=='date' else day,
+                    actual_pid_consumed=invalid!='not_consumed')
+    monkeypatch.setattr(D.H, 'verify_pid_consumption', consume)
+    def pin(workspace, identity):
+        assert calls == ['current_consumer'] and identity == actor
+        raise RuntimeError('collector boundary reached after valid current consumption')
+    monkeypatch.setattr(D, 'pin_collector_shutdown', pin)
+    if invalid:
+        with pytest.raises(ValueError, match='postclose_stop_policy_consumption_invalid'):
+            D.stop_after_eod(tmp_path, day, D.CONFIRM,
+                             now=datetime.fromisoformat(day+'T20:10:00+09:00'))
+    else:
+        with pytest.raises(RuntimeError, match='collector boundary reached'):
+            D.stop_after_eod(tmp_path, day, D.CONFIRM,
+                             now=datetime.fromisoformat(day+'T20:10:00+09:00'))
+    assert calls == ['current_consumer']
+    assert not (runtime / 'operator_startup_hold.json').exists()
+    assert not (runtime / 'postclose_stop' / day / 'status.json').exists()
+    assert not (tmp_path / 'restart.flag').exists()

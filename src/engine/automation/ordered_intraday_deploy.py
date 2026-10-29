@@ -2588,8 +2588,10 @@ def stop_after_eod(workspace, day, confirm, *, now=None):
                     or hold_path.exists() or hold_path.is_symlink()):
                 raise ValueError("postclose_stop_actor_or_hold_invalid")
             with postclose_session(workspace / "data", day):
-                verified = H.verify_predecessor_consumption(day, pid=actor["pid"])
-            if verified.get("status") != "pass":
+                verified = H.verify_pid_consumption(day, pid=actor["pid"])
+            if (verified.get("status") != "pass"
+                    or verified.get("target_date") != day
+                    or verified.get("actual_pid_consumed") is not True):
                 raise ValueError("postclose_stop_policy_consumption_invalid")
             pin = pin_collector_shutdown(workspace, actor)
             closure = (verify_collector_shutdown(pin)

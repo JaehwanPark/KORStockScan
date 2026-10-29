@@ -382,3 +382,45 @@ profile is also preserved. Neither diagnostic failure changed operating evidence
 366 BUY/summary/startup regressions passed;44 independent issuer/preparation
 checks passed. Final immutable candidate, native source/owner migration preflight,
 P5 and actual new-PID first producer/observer remain required acceptance.
+
+### First postclose stop admission repair - 2026-10-29
+
+The9f7b22006 transition completed21:54:53. Candidate P5
+2d68cb5797d74090a0ab4fd6733490fb and selected P5
+af1ccc55e4504de3aa36392f8eeab8ce passed. Actual Main3436770/start92296107
+consumed the intended generation from the selected release. First source
+production completed15.508s and observer23.011s within the unchanged process
+deadline. First health retained5 PASS/1 WARNING/1 FAIL: unresolved incident
+classification and held/not-yet-produced postclose artifacts remain separate
+from the repaired producer timeout. No natural signal or economic acceptance
+is inferred from this market-closed startup.
+
+After EOD and deployment verification, the exact nine held cron rows were
+restored under native locks; native one-off schedule restoration preserved the
+original install/hold evidence. The original20:10 slots had passed, so source29
+postclose was admitted through the native manual wrapper with its original
+provider/action/swing context. Run9caa183406f64a79a48a2b039444e41e failed22:06:54
+before Main stop, collector pinning or calculation. The status bytes are saved
+in data/audit/startup_storage/2026-10-29/postclose-stop-role-repair/ with SHA256
+225686817593393e28e8a33857502ab2106bb37a3d339ff31902fecb091195a9.
+
+The first broken contract is the stop owner's reader role: it requires the
+current selected root but invoked the candidate-predecessor reader, which
+correctly rejects candidate_already_selected. The existing owner now uses
+verify_pid_consumption, requiring native PASS, exact day and consumed=true.
+The actual selected PID3436770 input reproduced the old rejection and the
+correct reader passed in18.155s; its native policy source28 remains distinct
+from stop/EOD source29. No date, policy, timeout, safety or state exception is
+added. The same actor's native_market_close collector closure and exact launcher
+were checked read-only before another attempt.
+
+Four initial-admission regression cases exercise valid, wrong-date, unconsumed
+and failed results before pinning or stop publication; the old helper would
+fail the valid case. Existing stopped-resume coverage is retained. The existing
+P5 candidate branch and explicit predecessor CLI remain valid consumers of the
+predecessor reader; no wrapper or duplicate validator is introduced. Native
+cleanup progress/failure, supervisor drain, selector CAS and original deadline
+remain unchanged. Complete reviewed code profiles are advanced as one generation;
+all issued predecessor profiles remain immutable. Candidate/selected P5 and
+actual consumer checks are required again for this new code, while unchanged
+calculation, policy and capability evidence is read-only revalidated.

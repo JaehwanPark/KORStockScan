@@ -1120,3 +1120,10 @@ and observer within the original process-start deadline and finish first health.
 The summary owner permits only the reviewed prior parser/owner pair; preserve
 original manifests and raw offsets, and append incrementally without rebuilding
 historical raw data. No old report or cache becomes current-PID success.
+
+The post-EOD stop owner authenticates the currently selected actor with the
+current-PID consumption reader, including exact target date and consumed=true.
+The predecessor reader belongs to candidate admission before selection; it
+intentionally rejects an already-selected candidate and cannot authenticate a
+current stop. Both readers retain their original root, policy and generation
+checks. Invalid consumption must fail before collector pinning or stop intent.
