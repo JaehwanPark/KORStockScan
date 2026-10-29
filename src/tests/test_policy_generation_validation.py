@@ -2019,8 +2019,10 @@ def test_source_review_extends_only_existing_capability_reader_membership(tmp_pa
 @pytest.mark.parametrize(
     "damage", [None, "original_absent", "omitted_review", "unregistered_owner", "origin_deleted", "current_deleted"]
 )
-def test_source_review_preserves_original_auxiliary_inventory_while_binding_new_consumers(
-    tmp_path, monkeypatch, damage
+@pytest.mark.parametrize("family,extension", [("auxiliary", "scalping/reversal_extended_registration.py"),
+                                          ("entry_cancel_wait", "lifecycle/research_storage.py")])
+def test_source_review_preserves_original_family_inventory_while_binding_new_consumers(
+    tmp_path, monkeypatch, damage, family, extension
 ):
     import copy
     import subprocess
@@ -2029,10 +2031,10 @@ def test_source_review_preserves_original_auxiliary_inventory_while_binding_new_
     extra = (
         "scalping/unreviewed_owner.py"
         if damage == "unregistered_owner"
-        else "scalping/reversal_extended_registration.py"
+        else extension
     )
     updated = copy.deepcopy(generation.COMPONENTS)
-    updated["auxiliary"] = (*updated["auxiliary"], extra)
+    updated[family] = (*updated[family], extra)
     for role, root in (("origin", old), ("current", new)):
         file = root / "src/engine" / extra
         file.parent.mkdir(parents=True, exist_ok=True)
@@ -2081,21 +2083,20 @@ def test_source_review_preserves_original_auxiliary_inventory_while_binding_new_
         (old / "src/engine" / extra).unlink()
     elif damage == "current_deleted":
         (new / "src/engine" / extra).unlink()
-    if damage in {"omitted_review", "unregistered_owner", "origin_deleted", "current_deleted"}:
+    if (damage in {"omitted_review", "unregistered_owner", "origin_deleted", "current_deleted"}
+            or family == "entry_cancel_wait" and damage == "original_absent"):
         with pytest.raises((ValueError, OSError)):
             handoff.reviewed_source_transition(seal())
     else:
         result = handoff.reviewed_source_transition(seal())
         original = generation.digest(
             {
-                "auxiliary.py": validation.file_sha(old / "src/engine/auxiliary.py"),
+                family + ".py": validation.file_sha(old / ("src/engine/" + family + ".py")),
                 "shared.py": validation.file_sha(old / "src/engine/shared.py"),
             }
         )
-        assert result["pairs"]["auxiliary"][0] == original
-        assert result["pairs"]["auxiliary"][1] == generation.code_generation(
-            "auxiliary"
-        )
+        assert result["pairs"][family][0] == original
+        assert result["pairs"][family][1] == generation.code_generation(family)
 
 
 @pytest.mark.parametrize('damage', [None, 'missing', 'bytes', 'state', 'proof', 'count', 'path', 'schema', 'chunk', 'encoding', 'generation'])

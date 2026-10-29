@@ -123,3 +123,22 @@ moves or new modules/entrypoints. Growth adds lossless bounded storage and its
 original proof checks, complete generation custody and failure coverage. Inline
 legacy intake and gzip remain for named historical/other-family consumers; no
 displaced forwarding wrapper or duplicate implementation is retained.
+
+### Exact storage-consumer membership review - 2026-10-29
+
+The a5904ac8f active-parent handoff passed without selection/policy changes.
+Fresh capability review then rejected source_review_component_membership_changed
+before publishing a fixture: the existing review owner permitted only named
+auxiliary membership extensions, while the newly registered cancellation storage
+reader also needs exact source custody. The failed immutable review is retained
+under the same incident directory; no runtime report or current PASS was written.
+The existing reviewer now consolidates its named extension rules and permits only
+entry_cancel_wait's existing lifecycle/research_storage.py addition. Original
+family fingerprints keep their original member lists; unknown owners, removals,
+missing required original/current files and omitted review bytes still reject.
+26 source-review cases pass, including original inventory preservation. The full
+capability suite1731 and independent current/historical/future-endpoint51 checks
+pass. The complete source inventory and independent reader are advanced together;
+issued a5904ac8f and earlier generations remain immutable. No threshold, provider,
+execution, selector, source limit or safety authority changes. Fresh fixtures and
+native stopped-workflow intake remain required before source regeneration.

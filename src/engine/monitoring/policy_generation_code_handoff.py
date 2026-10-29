@@ -26,6 +26,12 @@ _AUXILIARY_NATIVE_CONSUMER_EXTENSION = frozenset(
 )
 
 
+_REVIEWED_CONSUMER_EXTENSIONS = {
+    "auxiliary": _AUXILIARY_NATIVE_CONSUMER_EXTENSION,
+    "entry_cancel_wait": frozenset({"lifecycle/research_storage.py"}),
+}
+
+
 def reviewed_source_transition(path, *, consumer_family=None):
     """Authenticate one reviewed source delta and derive every affected family.
 
@@ -137,26 +143,14 @@ def reviewed_source_transition(path, *, consumer_family=None):
     reviewer = "monitoring/policy_generation_code_handoff.py"
     old_components, new_components = old[2][0], new[2][0]
     allowed_membership = new_components == generation.COMPONENTS and all(
-        (
-            old_components[family] == new_components[family]
-            if family != "auxiliary"
-            else (
-                tuple(
-                    name
-                    for name in old_components[family]
-                    if name not in _AUXILIARY_NATIVE_CONSUMER_EXTENSION
-                )
-                == tuple(
-                    name
-                    for name in new_components[family]
-                    if name not in _AUXILIARY_NATIVE_CONSUMER_EXTENSION
-                )
-                and set(old_components[family]) <= set(new_components[family])
-                and set(new_components[family]) - set(old_components[family])
-                <= _AUXILIARY_NATIVE_CONSUMER_EXTENSION
-                and len(new_components[family]) == len(set(new_components[family]))
-            )
-        )
+        tuple(name for name in old_components[family]
+              if name not in _REVIEWED_CONSUMER_EXTENSIONS.get(family, ()))
+        == tuple(name for name in new_components[family]
+                 if name not in _REVIEWED_CONSUMER_EXTENSIONS.get(family, ()))
+        and set(old_components[family]) <= set(new_components[family])
+        and set(new_components[family]) - set(old_components[family])
+            <= _REVIEWED_CONSUMER_EXTENSIONS.get(family, frozenset())
+        and len(new_components[family]) == len(set(new_components[family]))
         for family in old_components
     )
     if (
