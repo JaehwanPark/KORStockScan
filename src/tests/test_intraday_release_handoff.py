@@ -5425,6 +5425,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
         "current": handoff.REVIEWED_HOLDING_HISTORY_PROFILE,
+        "holding_history_consumed": handoff.REVIEWED_HOLDING_HISTORY_PREDECESSOR_PROFILE,
         "preopen_validation": handoff.REVIEWED_PREOPEN_VALIDATION_PROFILE,
         "postclose_integrated": handoff.REVIEWED_POSTCLOSE_INTEGRATED_PROFILE,
         "held_sell": handoff.REVIEWED_HELD_SELL_PROFILE,
@@ -5530,6 +5531,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     "show",
                     {
                         "preopen_validation": "6d9ed3575",
+                        "holding_history_consumed": "a1c403555",
                         "postclose_integrated": "8ad99e22a",
                         "member_carry": "c780d4679",
                         "held_sell": "ae4c180f3",
@@ -7283,3 +7285,11 @@ def test_holding_history_complete_handoff_preserves_all_readers(tmp_path, family
 @pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
 def test_holding_history_keeps_consumed_preopen_predecessor(tmp_path, family):
     test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, family, None, "preopen_validation")
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("fault", [None, "missing", "dirty", "committed_change", "parent_mix"])
+def test_holding_history_successor_rechecks_exact_consumed_generation(tmp_path, family, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "holding_history_consumed",
+        "src/engine/infrastructure/startup_validation_code_context.py")

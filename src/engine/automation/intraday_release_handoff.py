@@ -13345,19 +13345,33 @@ REVIEWED_HOLDING_HISTORY_ISSUED_ORIGINS = {'src/engine/ai/holding_exit_vote.py':
 REVIEWED_HOLDING_HISTORY_PROFILE = {
     **REVIEWED_PREOPEN_VALIDATION_PROFILE, **REVIEWED_HOLDING_HISTORY_HASHES,
 }
-REVIEWED_HOLDING_HISTORY_VARIANTS = {
-    (key[0], REVIEWED_HOLDING_HISTORY_HASHES.get(key[0], key[1])): {
-        **value,
-        "selector_sha256": REVIEWED_HOLDING_HISTORY_HASHES.get(value["selector_path"], value["selector_sha256"]),
-        "dependencies": {**value["dependencies"], **REVIEWED_HOLDING_HISTORY_HASHES},
-        "contract_extensions": {
-            origin: {
-                name: REVIEWED_HOLDING_HISTORY_HASHES.get(os.path.normpath(name), sha)
-                for name, sha in members.items()
-            } for origin, members in value["contract_extensions"].items()
-        },
-    } for key, value in REVIEWED_PREOPEN_VALIDATION_VARIANTS.items()
+# Preserve the complete already-consumed generation, not arbitrary mixtures.
+REVIEWED_HOLDING_HISTORY_PREDECESSOR_HASHES = {
+    **REVIEWED_HOLDING_HISTORY_HASHES,
+    "src/engine/holding_exit_sentinel.py": "c1d1868fee331a01bf8562965e3ada03c7ed20b61df4149f99308629b52a8b96",
+    "src/engine/infrastructure/startup_validation_code_context.py": "abd53c8719054c2a7cbb10923d028a434c3fd3983d6c3bf0bfa34919158eb047",
 }
+REVIEWED_HOLDING_HISTORY_PREDECESSOR_PROFILE = {
+    **REVIEWED_PREOPEN_VALIDATION_PROFILE,
+    **REVIEWED_HOLDING_HISTORY_PREDECESSOR_HASHES,
+}
+def _holding_history_variants(hashes):
+    return {
+        (key[0], hashes.get(key[0], key[1])): {
+            **value,
+            "selector_sha256": hashes.get(value["selector_path"], value["selector_sha256"]),
+            "dependencies": {**value["dependencies"], **hashes},
+            "contract_extensions": {
+                origin: {
+                    name: hashes.get(os.path.normpath(name), sha)
+                    for name, sha in members.items()
+                } for origin, members in value["contract_extensions"].items()
+            },
+        } for key, value in REVIEWED_PREOPEN_VALIDATION_VARIANTS.items()
+    }
+
+REVIEWED_HOLDING_HISTORY_VARIANTS = _holding_history_variants(REVIEWED_HOLDING_HISTORY_HASHES)
+REVIEWED_HOLDING_HISTORY_PREDECESSOR_VARIANTS = _holding_history_variants(REVIEWED_HOLDING_HISTORY_PREDECESSOR_HASHES)
 REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
     name: REVIEWED_ENTRY_COST_PAIRS.get(name, ()) + tuple(
         (origin, current) for origin in {
@@ -13368,6 +13382,13 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
         | ({"abd53c8719054c2a7cbb10923d028a434c3fd3983d6c3bf0bfa34919158eb047"} if name == "src/engine/infrastructure/startup_validation_code_context.py" else set())
     ) for name, current in REVIEWED_HOLDING_HISTORY_HASHES.items()
 }}
+for _name, _prior in REVIEWED_HOLDING_HISTORY_PREDECESSOR_HASHES.items():
+    _pairs = REVIEWED_ENTRY_COST_PAIRS.get(_name, ())
+    _origins = {value for pair in _pairs for value in pair}
+    _origins.discard(REVIEWED_HOLDING_HISTORY_HASHES[_name])
+    REVIEWED_ENTRY_COST_PAIRS[_name] = _pairs + tuple(
+        (_old, _prior) for _old in _origins if (_old, _prior) not in _pairs
+    )
 
 
 
@@ -14375,6 +14396,15 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_HOLDING_HISTORY_PROFILE
         prepared_variants = REVIEWED_HOLDING_HISTORY_VARIANTS
+    # The successor may verify an issued incumbent during candidate P5. Accept
+    # that phase only when every committed dependency is the exact prior profile.
+    if all(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == sha
+        for name, sha in REVIEWED_HOLDING_HISTORY_PREDECESSOR_PROFILE.items()
+    ):
+        prepared_hashes = REVIEWED_HOLDING_HISTORY_PREDECESSOR_PROFILE
+        prepared_variants = REVIEWED_HOLDING_HISTORY_PREDECESSOR_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

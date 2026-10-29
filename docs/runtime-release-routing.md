@@ -1056,3 +1056,13 @@ historical checklist. It must not request an unused candidate Git blob first.
 Replacement mode still requires the exact committed candidate document; an
 unversioned/missing candidate document never supplies replacement authority.
 Preservation is not a substitute for native predecessor/policy/source validation.
+
+
+During successor P5, the reviewed holding-history handoff owner must verify the
+already-consumed predecessor with its own complete committed dependency profile.
+Select that predecessor profile only after every declared dependency matches;
+otherwise enforce the candidate profile and reject missing, changed or mixed
+generations. Exact per-file compatibility alone does not select a whole issued
+profile. Preserve the previous issuer/selector and contract-extension bindings,
+and exercise both native incumbent policy intake and independent candidate
+preparation before repeating the ordered transition.
