@@ -1490,3 +1490,214 @@ def test_missing_native_consumption_does_not_close_historical_parent(
     ).write_text("{}")
     with pytest.raises(ValueError, match="summary_binding_invalid"):
         policy.verify_source_handoff(tmp_path, parent)
+
+
+def test_krx_aftermarket_add_scope_is_dated_validated_and_carries_vote_cells(tmp_path):
+    _, _, _, _, _, _, numeric = fixture(tmp_path)
+    numeric["parent"]["target_date"] = "2026-10-29"
+    numeric["selected_cells"] = {}
+    bundle = policy.create_successor(
+        source_date="2026-10-29",
+        target_date="2026-10-30",
+        source_report_sha256="a" * 64,
+        replay={"vote_numeric_research": numeric},
+        source_quality={},
+    )
+    assert bundle["add_rebound_source_scope"] == policy.krx_aftermarket_add_scope(
+        "2026-10-30"
+    )
+    assert all(
+        row["policy"] == numeric["parent"]["cells"][key]
+        for key, row in bundle["cells"].items()
+    )
+    bad = copy.deepcopy(bundle)
+    bad["add_rebound_source_scope"]["path_id"] = "ENTRY"
+    bad["bundle_sha256"] = policy.digest(
+        {k: v for k, v in bad.items() if k != "bundle_sha256"}
+    )
+    with pytest.raises(ValueError, match="source_scope"):
+        policy.validate_successor(bad, target_date="2026-10-30")
+    old = copy.deepcopy(bundle)
+    del old["add_rebound_source_scope"]
+    old["bundle_sha256"] = policy.digest(
+        {k: v for k, v in old.items() if k != "bundle_sha256"}
+    )
+    assert policy.validate_successor(old, target_date="2026-10-30") == old
+
+
+def test_krx_scope_issuance_and_loader_preserve_legacy_source_bytes(
+    tmp_path, monkeypatch
+):
+    from src.engine.automation import postclose_summary_handoff as handoff
+
+    replay = summarize_holding_path_votes(
+        [], load_events=lambda _: [], model="gpt-5.4-nano"
+    )
+    observation = dict(
+        date="2026-10-29",
+        holding_path_vote_replay=replay,
+        completed_population_quality=dict(
+            complete=False,
+            db_completed_main_ids=[],
+            strict_completed_position_ids=[],
+            source_gap_ids=[],
+            excluded_all_reasons={},
+            source_gap_dates=[],
+        ),
+    )
+    source = write(
+        tmp_path / "report/monitor_snapshots/holding_exit_observation_2026-10-29.json",
+        observation,
+    )
+    bundle = policy.create_bundle(
+        source_date="2026-10-29",
+        target_date="2026-10-30",
+        source_report_sha256=source["sha256"],
+        replay=replay,
+        source_quality=policy.source_quality_from_observation(observation),
+    )
+    assert bundle["add_rebound_source_scope"] == policy.krx_aftermarket_add_scope(
+        "2026-10-30"
+    )
+    monkeypatch.setattr(handoff, "stage_receipt_issues", lambda *a, **kw: [])
+
+    def publish(value):
+        write(policy.policy_path(tmp_path, "2026-10-30"), value)
+        write(
+            tmp_path
+            / "report/runtime_approval_summary/runtime_approval_summary_2026-10-29.json",
+            dict(
+                holding_path_vote_policy=dict(
+                    status=policy.publication_status(value),
+                    source_date=value["source_date"],
+                    target_date=value["target_date"],
+                    bundle_sha256=value["bundle_sha256"],
+                    policy_set_sha256=value["policy_set_sha256"],
+                    source_report_sha256=value["source_report_sha256"],
+                    cell_count=12,
+                )
+            ),
+        )
+        env = {
+            policy.ENV_PATH: str(policy.policy_path(tmp_path, "2026-10-30")),
+            policy.ENV_SHA: value["bundle_sha256"],
+            policy.ENV_DATE: "2026-10-30",
+        }
+        return policy.runtime_policy_from_env(
+            env, data_root=tmp_path, active_date="2026-10-30"
+        )[1]
+
+    loaded = publish(bundle)
+    assert loaded["add_rebound_source_scope"] == bundle["add_rebound_source_scope"]
+    legacy = copy.deepcopy(bundle)
+    del legacy["add_rebound_source_scope"]
+    legacy["bundle_sha256"] = policy.digest(
+        {k: v for k, v in legacy.items() if k != "bundle_sha256"}
+    )
+    assert "add_rebound_source_scope" not in publish(legacy)
+    altered = copy.deepcopy(bundle)
+    altered["add_rebound_source_scope"]["market_data_route"] = "nxt_only"
+    altered["bundle_sha256"] = policy.digest(
+        {k: v for k, v in altered.items() if k != "bundle_sha256"}
+    )
+    rejected = publish(altered)
+    assert rejected["status"] == "baseline_policy_load_rejected"
+    assert "source_scope" in rejected["reason"]
+
+
+def test_krx_scope_successor_through_native_parent_and_runtime_handoff(
+    tmp_path, monkeypatch
+):
+    from src.engine.automation import postclose_summary_handoff as handoff
+
+    monkeypatch.setattr(handoff, "stage_receipt_issues", lambda *a, **kw: [])
+    replay = summarize_holding_path_votes(
+        [], load_events=lambda _: [], model="gpt-5.4-nano"
+    )
+
+    def observation(day, value):
+        return dict(
+            date=day,
+            holding_path_vote_replay=value,
+            completed_population_quality=dict(
+                complete=False,
+                db_completed_main_ids=[],
+                strict_completed_position_ids=[],
+                source_gap_ids=[],
+                excluded_all_reasons={},
+                source_gap_dates=[],
+            ),
+        )
+
+    def issue(source_day, target_day, source_replay):
+        obs = observation(source_day, source_replay)
+        source = write(
+            tmp_path
+            / f"report/monitor_snapshots/holding_exit_observation_{source_day}.json",
+            obs,
+        )
+        bundle = policy.create_bundle(
+            source_date=source_day,
+            target_date=target_day,
+            source_report_sha256=source["sha256"],
+            replay=source_replay,
+            source_quality=policy.source_quality_from_observation(obs),
+        )
+        ref = write(policy.policy_path(tmp_path, target_day), bundle)
+        write(
+            tmp_path
+            / f"report/runtime_approval_summary/runtime_approval_summary_{source_day}.json",
+            dict(
+                holding_path_vote_policy=dict(
+                    status=policy.publication_status(bundle),
+                    source_date=source_day,
+                    target_date=target_day,
+                    bundle_sha256=bundle["bundle_sha256"],
+                    policy_set_sha256=bundle["policy_set_sha256"],
+                    source_report_sha256=source["sha256"],
+                    cell_count=12,
+                )
+            ),
+        )
+        return bundle, ref
+
+    parent, ref = issue("2026-10-28", "2026-10-29", replay)
+    next_replay = copy.deepcopy(replay)
+    next_replay["vote_numeric_research"] = dict(
+        parent=dict(
+            path=str(policy.policy_path(tmp_path, "2026-10-29")),
+            byte_sha256=ref["sha256"],
+            bundle_sha256=parent["bundle_sha256"],
+            policy_set_sha256=parent["policy_set_sha256"],
+            target_date="2026-10-29",
+            cells={k: row["policy"] for k, row in parent["cells"].items()},
+        ),
+        code_sha256=experiment.code_sha(),
+        source_sha256=experiment.source_generation_sha({}, {}, {}),
+        source_inventory={},
+        cost_generations={},
+        vote_source_inventory={},
+        selected_cells={},
+    )
+    bundle, _ = issue("2026-10-29", "2026-10-30", next_replay)
+    env = {
+        policy.ENV_PATH: str(policy.policy_path(tmp_path, "2026-10-30")),
+        policy.ENV_SHA: bundle["bundle_sha256"],
+        policy.ENV_DATE: "2026-10-30",
+    }
+    _, receipt = policy.runtime_policy_from_env(
+        env, data_root=tmp_path, active_date="2026-10-30"
+    )
+    assert policy.runtime_krx_aftermarket_add_source_enabled(
+        receipt, active_date="2026-10-30"
+    ), receipt
+    assert not policy.runtime_krx_aftermarket_add_source_enabled(
+        receipt, active_date="2026-10-31"
+    )
+    parent_path = policy.policy_path(tmp_path, "2026-10-29")
+    parent_path.write_bytes(parent_path.read_bytes() + b" ")
+    _, rejected = policy.runtime_policy_from_env(
+        env, data_root=tmp_path, active_date="2026-10-30"
+    )
+    assert rejected["status"] == "baseline_policy_load_rejected"
+    assert "parent_changed" in rejected["reason"]

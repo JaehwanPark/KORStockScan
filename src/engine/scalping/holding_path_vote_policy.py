@@ -29,6 +29,38 @@ MAX_BYTES = 1024 * 1024
 ENV_PATH = "KORSTOCKSCAN_HOLDING_PATH_VOTE_POLICY_FILE"
 ENV_SHA = "KORSTOCKSCAN_HOLDING_PATH_VOTE_POLICY_SHA256"
 ENV_DATE = "KORSTOCKSCAN_HOLDING_PATH_VOTE_POLICY_ACTIVE_DATE"
+ADD_SCOPE_SOURCE_DATE = "2026-10-29"
+
+
+def krx_aftermarket_add_scope(target_date: str) -> dict:
+    """Operator-directed source scope; it grants neither entry nor orders."""
+    return dict(
+        schema="add_rebound_krx_aftermarket_source_scope_v1",
+        authority="operator_directed_2026_10_29",
+        target_date=target_date,
+        path_id="ADD_REBOUND",
+        effective_venue="KRX",
+        session="krx_nxt_aftermarket",
+        market_data_route="krx_only",
+        item_suffix="",
+        source_only=True,
+        actual_order_submitted=False,
+        broker_order_forbidden=True,
+    )
+
+
+def _validate_add_source_scope(bundle: dict, target_date: str) -> None:
+    scope = bundle.get("add_rebound_source_scope")
+    expected = krx_aftermarket_add_scope(target_date)
+    if scope is not None and (
+        bundle.get("source_date", "") < ADD_SCOPE_SOURCE_DATE
+        or not isinstance(scope, dict)
+        or scope != expected
+        or any(
+            type(scope.get(key)) is not type(value) for key, value in expected.items()
+        )
+    ):
+        raise ValueError("holding_vote_add_source_scope_invalid")
 
 
 def digest(payload: Any) -> str:
@@ -266,6 +298,8 @@ def create_bundle(
         ),
         "cells": cells,
     }
+    if source_date >= ADD_SCOPE_SOURCE_DATE:
+        bundle["add_rebound_source_scope"] = krx_aftermarket_add_scope(target_date)
     bundle["bundle_sha256"] = digest(bundle)
     return bundle
 
@@ -279,6 +313,7 @@ def validate_bundle(
 ) -> dict[str, Any]:
     if not isinstance(bundle, dict):
         raise ValueError("holding_vote_policy_invalid")
+    _validate_add_source_scope(bundle, target_date)
     if bundle.get("schema") == SUCCESSOR_SCHEMA:
         return validate_successor(
             bundle,
@@ -659,6 +694,16 @@ def verify_source_handoff(
         replay=replay,
         source_quality=source_quality_from_observation(observation),
     )
+    # An already-issued bundle predating this optional source scope must be
+    # compared in its original shape. Absence never authorizes the new scope.
+    if (
+        "add_rebound_source_scope" not in bundle
+        and "add_rebound_source_scope" in expected
+    ):
+        del expected["add_rebound_source_scope"]
+        expected["bundle_sha256"] = digest(
+            {k: v for k, v in expected.items() if k != "bundle_sha256"}
+        )
     if preserved_code:
         expected["code_sha256"] = preserved_code
         expected["bundle_sha256"] = digest(
@@ -793,7 +838,7 @@ def runtime_policy_from_env(
         for path in PATH_IDS
         for market in MARKETS
     }
-    return selected, {
+    receipt = {
         "status": (
             "validated_successor_loaded"
             if bundle.get("selection_mode") == "validated_successor"
@@ -807,6 +852,9 @@ def runtime_policy_from_env(
         "bundle_sha256": bundle["bundle_sha256"],
         "source_date": bundle["source_date"],
     }
+    if bundle.get("add_rebound_source_scope") is not None:
+        receipt["add_rebound_source_scope"] = dict(bundle["add_rebound_source_scope"])
+    return selected, receipt
 
 
 def runtime_vote_input_enabled(receipt: Any, *, active_date: str) -> bool:
@@ -838,6 +886,20 @@ def runtime_vote_input_enabled(receipt: Any, *, active_date: str) -> bool:
         and len(bundle) == 64
         and all(char in "0123456789abcdef" for char in bundle)
     )
+
+
+def runtime_krx_aftermarket_add_source_enabled(
+    receipt: Any, *, active_date: str
+) -> bool:
+    if not runtime_vote_input_enabled(receipt, active_date=active_date):
+        return False
+    if receipt.get("add_rebound_source_scope") is None:
+        return False
+    try:
+        _validate_add_source_scope(receipt, active_date)
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 SUCCESSOR_SCHEMA = "holding_path_vote_selected_policy_v2"
@@ -947,6 +1009,8 @@ def create_successor(
         ),
         cells=cells,
     )
+    if source_date >= ADD_SCOPE_SOURCE_DATE:
+        value["add_rebound_source_scope"] = krx_aftermarket_add_scope(target_date)
     value["bundle_sha256"] = digest(value)
     return validate_successor(
         value, target_date=target_date, source_report_sha256=source_report_sha256
@@ -963,6 +1027,7 @@ def validate_successor(
         source_generation_sha,
     )
 
+    _validate_add_source_scope(bundle, target_date)
     current_code = code_sha()
     if bundle.get("code_sha256") != current_code:
         # Only the already-consumed incumbent is preserved; new research and

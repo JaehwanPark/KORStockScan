@@ -96331,6 +96331,7 @@ def _evaluate_scale_in_signal(
         candle_meta=source["candle_meta"],
         now_ts=now_ts,
         position_tag=policy_position_tag,
+        holding_vote_policy_receipt=_HOLDING_PATH_POLICY_RECEIPT,
     )
     stock["_main_rebound_entry_assessment"] = dict(signal)
     if not signal.get("should_add") or not all(
@@ -96383,6 +96384,8 @@ def _evaluate_scale_in_signal(
         machine_bundle_sha256=signal["machine_bundle_sha256"],
         machine_policy_version=signal["machine_policy_version"],
         machine_family_sha256=signal.get("machine_family_sha256"),
+        holding_vote_bundle_sha256=signal.get("holding_vote_bundle_sha256"),
+        add_rebound_source_scope=signal.get("add_rebound_source_scope"),
         native_signal_id=signal.get("native_signal_id"),
         rebound_branches=signal.get("rebound_branches"),
         holding_path_vote_signal_id=signal["source_signal_id"],

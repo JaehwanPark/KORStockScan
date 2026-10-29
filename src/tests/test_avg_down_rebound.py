@@ -323,3 +323,228 @@ def test_both_holding_dispatches_capture_physical_clock_after_snapshot(
         )
         assert captured[0]["quality"] == expected
         assert (captured[0]["age_ms"] >= 0) is (expected == "fresh")
+
+
+def _krx_aftermarket_fixture(now):
+    from src.engine.scalping import holding_path_vote_policy as vote
+
+    day = now.date().isoformat()
+    ws = {
+        "last_realtime_type_ts": {
+            "0B": now.timestamp() - 0.1,
+            "0D": now.timestamp() - 0.2,
+        },
+        "last_realtime_type_item": {"0B": "036930", "0D": "036930"},
+        "last_realtime_type_market_suffix": {"0B": "", "0D": ""},
+        "last_realtime_type_market_route": {"0B": "krx_only", "0D": "krx_only"},
+        "last_realtime_type_effective_venue": {"0B": "KRX", "0D": "KRX"},
+    }
+    receipt = dict(
+        status="verified_incumbent_loaded",
+        source_date="2026-10-29",
+        target_date=day,
+        bundle_sha256="a" * 64,
+        add_rebound_source_scope=vote.krx_aftermarket_add_scope(day),
+    )
+    return ws, receipt
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        None,
+        "missing_scope",
+        "stale_date",
+        "bad_hash",
+        "wrong_owner",
+        "wrong_prompt",
+        "wrong_scope_type",
+        "operator_off",
+        "rollout_invalid",
+        "other_guard",
+        "wrong_item",
+        "wrong_quote_route",
+        "conflicting_venue",
+        "stale_trade",
+        "future_quote",
+        "wrong_family",
+    ],
+)
+def test_krx_aftermarket_source_scope_requires_exact_provenance_and_guards(
+    monkeypatch, defect
+):
+    from zoneinfo import ZoneInfo
+    from src.engine.scalping import entry_setup_live_policy as entry
+    from src.engine.scalping import entry_setup_scalping_rollout as rollout
+    from src.engine.scalping import mechanistic_entry_runtime_policy as machine
+
+    now = datetime(2026, 10, 30, 16, 20, tzinfo=ZoneInfo("Asia/Seoul"))
+    ws, receipt = _krx_aftermarket_fixture(now)
+    if defect == "missing_scope":
+        receipt.pop("add_rebound_source_scope")
+    if defect == "stale_date":
+        receipt["target_date"] = "2026-10-29"
+    if defect == "bad_hash":
+        receipt["bundle_sha256"] = "bad"
+    if defect == "wrong_scope_type":
+        receipt["add_rebound_source_scope"]["source_only"] = 1
+    if defect == "wrong_item":
+        ws["last_realtime_type_item"]["0B"] = "036930_AL"
+    if defect == "wrong_quote_route":
+        ws["last_realtime_type_market_route"]["0D"] = "nxt_only"
+    if defect == "conflicting_venue":
+        ws["last_realtime_type_effective_venue"]["0B"] = "NXT"
+    if defect == "stale_trade":
+        ws["last_realtime_type_ts"]["0B"] = now.timestamp() - 4
+    if defect == "future_quote":
+        ws["last_realtime_type_ts"]["0D"] = now.timestamp() + 1
+    monkeypatch.setattr(
+        entry, "_enabled_by_operator", lambda **kw: defect != "operator_off"
+    )
+    monkeypatch.setattr(
+        entry,
+        "_runtime_probe_contract_errors",
+        lambda **kw: ["runtime_contract_exact_rollout_scope_missing"]
+        + (
+            ["runtime_contract_target_date_mismatch"] if defect == "other_guard" else []
+        ),
+    )
+    monkeypatch.setattr(
+        rollout,
+        "load_auto_promotion",
+        lambda **kw: {"valid": defect != "rollout_invalid"},
+    )
+    monkeypatch.setattr(rollout, "load_rollout", lambda **kw: None)
+    monkeypatch.setattr(
+        machine,
+        "load_effective",
+        lambda **kw: {
+            "bundle_sha256": "b" * 64,
+            "continuous_reversal": {
+                "schema": (
+                    "old"
+                    if defect == "wrong_family"
+                    else "continuous_reversal_policy_v6"
+                )
+            },
+        },
+    )
+    result = adapter.resolve_krx_aftermarket_source(
+        stock_code="036930",
+        ws_data=ws,
+        now=now,
+        position_tag="EPISODE" if defect == "wrong_owner" else "SCANNER",
+        receipt=receipt,
+        configured_prompt_version=(
+            "wrong"
+            if defect == "wrong_prompt"
+            else entry.DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+        ),
+    )
+    assert (result is not None) == (defect is None)
+    if result:
+        assert result["status"] == "add_rebound_krx_aftermarket_source_only"
+        assert result["holding_vote_bundle_sha256"] == receipt["bundle_sha256"]
+
+
+@pytest.mark.parametrize(
+    "defect", [None, "wrong_venue", "wrong_market", "missing_cell", "missing_manifest"]
+)
+def test_krx_aftermarket_native_signal_uses_exact_cell_and_route(monkeypatch, defect):
+    from src.engine.scalping import reversal_source_diagnostics as source
+    from src.engine.scalping import continuous_reversal_policy as policy
+
+    event = dict(
+        epoch=100.0,
+        symbol="036930",
+        source_item="036930",
+        venue="NXT" if defect == "wrong_venue" else "KRX",
+        market="REGULAR" if defect == "wrong_market" else "AFTER",
+        confirmation_price=181100,
+        branch_signals={"branch": {}},
+    )
+    family = dict(
+        schema="continuous_reversal_policy_v6",
+        family_sha256="f" * 64,
+        machine_cells=(
+            {}
+            if defect == "missing_cell"
+            else {
+                "036930|AFTER|GE_100000": {"routes": {"KRX": {"backend": "union_v6"}}}
+            }
+        ),
+        operating_manifest={
+            "scopes": (
+                {}
+                if defect == "missing_manifest"
+                else {"036930|AFTER|GE_100000|KRX": ["branch"]}
+            )
+        },
+    )
+    monkeypatch.setattr(
+        source, "observe_snapshot", lambda *a, **k: ((event, {}), {"reason": "ready"})
+    )
+    monkeypatch.setattr(
+        policy,
+        "_assess",
+        lambda *a, **k: (
+            dict(action="ENTER_NOW", policy_version="v6", matched_branches=["branch"]),
+            None,
+            None,
+            None,
+        ),
+    )
+    monkeypatch.setattr(adapter, "_rebound_branch", lambda branch: True)
+    result = adapter.evaluate_native_rebound(
+        dict(
+            continuous_reversal=family,
+            machine_bundle_sha256="b" * 64,
+            add_rebound_source_scope={"source_only": True},
+        ),
+        stock_code="036930",
+        ws_data={"last_realtime_type_item": {"0B": "036930"}},
+        session="krx_nxt_aftermarket",
+        now_ts=101,
+    )
+    assert result["should_add"] is (defect is None)
+
+
+def test_krx_aftermarket_scope_uses_krx_operator_veto_not_nxt(monkeypatch):
+    from zoneinfo import ZoneInfo
+    from src.engine.scalping import entry_setup_live_policy as entry
+    from src.engine.scalping import entry_setup_scalping_rollout as rollout
+    from src.engine.scalping import mechanistic_entry_runtime_policy as machine
+
+    now = datetime(2026, 10, 30, 16, 20, tzinfo=ZoneInfo("Asia/Seoul"))
+    ws, receipt = _krx_aftermarket_fixture(now)
+    krx_key = entry._cohort_env_key(entry.DEFAULT_COHORT)
+    nxt_key = entry._cohort_env_key(("NXT", "NXT_AFTERMARKET"))
+    assert krx_key != nxt_key
+    monkeypatch.setenv(krx_key, "1")
+    monkeypatch.setenv(nxt_key, "0")
+    monkeypatch.setattr(
+        entry,
+        "_runtime_probe_contract_errors",
+        lambda **kw: ["runtime_contract_exact_rollout_scope_missing"],
+    )
+    monkeypatch.setattr(rollout, "load_auto_promotion", lambda **kw: {"valid": True})
+    monkeypatch.setattr(rollout, "load_rollout", lambda **kw: None)
+    monkeypatch.setattr(
+        machine,
+        "load_effective",
+        lambda **kw: dict(
+            bundle_sha256="b" * 64,
+            continuous_reversal={"schema": "continuous_reversal_policy_v6"},
+        ),
+    )
+    args = dict(
+        stock_code="036930",
+        ws_data=ws,
+        now=now,
+        position_tag="SCANNER",
+        receipt=receipt,
+        configured_prompt_version=entry.DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION,
+    )
+    assert adapter.resolve_krx_aftermarket_source(**args) is not None
+    monkeypatch.setenv(krx_key, "0")
+    assert adapter.resolve_krx_aftermarket_source(**args) is None

@@ -41737,3 +41737,29 @@ def test_operator_sor_default_resolves_route_authority_without_inventing_eligibi
         observed_at=datetime(2026, 10, 21, 20, 1, tzinfo=state_handlers._KST),
     )
     assert closed["blocked"] is True
+
+
+def test_shared_rebound_passes_loaded_vote_receipt_and_still_requires_vote(monkeypatch):
+    stock, kwargs = _shared_rebound_fixture(monkeypatch)
+    receipt = {"status": "verified_incumbent_loaded", "bundle_sha256": "a" * 64}
+    monkeypatch.setattr(state_handlers, "_HOLDING_PATH_POLICY_RECEIPT", receipt)
+    received = []
+    original = kwargs["ai_engine"].evaluate_main_rebound_entry
+
+    def evaluate(**kw):
+        received.append(kw["holding_vote_policy_receipt"])
+        return original(**kw)
+
+    kwargs["ai_engine"].evaluate_main_rebound_entry = evaluate
+    monkeypatch.setattr(
+        state_handlers,
+        "_holding_path_signal_decision",
+        lambda *a, **kw: {"decision": "VETO", "reason": "vote_veto"},
+    )
+    assert state_handlers._evaluate_scale_in_signal(**kwargs) is None
+    assert received == [receipt]
+    assert (
+        stock["_main_rebound_entry_assessment"]["reason"]
+        == "shared_main_rebound_add_vote_vote_veto"
+    )
+    assert "_main_rebound_entry_permit" not in stock

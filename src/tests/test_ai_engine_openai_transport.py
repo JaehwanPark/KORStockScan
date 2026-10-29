@@ -10343,3 +10343,121 @@ def test_main_and_shadow_constructors_announce_models_only_once(monkeypatch, cap
         main._http_deadline_executor.shutdown(wait=True)
         shadow._http_deadline_executor.shutdown(wait=True)
         shadow.shadow_executor.shutdown(wait=True)
+
+
+def test_shared_rebound_krx_aftermarket_scope_flows_to_exact_native_signal(monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from src.engine.scalping import (
+        avg_down_rebound as adapter,
+        entry_candle_context as candles,
+        entry_setup_live_policy as entry,
+        entry_setup_scalping_rollout as rollout,
+        mechanistic_entry_runtime_policy as machine,
+        reversal_source_diagnostics as source,
+        continuous_reversal_policy as reversal,
+    )
+    from src.tests.test_avg_down_rebound import _krx_aftermarket_fixture
+
+    now = datetime(2026, 10, 30, 16, 20, tzinfo=ZoneInfo("Asia/Seoul"))
+    ws, receipt = _krx_aftermarket_fixture(now)
+    family = dict(
+        schema="continuous_reversal_policy_v6",
+        family_sha256="f" * 64,
+        machine_cells={
+            "036930|AFTER|GE_100000": {"routes": {"KRX": {"backend": "union_v6"}}}
+        },
+        operating_manifest={"scopes": {"036930|AFTER|GE_100000|KRX": ["branch"]}},
+    )
+    event = dict(
+        epoch=now.timestamp(),
+        symbol="036930",
+        source_item="036930",
+        venue="KRX",
+        market="AFTER",
+        confirmation_price=181100,
+        branch_signals={"branch": {}},
+    )
+    engine = _build_engine()
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        SimpleNamespace(OPENAI_ANALYZE_TARGET_PROMPT_VERSION=DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION),
+    )
+    monkeypatch.setattr(
+        engine, "_call_openai_safe", lambda *a, **k: pytest.fail("unexpected provider")
+    )
+    monkeypatch.setattr(
+        candles, "resolve_entry_candle_session", lambda **kw: "krx_nxt_aftermarket"
+    )
+    monkeypatch.setattr(candles, "resolve_entry_candle_venue", lambda *a, **kw: "KRX")
+    monkeypatch.setattr(
+        candles,
+        "build_entry_candle_context",
+        lambda *a, **kw: _allowed_entry_candle_context(),
+    )
+    monkeypatch.setattr(
+        openai_module, "ai_input_preflight", lambda context: dict(allowed=True)
+    )
+    monkeypatch.setattr(
+        openai_module,
+        "resolve_live_prompt_policy",
+        lambda **kw: dict(
+            enabled=False, status="fallback_operator_rollout_scope_invalid"
+        ),
+    )
+    monkeypatch.setattr(entry, "_enabled_by_operator", lambda **kw: True)
+    monkeypatch.setattr(
+        entry,
+        "_runtime_probe_contract_errors",
+        lambda **kw: ["runtime_contract_exact_rollout_scope_missing"],
+    )
+    monkeypatch.setattr(rollout, "load_auto_promotion", lambda **kw: {"valid": True})
+    monkeypatch.setattr(rollout, "load_rollout", lambda **kw: None)
+    monkeypatch.setattr(
+        machine,
+        "load_effective",
+        lambda **kw: dict(bundle_sha256="b" * 64, continuous_reversal=family),
+    )
+    monkeypatch.setattr(
+        source, "observe_snapshot", lambda *a, **kw: ((event, {}), {"reason": "ready"})
+    )
+    monkeypatch.setattr(
+        reversal,
+        "_assess",
+        lambda *a, **kw: (
+            dict(action="ENTER_NOW", policy_version="v6", matched_branches=["branch"]),
+            None,
+            None,
+            None,
+        ),
+    )
+    monkeypatch.setattr(adapter, "_rebound_branch", lambda _: True)
+    args = dict(
+        stock_code="036930",
+        ws_data=ws,
+        recent_ticks=[],
+        recent_candles=[],
+        candle_meta={},
+        now_ts=now.timestamp(),
+        position_tag="SCANNER",
+        holding_vote_policy_receipt=receipt,
+    )
+    result = engine.evaluate_main_rebound_entry(**args)
+    assert result["should_add"] is True
+    assert (
+        result["effective_venue"] == "KRX"
+        and result["session_bucket"] == "krx_nxt_aftermarket"
+    )
+    assert result["holding_vote_bundle_sha256"] == receipt["bundle_sha256"]
+    args["holding_vote_policy_receipt"] = {}
+    assert (
+        engine.evaluate_main_rebound_entry(**args)["reason"]
+        == "shared_main_entry_policy_scope_missing"
+    )
+    args["holding_vote_policy_receipt"] = receipt
+    ws["last_realtime_type_item"]["0D"] = "036930_NX"
+    assert (
+        engine.evaluate_main_rebound_entry(**args)["reason"]
+        == "shared_main_entry_policy_scope_missing"
+    )

@@ -14090,6 +14090,7 @@ class GPTSniperEngine:
         candle_meta,
         now_ts,
         position_tag=None,
+        holding_vote_policy_receipt=None,
     ):
         """Reuse Main entry policy/assessment on existing holding market input.
 
@@ -14120,20 +14121,37 @@ class GPTSniperEngine:
             # storage still uses the exact item-derived SOR partition.
             venue = resolve_entry_candle_venue(ws_data, venue=venue, session=session)
             cohort = (venue.upper(), session.upper())
-            # Resolve through the exact Main entry owner, including its
-            # activation, same-stage, position-tag and scope constraints.
-            live = resolve_live_prompt_policy(
-                strategy="SCALPING",
-                configured_prompt_version=str(
-                    getattr(
-                        TRADING_RULES, "OPENAI_ANALYZE_TARGET_PROMPT_VERSION", "hot_v1"
-                    )
-                ),
-                position_tag=position_tag or ws_data.get("position_tag"),
-                effective_venue=venue,
-                session_bucket=session,
-                now=datetime.fromtimestamp(now_ts, tz=policy_owner.KST),
+            configured_prompt = str(
+                getattr(TRADING_RULES, "OPENAI_ANALYZE_TARGET_PROMPT_VERSION", "hot_v1")
             )
+            if cohort == ("KRX", "KRX_NXT_AFTERMARKET"):
+                from src.engine.scalping.avg_down_rebound import (
+                    resolve_krx_aftermarket_source,
+                )
+
+                live = resolve_krx_aftermarket_source(
+                    stock_code=stock_code,
+                    ws_data=ws_data,
+                    now=datetime.fromtimestamp(now_ts, tz=policy_owner.KST),
+                    position_tag=position_tag or ws_data.get("position_tag"),
+                    receipt=holding_vote_policy_receipt,
+                    configured_prompt_version=configured_prompt,
+                )
+                if live is None:
+                    live = {
+                        "enabled": False,
+                        "status": "add_rebound_krx_source_scope_unavailable",
+                    }
+            else:
+                # Other cohorts remain under the exact Main entry owner.
+                live = resolve_live_prompt_policy(
+                    strategy="SCALPING",
+                    configured_prompt_version=configured_prompt,
+                    position_tag=position_tag or ws_data.get("position_tag"),
+                    effective_venue=venue,
+                    session_bucket=session,
+                    now=datetime.fromtimestamp(now_ts, tz=policy_owner.KST),
+                )
             if (
                 live.get("enabled") is not True
                 or not live.get("machine_bundle_sha256")

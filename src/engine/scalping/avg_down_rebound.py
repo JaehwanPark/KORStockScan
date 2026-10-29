@@ -65,6 +65,66 @@ def _rebound_branch(branch_id, seen=()):
     return definition.get("decision_phase") in {"FIRST_UPTICK", "CONFIRMED_UPTICK"}
 
 
+def resolve_krx_aftermarket_source(
+    *, stock_code, ws_data, now, position_tag, receipt, configured_prompt_version
+):
+    """Resolve the separately issued ADD-only source, never an entry policy."""
+    from pathlib import Path
+    from src.engine.scalping import entry_setup_live_policy as entry
+    from src.engine.scalping import entry_setup_scalping_rollout as rollout
+    from src.engine.scalping import holding_path_vote_policy as votes
+    from src.engine.scalping import mechanistic_entry_runtime_policy as machine
+    from src.engine.scalping.ai_market_snapshot import realtime_type_provenance
+    from src.utils.constants import DATA_DIR
+
+    day = now.date().isoformat()
+    if (
+        not votes.runtime_krx_aftermarket_add_source_enabled(receipt, active_date=day)
+        or str(position_tag or "").upper() not in entry.CANARY_POSITION_TAGS
+        or configured_prompt_version
+        != entry.DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
+        or not entry._enabled_by_operator(cohort=entry.DEFAULT_COHORT)
+    ):
+        return None
+    rows = realtime_type_provenance(ws_data, now_ts=now.timestamp())
+    if any(
+        row.get("quality") != "fresh"
+        or row.get("item") != stock_code
+        or row.get("market_suffix") != ""
+        or row.get("market_route") != "krx_only"
+        or row.get("effective_venue") not in {"", "KRX"}
+        for row in (rows["0B"], rows["0D"])
+    ):
+        return None
+    auto = rollout.load_auto_promotion(now=now)
+    legacy = rollout.load_rollout(now=now)
+    if (auto is not None and not auto.get("valid")) or not (
+        auto and auto.get("valid") or legacy and legacy.get("valid")
+    ):
+        return None
+    # The only waived error is the existing entry rollout's missing KRX AFTER
+    # scope: the separate dated ADD scope above owns that one permission.
+    errors = entry._runtime_probe_contract_errors(
+        target_date=day, cohort=("KRX", "KRX_NXT_AFTERMARKET"), now=now
+    )
+    if any(error != "runtime_contract_exact_rollout_scope_missing" for error in errors):
+        return None
+    bundle = machine.load_effective(
+        data_root=Path(DATA_DIR), target_date=day, _immutable=True
+    )
+    family = (bundle or {}).get("continuous_reversal") or {}
+    if family.get("schema") != "continuous_reversal_policy_v6":
+        return None
+    return dict(
+        enabled=True,
+        status="add_rebound_krx_aftermarket_source_only",
+        machine_bundle_sha256=bundle["bundle_sha256"],
+        continuous_reversal=family,
+        add_rebound_source_scope=receipt["add_rebound_source_scope"],
+        holding_vote_bundle_sha256=receipt["bundle_sha256"],
+    )
+
+
 def evaluate_native_rebound(live, *, stock_code, ws_data, session, now_ts):
     """Read and assess the existing native buffer without consuming a claim.
 
@@ -122,6 +182,28 @@ def evaluate_native_rebound(live, *, stock_code, ws_data, session, now_ts):
         or event.get("source_item") != item
     ):
         return dict(base, reason="shared_main_rebound_native_source_invalid")
+    if live.get("add_rebound_source_scope"):
+        from src.engine.scalping import reversal_registered_catalog as catalog
+        from src.engine.scalping.continuous_reversal_policy_v6 import scope_id
+
+        price = event.get("confirmation_price")
+        if (
+            item != stock_code
+            or event.get("venue") != "KRX"
+            or event.get("market") != "AFTER"
+            or not isinstance(price, (int, float))
+            or isinstance(price, bool)
+            or not math.isfinite(price)
+            or price <= 0
+        ):
+            return dict(base, reason="shared_main_rebound_native_scope_invalid")
+        key = catalog.cell_key(stock_code, session, price)
+        if not family.get("machine_cells", {}).get(key, {}).get("routes", {}).get(
+            "KRX"
+        ) or not family.get("operating_manifest", {}).get("scopes", {}).get(
+            scope_id(key, "KRX")
+        ):
+            return dict(base, reason="shared_main_rebound_native_scope_missing")
     assessment, _, _, _ = _assess(family, snapshot, symbol=stock_code, session=session)
     branches = [
         bid for bid in assessment.get("matched_branches", []) if _rebound_branch(bid)
@@ -153,4 +235,6 @@ def evaluate_native_rebound(live, *, stock_code, ws_data, session, now_ts):
         machine_policy_version=assessment["policy_version"],
         structure_phase_family="CONTINUOUS_REVERSAL",
         rebound_branches=branches,
+        holding_vote_bundle_sha256=live.get("holding_vote_bundle_sha256"),
+        add_rebound_source_scope=live.get("add_rebound_source_scope"),
     )
