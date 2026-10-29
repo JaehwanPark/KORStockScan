@@ -140,3 +140,39 @@ P5. Selection/preparation is followed by selected P5, actual PID consumption and
 its first native observer/health. Only then may the same-day lifetime policy
 be activated through the explicit native transition and checked against the
 actual PID. Tonight's EOD/stop/cleanup/postclose sequence remains separately OPEN.
+
+
+### Aftermarket source evidence integration - 2026-10-29
+
+User-authorized `35707ab03` was applied over the complete startup/storage and
+scoped-lifetime candidate. It preserves per-FID liquidity provenance through
+partial frames, rejects route-view provenance inference, and attaches exact
+post-provider native rejection receipts without changing the verdict. The new
+FIRST_UPTICK confirmation input is opt-in through the existing native policy
+publisher; this deployment does not select that new input contract. Official
+Kiwoom revision remains `953e5dbff123f437ab4d11a78a95191a685eb51f`; the supplied
+commit records the 18:13 KST reference check and the same official 0B/0D fields.
+No new broker calls, subscriptions or market mapping are introduced.
+
+All directly changed and transitive native consumers are bound by a complete
+aftermarket successor profile in both independent preparation and deployment
+readers. Earlier standalone and integrated profiles retain their exact source
+bytes/readers. Original five-second defaults, issued operator lifetime limits,
+invalidated-claim rejection and physical submit guards remain separate.
+
+The superseded fda0b109c candidate P5 passed at
+`data/report/main_startup_validation/2026-10-29/d10b820586154267805078b05bb8e01f/final.json`.
+It is preserved as superseded evidence and cannot validate the changed source
+generation. That source generation completed native trailing 20,824-scope
+revalidation and four native capability fixtures. The final successor requires
+its own exact-code report proofs, handoff and candidate/selected P5.
+
+The remaining full-byte preflight reads were localized to independent frozen
+policy bar copies, roughly2.01GB in the measured native policy preflight. Their
+original source authentication remains required. Archive byte-proof acceleration
+and in-invocation digest reuse do not authorize treating equal filenames or
+older PASS results as proof of another physical source. The independent runtime
+loader diagnostic outside candidate admission correctly failed
+`active_policy_code_reader_root_changed`; no valid policy data was changed.
+The first live startup and source-producer deadline remain the closure test for
+the startup repair, with measured timing and original failure evidence retained.

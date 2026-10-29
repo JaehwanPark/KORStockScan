@@ -3411,7 +3411,7 @@ def test_submit_fresh_independent_preparation_exact_pairs(relative, fault, proje
         if projected else C.REVIEWED_SUBMIT_FRESH_ORIGINS[relative]
     )
     current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
-    assert current == H.REVIEWED_STARTUP_SCOPED_PROFILE[relative]
+    assert current == H.REVIEWED_STARTUP_SCOPED_AUX_PROFILE[relative]
     if fault == "origin": old = "0" * 64
     if fault == "successor": current = "0" * 64
     if fault == "path": relative = "src/engine/unknown_submit_owner.py"
@@ -3760,7 +3760,7 @@ def test_preclaim_market_independent_exact_sources(relative, fault):
 def test_entry_lifetime_independent_preparation_checks_each_actual_source(relative, fault):
     old = C.REVIEWED_ENTRY_LIFETIME_ORIGINS[relative]
     current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
-    assert current == H.REVIEWED_STARTUP_SCOPED_PROFILE[relative]
+    assert current == H.REVIEWED_STARTUP_SCOPED_AUX_PROFILE[relative]
     if fault == "origin": old = "0" * 64
     if fault == "successor": current = "0" * 64
     if fault == "path": relative = "src/engine/scalping/unreviewed_lifetime.py"
@@ -3835,7 +3835,7 @@ def test_scoped_entry_profiles_cover_every_changed_native_contract_member():
         old = subprocess.check_output(["git", "show", f"{baseline}:{relative}"], cwd=ROOT)
         if hashlib.sha256(old).hexdigest() != hashlib.sha256((ROOT / relative).read_bytes()).hexdigest():
             changed.add(relative)
-    assert changed <= set(C.REVIEWED_STARTUP_SCOPED_CHANGED)
+    assert changed <= set(C.REVIEWED_STARTUP_SCOPED_AUX_CHANGED)
     preparation = "src/engine/infrastructure/startup_validation_code_context.py"
     report_paths = {str((ROOT / "src/engine" / name).resolve().relative_to(ROOT)) for names in report.COMPONENTS.values() for name in (*names, *report.COMMON_CODE_COMPONENTS)}
     report_changed = set()
@@ -3851,9 +3851,9 @@ def test_scoped_entry_profiles_cover_every_changed_native_contract_member():
                    and not n.startswith("src/tests/")
                    and not n.endswith(("intraday_release_handoff.py", "startup_validation_code_context.py"))}
     assert expected <= all_changed | {preparation}
-    assert all_changed | {preparation} == set(H.REVIEWED_STARTUP_SCOPED_CHANGED)
+    assert all_changed | {preparation} == set(H.REVIEWED_STARTUP_SCOPED_AUX_CHANGED)
     for relative in expected:
-        assert hashlib.sha256((ROOT / relative).read_bytes()).hexdigest() == H.REVIEWED_STARTUP_SCOPED_CHANGED[relative]
+        assert hashlib.sha256((ROOT / relative).read_bytes()).hexdigest() == H.REVIEWED_STARTUP_SCOPED_AUX_CHANGED[relative]
 
 
 def test_issued_entry_member_is_bound_without_rewriting_old_policy_inventory(monkeypatch):
@@ -4183,12 +4183,15 @@ def test_startup_storage_independent_reader_keeps_exact_complete_generation(tmp_
     assert C.reviewed_preparation_pair(relative, old, C.REVIEWED_STARTUP_STORAGE_CHANGED[relative]) is (fault is None)
 
 
+@pytest.mark.parametrize("profile,commit", [("STARTUP_SCOPED", "fda0b109c"), ("STARTUP_SCOPED_AUX", None)])
 @pytest.mark.parametrize("fault", [None, "missing", "mixed", "origin", "unknown"])
-def test_combined_startup_scoped_independent_exact_generation(tmp_path, monkeypatch, fault):
-    for name, expected in C.REVIEWED_STARTUP_SCOPED_PROFILE.items():
+def test_combined_startup_scoped_independent_exact_generation(tmp_path, monkeypatch, fault, profile, commit):
+    hashes = getattr(C, "REVIEWED_" + profile + "_PROFILE")
+    for name, expected in hashes.items():
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes((ROOT / name).read_bytes())
+        import subprocess
+        path.write_bytes(subprocess.check_output(["git", "show", commit + ":" + name], cwd=ROOT) if commit else (ROOT / name).read_bytes())
         assert hashlib.sha256(path.read_bytes()).hexdigest() == expected
     relative = "src/engine/scalping/entry_deadline.py"
     dependency = "src/engine/infrastructure/validation_digest_session.py"
@@ -4198,10 +4201,10 @@ def test_combined_startup_scoped_independent_exact_generation(tmp_path, monkeypa
         import subprocess
         (tmp_path / dependency).write_bytes(subprocess.check_output(
             ["git", "show", "8fadd634d:" + dependency], cwd=ROOT))
-    old = C.REVIEWED_STARTUP_SCOPED_ORIGINS[relative][0]
+    old = getattr(C, "REVIEWED_" + profile + "_ORIGINS")[relative][0]
     if fault == "origin":
         old = "0" * 64
     if fault == "unknown":
         relative = "src/engine/scalping/unknown_generation.py"
     monkeypatch.setattr(C, "ROOT", tmp_path)
-    assert C.reviewed_preparation_pair(relative, old, C.REVIEWED_STARTUP_SCOPED_CHANGED.get(relative, "1" * 64)) is (fault is None)
+    assert C.reviewed_preparation_pair(relative, old, hashes.get(relative, "1" * 64)) is (fault is None)
