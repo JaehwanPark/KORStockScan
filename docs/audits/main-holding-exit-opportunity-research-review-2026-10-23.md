@@ -370,3 +370,46 @@ Owner: `HoldingProfitExitSourceContractRepair`. 기준은 §10의 `c709099a04c16
 의존성 disposition: raw/native history·machine calculation·원085 campaign은 `reuse/read-only revalidate`; 변경된 auxiliary preparation/source qualification/campaign/request/evaluation은 native owner로 `regenerate`; report/policy publisher→PREOPEN→PID는 그 결과에 따라 재준비·검증한다. 기존 성공한 다른 family 계산과 cleanup을 재실행하지 않는다. 원 연구 설정128scope·seed·max_pairs50·예산안은 source-code contract가 같으므로 그대로 인계하되 live config CAS/진행 writer를 다시 확인한다. source148개 발견만으로 후보를 live 채택하지 않는다.
 
 현재 checklist의 동일 owner와 source10/29 장후→10/30 PREOPEN/Main 창을 유지한다. 실제 자동 campaign의 적격 수/양측 완료/선정·incumbent 보존 사유, native 정책 인계·P5·배포 후 exact PID/observer/health, 새 BUY→signal→terminal→assembler와 비용 후 경제성은 각각 별도 수용이다. 일정 변경은 native calendar/schedule에 맞춰 인계 세션이 갱신한다.
+
+## 12. 적격 148건의 실제 양측 비교·native 선정 및 리뷰 — 2026-10-29
+
+결정: 확보한148건 전체를 native 모집단으로 검증하고 기존 seed·max_pairs50·일일100회 예산으로 실제 양측 비교를 수행했다. Native 선정 결과는3scope 후보이며, 리뷰 후 **운영 정책은 incumbent 유지**로 인계한다. 전scope 후보 교체는 실패 PASS 증가 때문에 채택하지 않는다. 선정된3scope의 독립 holdout이 없다는 기존 Plan Rebase 계약을 유지한다. 이는 원천0건/호출0건 상태가 아니며, 미래 샘플을 임의로 생성하거나 새 경제성 문턱을 추가하지 않는다.
+
+### 원천·기준 정책·실행 경계
+
+- [배포 인계서](../../data/audit/holding_source_repair/2026-10-29/paired-selection-v3/HANDOFF.md), [최종 리뷰 증거](../../data/audit/holding_source_repair/2026-10-29/paired-selection-v3/review-verification.json), [native 선정 요약](../../data/audit/holding_source_repair/2026-10-29/paired-selection-v3/selection-summary.json).
+- 원천은 기존 source2026-10-28 machine `fcd5ad61b9a6d4a8bd7af9a432955af4e2f334cd21f85c0a5b28b784df3b46ab`다. 41950기록 중 현재 기계 확인10596, candle 적격148을 재확인했다.148건의 라벨은 WIN66/FAIL_TIMEOUT31/FAIL_STOP1/UNRESOLVED50이다. Source 적격은 후행 라벨 확정과 다르다.
+- 기준 정책은 실제 selected release `6d9ed3575`가 읽은 현재 bundle `fa20ad8d51a5c4ddfdaf0395b988d2978b3955f58f28ac5eb25f7a2203c79401`이다. 원 machine의 과거 부모 `4abcce10`으로 현재 정책을 대체하지 않았다.128scope effective binding을 원 reader로 캡처하고148건의 기존 정책 request를3898 reader로 동일 재현했다. Source28일 view와 현재29일 view도 같았다.
+- Native `prepare` campaign은 `1af47394a1829efe6379b29eb148bcf1f2c3e9d18c72451ea31966e997d8176f`다. 기존128scope 제안 설정·seed·max_pairs50으로50쌍(PRE22/REGULAR1/AFTER27)을 선정했다. 98건은 표본 한도 밖이며,50쌍 중32쌍(WIN20/TIMEOUT12)은 평가 가능,18쌍은 `path_end_before_horizon`으로 호출 전 제외했다. STOP1건은 표본에 포함되지 않았다. seed 변경·결과를 보고 빈 슬롯 채우기·재시도0.
+- 실제 provider 신규57회, exact request 캐시7회, 유효 응답64개로32쌍 비교 완료.100개 planned request 전체를 native projector와 대조하고64개 실제 response_id·동결 export·응답 validator를 재검증했다. 예산은 공용 `ai_comparison_store`와 원 writer/legacy lock을 공유했다. 별도 연구 경로는 설정·결과를 격리하며 새 호출 원장을 만들지 않았다.
+- `postclose_auxiliary:2026-10-28`은 기존4 + native retained-attempt seed1 + 신규57 =62/100이다. 원천일별 차감도22일70/23일22/26일4/27일18/28일62로 각100이하다. 다른 scoped 연구 원장5391은 그대로다. 별도 승인 잔액을 전용하거나 예산을 초기화/증액하지 않았다.
+- 첫 호출의 credential preflight는 격리 소스에 selected configuration mount가 없어 예약 전 거부됐다. 원 설정을 변경하지 않고 selected release의 native 설정 경로를 연결해 복구했다. 원 실패 증거를 보존했고 provider 실패·재시도·키 출력은0이다.
+
+### 비교 및 선정 결과
+
+아래는 동일32개 완료 쌍의 target-first 라벨 결과다. 실제 매매 손익이나 실행 bid 손익이 아니다. 원 비용·목표·시간창·가격 원천 계약과 hard/protect/emergency·freshness·broker·수량·custody 경계를 변경하지 않았다.
+
+| 정책 | 승리 PASS | 승리 차단 | 실패 PASS | 실패 차단 | PASS 승률 | 승리 보존율 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 현재 effective 정책 | 11 | 9 | 9 | 3 | 55.0% | 55.0% |
+| 후보 전체 적용 가정 | 18 | 2 | 12 | 0 | 60.0% | 90.0% |
+| native 선정3scope만 후보·나머지 현재 | 18 | 2 | 9 | 3 | 66.7% | 90.0% |
+
+Native `auxiliary_report(publish_policy=False)`가 생성한 offline 선정 report는 `15e3cfec31bb1bd0852a8e30165b7154ebe8a7dd2b415a7102084c2feb05288b`다. `comparison_complete=true`는32쌍 비교와18쌍 terminal exclusion의 회계 종료다.50쌍 모두 실제 호출했다는 뜻이 아니다. 동결 요청36개는 제외 증거로 planned를 보존했다.
+
+| native 선정 scope | 완료 쌍 | 현재→후보 승리 PASS | 실패 표본 | 보수적30분 경로 cluster |
+| --- | ---: | ---: | ---: | ---: |
+| `034020\|PRE\|20000_TO_100000\|NXT` | 4 | 3→4 | 0 | 1 |
+| `other_non_fixed\|PRE\|20000_TO_100000\|NXT` | 7 | 1→6 | 0 | 2 |
+| `other_non_fixed\|AFTER\|LT_20000\|SOR` | 4 | 2→3 | 0 | 4 |
+
+삼성 AFTER/SOR는 실패 PASS3→6으로 악화되어 native selector가 현재 정책을 유지했다. 나머지 scope도 개선 없음/분모 없음이면 유지했다. 선정3scope는 모두 WIN-only이며, 같은 가격 경로를 공유하는 신호가 많다.148건 중 이전 실제 호출 노출16키를 보존했으며 선정scope의 두산4키·비상시 PRE3키가 이전 노출이다. 이 재표본을 독립 holdout으로 승격하지 않는다. `realized_pnl=null`, 손절 회피 효과 미검증, broker actual venue 미확정이다. 후보는 현재 scope별 prompt와도 달라 개선을 완료 분봉 효과 하나에 인과 귀속할 수 없다.
+
+### 성능·리뷰·배포 인계
+
+- [성능 증거](../../data/audit/holding_source_repair/2026-10-29/paired-selection-v3/performance-review.json): 전체 native prepare49.94초. 기존6.93초는10596개 source qualification만의 측정이므로 직접 성능비교하지 않는다. raw 전체 재생/REST 추가 수집0, 기존256개 단위 조회·cache·예산·timeout을 유지했다.
+- 32응답씩 input token은현재67273→후보90754(+34.9%), output1534→1516, provider latency median1111→1166.5ms/p951694→2039ms다. 기존측7개 캐시 응답을 포함하므로 통제된 장중 지연 실험이나 Main 성능 보장은 아니다. 새 재시도·provider/model 변경0. 후보 전scope 적용을 보류하는 인계에서 이 비용 증가를 명시한다.
+- 구현은3898 소스를 그대로 사용했다. 이번 source/test 추가·삭제0, 새 module/worker/entrypoint0. 연구 실행 script와 증거를 durable package에 보존한다. 기존 qualification-only 결과를 이번 실제 비교가 후속하며, 과거0건/85개/148개 증거와 두 이전 배포본은 immutable 보존이다. Native prepare/calls/evaluate/publisher를 사용하고 별도 선정기를 만들지 않았다.
+- 정확100개 request·64개 response·예산·native 선정 소비 검증 PASS. 선택/예산/terminal exclusion/immutable evaluation 관련 targeted pytest10PASS(32deselected), `git diff --check` 및 문서 link/owner·print-backlog 검증을 수행했다. Live policy/config/selector는 unchanged이며 PID1537220/start87886204/cwd6d9ed3575를 확인했다. 이 PID는3898 변경 코드나 새 후보 소비 증거가 아니다.
+- 메인 배포에는 c709→3898 source 수리와 이번 연구 결과 문서를 통합한다. 연구 config128scope·candidate645abf8e·seed/max_pairs50은 제안으로 인계하고 active v2 정책을 선채택하지 않는다. P5/native active-parent handoff·selected-generation 검증·실제 PID/observer/health는 메인 배포 세션 소유다.
+- 기존 OPEN owner `HoldingProfitExitSourceContractRepair`를 유지한다. 다음 source2026-10-29 정식 장후20:10 이후→target2026-10-30 PREOPEN07:35/Main07:55~08:05에서 새 exact scope 원천·자동 선정·BUY→terminal→assembler·PID 소비를 검증한다. Native calendar/schedule을 실행 시 재고정한다. 기존 RFHIC49558 결손,18개 동결 경로 결손과 신규 원천 결함을 분리한다. 원18개는 동일 동결 입력으로 다시 호출하지 않고, 독립 검증은 실제 새 원천과 기존 예산으로 기존 family owner에서 수행한다.
