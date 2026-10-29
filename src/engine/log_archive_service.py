@@ -1089,15 +1089,40 @@ def _postclose_prefix_guard(data_root, day, manifest_path=None):
     return result
 
 
-def _postclose_prefix_native_proof(data_root, day):
+def _postclose_prefix_native_proof(data_root, day, *, original_cost_generation=None):
     from src.engine.lifecycle.holding_window_generation import (
         _capture_day,
         MAX_METADATA_BYTES,
     )
     from src.engine.lifecycle.snapshot_archive import generation, read_bytes
 
+    options = {}
+    if original_cost_generation is not None:
+        # This immutable prefix precedes quantity's later research allocation.
+        # Authenticate its consumed receipts through the native original-scope
+        # reader. The holding suffix still validates current costs separately.
+        from src.engine.lifecycle.broker_cost_reconciliation import source_generation
+
+        if (
+            not isinstance(original_cost_generation, dict)
+            or original_cost_generation.get("schema")
+            != "holding_actual_cost_source_generation_v1"
+            or original_cost_generation.get("completion_date") != day
+        ):
+            raise ValueError("postclose_exit_prefix_original_cost_invalid")
+        research = original_cost_generation.get("quantity_research_cost_generation")
+        if research is not None and not isinstance(research, dict):
+            raise ValueError("postclose_exit_prefix_original_cost_invalid")
+        declared = False if research is None else {
+            "source_dates": research.get("source_dates"),
+            "receipts": research.get("receipts"),
+        }
+        verified = source_generation(Path(data_root), day, declared_research=declared)
+        if verified != original_cost_generation:
+            raise ValueError("postclose_exit_prefix_original_cost_changed")
+        options["original_cost_generation"] = verified
     native = _capture_day(
-        Path(data_root), Path(data_root) / "report/monitor_snapshots", day
+        Path(data_root), Path(data_root) / "report/monitor_snapshots", day, **options
     )
     if native.get("profile") != "postclose_exit" or native.get("status") not in {
         "observed",
@@ -1196,7 +1221,25 @@ def _read_verified_postclose_exit_prefix(target_date, *, data_root):
     ):
         raise ValueError("postclose_exit_prefix_manifest_invalid")
     if body.get("producer_code_generation") != before["producer_code_generation"]:
-        raise ValueError("postclose_exit_prefix_producer_generation_changed")
+        # Only the reviewed reader-only successor may consume the original
+        # producer seal. Retain that seal rather than calling it current code.
+        from src.engine.infrastructure import startup_validation_code_context as code
+
+        original = body.get("producer_code_generation")
+        current = before["producer_code_generation"]
+        relative = "src/engine/log_archive_service.py"
+        name = "log_archive_service.py"
+        if (
+            not isinstance(original, dict)
+            or set(original) != set(current)
+            or any(original[key] != current[key] for key in current if key != name)
+            or original.get(name)
+            != code.REVIEWED_PREFIX_COST_CONTEXT_PRODUCER_ORIGINS.get(relative)
+            or current.get(name)
+            != code.REVIEWED_PREFIX_COST_CONTEXT_CHANGED.get(relative)
+            or not code.reviewed_preparation_pair(relative, original.get(name), current.get(name))
+        ):
+            raise ValueError("postclose_exit_prefix_producer_generation_changed")
     if body.get("raw_pipeline_generation") != before["raw_pipeline_generation"]:
         raise ValueError("postclose_exit_prefix_pipeline_generation_changed")
     for kind in POSTCLOSE_PREFIX_KINDS:
@@ -1206,7 +1249,10 @@ def _read_verified_postclose_exit_prefix(target_date, *, data_root):
             or _sha256_file(source) != body["snapshot_sha256"][kind]
         ):
             raise ValueError("postclose_exit_prefix_generation_changed")
-    proof = _postclose_prefix_native_proof(data_root, target_date)
+    proof = _postclose_prefix_native_proof(
+        data_root, target_date,
+        original_cost_generation=body.get("actual_cost_source_generation"),
+    )
     if (
         body.get("native_source_proof") != proof
         or body.get("actual_cost_source_generation")

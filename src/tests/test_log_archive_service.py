@@ -260,6 +260,106 @@ def test_postclose_holding_suffix_prefix_mutation_during_holding_does_not_publis
     ).exists()
 
 
+@pytest.mark.parametrize("prior_research", [False, True])
+@pytest.mark.parametrize("damage", [None, "receipt", "missing", "official", "actual"])
+def test_prefix_authenticates_original_cost_scope_after_later_research_publication(
+    tmp_path, monkeypatch, prior_research, damage
+):
+    from src.engine.lifecycle import broker_cost_reconciliation as cost
+    from src.engine.lifecycle import broker_cost_source as official
+    from src.engine.lifecycle.holding_window_generation import capture_window
+
+    day, directory, _, _ = _postclose_phase_fixture(tmp_path, monkeypatch)
+    root = tmp_path / "runtime/initial_quantity_research_costs" / day
+    generations = root / "generations"
+    generations.mkdir(parents=True)
+
+    def publish(record):
+        receipt = dict(record_id=record, receipt_sha256=str(record) * 64)
+        sha = cost.digest(receipt)
+        path = generations / (sha + ".json")
+        path.write_text(json.dumps(receipt))
+        index = dict(schema=cost.RESEARCH_COST_INDEX_SCHEMA,
+                     completion_date=day, receipts={str(record): sha}, source_dates=[])
+        index["index_sha256"] = cost.digest(index)
+        (root / "index.json").write_text(json.dumps(index))
+        return path
+
+    first = publish(1) if prior_research else None
+    source = official.source_path(tmp_path, day)
+    source.parent.mkdir(parents=True)
+    source.write_text("{}")
+    prefix = service.save_monitor_snapshots_for_date_with_profile(
+        day, profile="postclose_exit", postclose_phase="completion_prefix"
+    )
+    raw = Path(prefix["snapshot_manifest"]).read_bytes()
+    body = json.loads(raw)
+    original = body["actual_cost_source_generation"]
+    publish(2)
+    assert cost.source_generation(tmp_path, day) != original
+    if damage in {"receipt", "missing"}:
+        if first is None:
+            pytest.skip("The original scope predates research receipts")
+        if damage == "receipt":
+            first.write_text("{}")
+        else:
+            first.unlink()
+    elif damage == "official":
+        source.write_text('{"changed":true}')
+    elif damage == "actual":
+        actual = cost.receipt_path(tmp_path, day, "1")
+        actual.parent.mkdir(parents=True)
+        actual.write_text("{}")
+    if damage:
+        with pytest.raises(ValueError):
+            service._read_verified_postclose_exit_prefix(day, data_root=tmp_path)
+    else:
+        _, verified, _ = service._read_verified_postclose_exit_prefix(day, data_root=tmp_path)
+        assert verified == body
+        assert Path(prefix["snapshot_manifest"]).read_bytes() == raw
+        # The later holding consumer must still bind the new current costs.
+        window = capture_window(tmp_path, [day], allow_cost_revision=True)
+        assert window["dependencies"][day]["cost_generation"] != original
+
+
+@pytest.mark.parametrize("damage", [None, "unreviewed", "other_producer", "unknown_origin"])
+def test_prefix_reader_successor_requires_exact_reviewed_producer_pair(
+    tmp_path, monkeypatch, damage
+):
+    from src.engine.infrastructure import startup_validation_code_context as code
+
+    day, _, _, _ = _postclose_phase_fixture(tmp_path, monkeypatch)
+    prefix = service.save_monitor_snapshots_for_date_with_profile(
+        day, profile="postclose_exit", postclose_phase="completion_prefix"
+    )
+    raw = Path(prefix["snapshot_manifest"]).read_bytes()
+    original = json.loads(raw)["producer_code_generation"]
+    relative = "src/engine/log_archive_service.py"
+    old_guard = service._postclose_prefix_guard
+
+    def guard(*args, **kwargs):
+        value = old_guard(*args, **kwargs)
+        value["producer_code_generation"] = dict(value["producer_code_generation"])
+        value["producer_code_generation"]["log_archive_service.py"] = "a" * 64
+        if damage == "other_producer":
+            value["producer_code_generation"]["sniper_trade_review_report.py"] = "b" * 64
+        return value
+
+    monkeypatch.setattr(service, "_postclose_prefix_guard", guard)
+    monkeypatch.setattr(code, "REVIEWED_PREFIX_COST_CONTEXT_PRODUCER_ORIGINS", {
+        relative: "c" * 64 if damage == "unknown_origin" else original["log_archive_service.py"],
+    })
+    monkeypatch.setattr(code, "REVIEWED_PREFIX_COST_CONTEXT_CHANGED", {relative: "a" * 64})
+    monkeypatch.setattr(code, "reviewed_preparation_pair", lambda *args: damage != "unreviewed")
+    if damage:
+        with pytest.raises(ValueError, match="producer_generation_changed"):
+            service._read_verified_postclose_exit_prefix(day, data_root=tmp_path)
+    else:
+        _, body, _ = service._read_verified_postclose_exit_prefix(day, data_root=tmp_path)
+        assert body["producer_code_generation"] == original
+        assert Path(prefix["snapshot_manifest"]).read_bytes() == raw
+
+
 @pytest.mark.parametrize(
     "suffix",
     [
