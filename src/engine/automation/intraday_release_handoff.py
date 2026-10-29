@@ -13702,6 +13702,22 @@ for _name, _current in REVIEWED_SCHEDULED_SUFFIX_CHANGED.items():
     REVIEWED_ENTRY_COST_PAIRS[_name] = _pairs + tuple(
         (origin, _current) for origin in _origins if origin != _current)
 
+# The predecessor profile uses its reviewed historical formatting projection;
+# the native reader also binds every physical source to its candidate Git tree.
+REVIEWED_P5_RECHECK_CHANGED = {
+    "src/engine/automation/main_startup_validation.py": "3874cb131182242f74184dd65ea25629c7ecfb8eeebdecf25eb51fb5e12f5dde",
+    "src/engine/infrastructure/startup_validation_code_context.py": "6c9ad81330139aecb1c0454b49dd28d926be7f6ae74df512f134e437c6d7ab11",
+}
+REVIEWED_P5_RECHECK_HASHES = {**REVIEWED_SCHEDULED_SUFFIX_HASHES, **REVIEWED_P5_RECHECK_CHANGED}
+REVIEWED_P5_RECHECK_PROFILE = {**REVIEWED_SCHEDULED_SUFFIX_PROFILE, **REVIEWED_P5_RECHECK_CHANGED}
+REVIEWED_P5_RECHECK_VARIANTS = _holding_history_variants(REVIEWED_P5_RECHECK_HASHES)
+for _name, _current in REVIEWED_P5_RECHECK_CHANGED.items():
+    _pairs = REVIEWED_ENTRY_COST_PAIRS.get(_name, ())
+    _origins = {value for pair in _pairs for value in pair}
+    _origins.add(REVIEWED_SCHEDULED_SUFFIX_PROFILE[_name])
+    REVIEWED_ENTRY_COST_PAIRS[_name] = _pairs + tuple(
+        (origin, _current) for origin in _origins if origin != _current)
+
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
@@ -14872,9 +14888,17 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_SCHEDULED_SUFFIX_PROFILE
         prepared_variants = REVIEWED_SCHEDULED_SUFFIX_VARIANTS
+    p5_recheck_present = (
+        (source := candidate_bytes("src/engine/automation/main_startup_validation.py", optional=True)) is not None
+        and hashlib.sha256(source).hexdigest()
+        == REVIEWED_P5_RECHECK_CHANGED["src/engine/automation/main_startup_validation.py"]
+    )
+    if p5_recheck_present:
+        prepared_hashes = REVIEWED_P5_RECHECK_PROFILE
+        prepared_variants = REVIEWED_P5_RECHECK_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
-        if prepared_owner_present
+        if prepared_owner_present or p5_recheck_present
         else (
             REVIEWED_ENTRY_COST_PRE_PREPARED_OWNER_HASHES
             if prestart_integration_present
@@ -14923,7 +14947,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     )
     entry_cost_variants = (
         prepared_variants
-        if prepared_owner_present
+        if prepared_owner_present or p5_recheck_present
         else (
             REVIEWED_ENTRY_COST_PRE_PREPARED_OWNER_VARIANTS
             if prestart_integration_present
@@ -15002,7 +15026,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             )
         )
     )
-    entry_cost_present = any(
+    entry_cost_present = p5_recheck_present or any(
         (root / name).is_file()
         and hashlib.sha256(candidate_bytes(name)).hexdigest() == sha
         for name, sha in REVIEWED_ENTRY_COST_HASHES.items()

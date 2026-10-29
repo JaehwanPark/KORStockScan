@@ -771,6 +771,51 @@ assert_no_forbidden_attempts()
     assert result.returncode == 0, result.stderr
 
 
+def test_p5_recheck_native_closure_transfer_runs_real_reader(
+    request_fixture, monkeypatch
+):
+    """The P5 child consumes the real closure reader, not a mocked verdict."""
+    from src.engine.automation import main_startup_validation as P5
+    from src.engine.scalping import reversal_auxiliary_next_session as A
+
+    bound = _main_fixture(request_fixture, monkeypatch)
+    root = request_fixture["root"]
+    data = Path(request_fixture["request"]["data_root"])
+    proof = bound["proof"]
+    proof["selected_release_root"] = str(root)
+    proof["selected_release_commit"] = request_fixture["commit"]
+    proof["native_verification"]["selected_release_commit"] = request_fixture["commit"]
+    (root / "data").symlink_to(data, target_is_directory=True)
+    (root / ".venv").symlink_to(Path(sys.executable).parent.parent, target_is_directory=True)
+    auxiliary = root / "src/engine/scalping/reversal_auxiliary_next_session.py"
+    auxiliary_original = auxiliary.read_text()
+    auxiliary.write_text(auxiliary_original + "\ndef _database_signature(manifest): return None\n")
+    raw = bound["raw"]
+    cli = root / "src/engine/automation/next_preopen_readiness.py"
+    cli_original = cli.read_text()
+    cli.write_text(
+        "import json\n"
+        "from src.engine.infrastructure.validation_digest_session import reused_digest\n"
+        f"assert reused_digest({str(raw)!r}) == {C._sha(raw)!r}\n"
+        f"print(json.dumps(dict(status='pass', findings=[], target_date={DAY!r}, "
+        "validation_scope='current_full_contract', actual_pid_consumed=False)))\n"
+    )
+    monkeypatch.setattr(A, "_database_signature", lambda manifest: None)
+    monkeypatch.setattr(P5, "ROOT", root)
+    try:
+        result = P5._native_preparation_check(root, DAY, "2026-10-16", False, proof)
+        stats = result["native_validation_io"]["stats"]
+        assert result["validation_scope"] == "current_full_contract"
+        assert stats["full_reads"] == 0
+        assert stats["reused_bytes"] == 2 * 1024 * 1024
+        assert stats["admitted_native_bytes"] == 2 * 1024 * 1024
+    finally:
+        auxiliary.write_text(auxiliary_original)
+        cli.write_text(cli_original)
+        (root / "data").unlink()
+        (root / ".venv").unlink()
+
+
 @pytest.mark.parametrize(
     "change",
     [
@@ -4221,7 +4266,9 @@ def test_scheduled_suffix_report_comparison_binds_native_calendar(
     for name, expected in inventory.items():
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        raw = (ROOT / name).read_bytes()
+        raw = (subprocess.check_output(["git", "-C", str(ROOT), "show", "52425f68f:" + name])
+               if name == "src/engine/automation/main_startup_validation.py"
+               else (ROOT / name).read_bytes())
         assert hashlib.sha256(raw).hexdigest() == expected
         path.write_bytes(raw)
     monkeypatch.setattr(C, "ROOT", tmp_path)
@@ -4239,6 +4286,34 @@ def test_scheduled_suffix_report_comparison_binds_native_calendar(
     assert C.reviewed_preparation_pair(
         owner, old, C.REVIEWED_SCHEDULED_SUFFIX_DEPENDENCIES[owner]
     ) is (fault is None)
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "changed", "symlink", "unknown", "mixed"])
+def test_p5_recheck_independent_reader_binds_complete_predecessor(tmp_path, monkeypatch, fault):
+    for name, expected in C.REVIEWED_P5_RECHECK_PROFILE.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        raw = (ROOT / name).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == expected
+        path.write_bytes(raw)
+    owner = "src/engine/automation/main_startup_validation.py"
+    dependency = "src/engine/automation/next_preopen_readiness.py"
+    damaged = tmp_path / dependency
+    if fault == "missing":
+        damaged.unlink()
+    elif fault == "changed":
+        damaged.write_bytes(damaged.read_bytes() + b"\n")
+    elif fault == "symlink":
+        other = tmp_path / "outside.py"
+        other.write_bytes(damaged.read_bytes())
+        damaged.unlink()
+        damaged.symlink_to(other)
+    elif fault == "mixed":
+        (tmp_path / owner).write_bytes(subprocess.check_output(
+            ["git", "-C", str(ROOT), "show", "52425f68f:" + owner]))
+    monkeypatch.setattr(C, "ROOT", tmp_path)
+    old = "0" * 64 if fault == "unknown" else C.REVIEWED_CRON_PHASE_BINDING_PROFILE[owner]
+    assert C.reviewed_preparation_pair(owner, old, C._P5_RECHECK_CURRENT) is (fault is None)
 
 
 @pytest.mark.parametrize("fault", [None, "missing", "changed", "symlink", "unknown", "predecessor_mix"])

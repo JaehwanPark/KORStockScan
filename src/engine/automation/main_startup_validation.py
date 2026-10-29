@@ -128,7 +128,7 @@ def _git(root, *args):
     ).strip()
 
 
-def _run_native_validation(command, *, cwd, env, timeout=180):
+def _run_native_validation(command, *, cwd, env, timeout=180, input_text=None):
     """Own the selected CLI and its native frozen verifier as one session.
 
     The native verifier uses ordinary subprocess.run without creating a new
@@ -138,7 +138,7 @@ def _run_native_validation(command, *, cwd, env, timeout=180):
         command,
         cwd=cwd,
         env=env,
-        stdin=subprocess.DEVNULL,
+        stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -177,7 +177,7 @@ def _run_native_validation(command, *, cwd, env, timeout=180):
     result = None
     error = None
     try:
-        stdout, stderr = process.communicate(timeout=timeout)
+        stdout, stderr = process.communicate(input=input_text, timeout=timeout)
         result = subprocess.CompletedProcess(
             command, process.returncode, stdout, stderr
         )
@@ -215,7 +215,7 @@ def _run_native_validation(command, *, cwd, env, timeout=180):
 
 
 def _native_preparation_check(
-    selected_root, target_date, source_date, capture_machine=False
+    selected_root, target_date, source_date, capture_machine=False, recheck_proof=None
 ):
     if date.fromisoformat(source_date).isoformat() != source_date:
         raise ValueError("startup_native_preparation_source_date_invalid")
@@ -310,6 +310,24 @@ def _native_preparation_check(
                     execution_root, native_pid = ROOT, live_pid
             except (OSError, ValueError, TypeError, KeyError):
                 pass
+    reuse_input = None
+    if recheck_proof is not None and execution_root == ROOT:
+        from src.engine.infrastructure.startup_validation_code_context import (
+            _check_native_closure,
+        )
+
+        if capture_machine or (
+            recheck_proof.get("target_date") != target_date
+            or recheck_proof.get("native_verification", {}).get("source_date") != source_date
+            or recheck_proof.get("selected_release_root") != str(selected_root)
+        ):
+            raise ValueError("startup_native_recheck_proof_scope_invalid")
+        _check_native_closure(recheck_proof)
+        reuse_input = json.dumps(recheck_proof, sort_keys=True, separators=(",", ":"))
+        if len(reuse_input.encode()) > MAX_JSON:
+            # Optimization must not add an admission limit: the original
+            # cold native recheck remains available for an oversized proof.
+            reuse_input = None
     # The selected CLI still performs its full current-contract verification.
     # Reuse only digests already read in this one child; the existing postclose
     # context neither loads nor writes a persistent cache and clears on exit.
@@ -319,6 +337,7 @@ sys.path.insert(0,sys.argv.pop(1))
 source_date=sys.argv.pop(1)
 run_id=sys.argv.pop(1)
 mode=sys.argv.pop(1)
+reuse=sys.argv.pop(1)=='1'
 closed=mode=='1'
 stopped_preparation=mode=='prepared'
 postclose_review=mode=='postclose'
@@ -534,6 +553,22 @@ session=None
 try:
     with postclose_session(DATA_DIR,source_date) as session:
         try:
+            if reuse:
+                from pathlib import Path
+                from src.engine.infrastructure.startup_validation_code_context import _check_native_closure
+                raw=sys.stdin.buffer.read(8*1024*1024+1)
+                if len(raw)>8*1024*1024:
+                    raise ValueError('startup_native_recheck_proof_unbounded')
+                proof=json.loads(raw)
+                if (proof.get('target_date')!=sys.argv[-1]
+                        or proof.get('native_verification',{}).get('source_date')!=source_date):
+                    raise ValueError('startup_native_recheck_proof_scope_invalid')
+                _check_native_closure(proof)
+                proof_sha=hashlib.sha256(raw).hexdigest()
+                for name,entry in proof['closure']['digest_entries'].items():
+                    observed=entry['identity']
+                    session.admit_native_generation(name,dict(path=Path(name).name,
+                        size=observed[4],sha256=entry['digest']),observed[2:7],proof_sha256=proof_sha)
             from contextlib import nullcontext
             if closed:
                 from src.engine.automation.intraday_release_handoff import closed_predecessor_review
@@ -609,6 +644,7 @@ finally:
                 else "postclose" if postclose_review is not None else str(int(closed))
             )
         ),
+        "1" if reuse_input is not None else "0",
         "--verify",
         "--target-date",
         target_date,
@@ -622,7 +658,12 @@ finally:
         native_validation_io=None,
     )
     try:
-        result = _run_native_validation(command, cwd=execution_root, env=env)
+        if reuse_input is None:
+            result = _run_native_validation(command, cwd=execution_root, env=env)
+        else:
+            result = _run_native_validation(
+                command, cwd=execution_root, env=env, input_text=reuse_input
+            )
     except subprocess.TimeoutExpired as exc:
         # A killed child cannot attest its context cleanup or complete counters.
         diagnostic_receipt.update(
@@ -750,6 +791,8 @@ finally:
         )
     if diagnostic_receipt["diagnostics_status"] != "observed":
         fail("startup_native_preparation_diagnostics_invalid")
+    if reuse_input is not None:
+        _check_native_closure(recheck_proof)
     if capture_machine:
         rows = [
             line.removeprefix("P5_NATIVE_MACHINE_CLOSURE=")
@@ -1565,7 +1608,8 @@ def run_validation(
         elif logical:
             raise ValueError("startup_child_logical_sources_without_native_proof")
         final["native_preparation_checks"]["recheck"] = _native_preparation_check(
-            intake["selected_root"], target_date, intake["receipt"]["source_date"]
+            intake["selected_root"], target_date, intake["receipt"]["source_date"],
+            False, binding.get("main_preparation"),
         )
         if date.fromisoformat(target_date) < datetime.now(KST).date():
             raise ValueError("startup_target_expired_during_validation")
