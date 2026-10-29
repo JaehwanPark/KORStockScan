@@ -3974,7 +3974,7 @@ def test_timeout_terminal_independent_reader_requires_complete_generation(tmp_pa
     for name in C.REVIEWED_TIMEOUT_TERMINAL_PROFILE:
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes((ROOT / name).read_bytes())
+        path.write_bytes(subprocess.check_output(["git", "-C", str(ROOT), "show", "65a05719a:" + name]))
     monkeypatch.setattr(C, "ROOT", tmp_path)
     relative = C.REVIEWED_TIMEOUT_TERMINAL_PATH
     damaged = tmp_path / "src/engine/scalping/reversal_auxiliary_production_input.py"
@@ -4043,3 +4043,30 @@ def test_holding_history_independent_reader_requires_complete_generation(tmp_pat
         "0" * 64 if fault == "unknown" else "c1d1868fee331a01bf8562965e3ada03c7ed20b61df4149f99308629b52a8b96",
         C.REVIEWED_HOLDING_HISTORY_SOURCES["src/engine/holding_exit_sentinel.py"],
     ) is (fault is None)
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "changed", "symlink", "unknown", "mixed_handler"])
+def test_probe_avg_independent_reader_preserves_complete_profile(tmp_path, monkeypatch, fault):
+    for name, expected in C.REVIEWED_PROBE_AVG_PROFILE.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        content = (ROOT / name).read_bytes()
+        assert hashlib.sha256(content).hexdigest() == expected
+        path.write_bytes(content)
+    monkeypatch.setattr(C, "ROOT", tmp_path)
+    relative = C.REVIEWED_TIMEOUT_TERMINAL_PATH
+    damaged = tmp_path / "src/engine/scalping/avg_down_rebound.py"
+    if fault == "missing":
+        damaged.unlink()
+    elif fault == "changed":
+        damaged.write_bytes(damaged.read_bytes() + b"\n")
+    elif fault == "symlink":
+        outside = tmp_path / "outside.py"
+        outside.write_bytes(damaged.read_bytes())
+        damaged.unlink()
+        damaged.symlink_to(outside)
+    elif fault == "mixed_handler":
+        (tmp_path / relative).write_bytes(subprocess.check_output(
+            ["git", "-C", str(ROOT), "show", "cc4028ba8:" + relative]))
+    old = "0" * 64 if fault == "unknown" else C.REVIEWED_TIMEOUT_TERMINAL_HANDLER
+    assert C.reviewed_preparation_pair(relative, old, C.REVIEWED_PROBE_AVG_CHANGED[relative]) is (fault is None)

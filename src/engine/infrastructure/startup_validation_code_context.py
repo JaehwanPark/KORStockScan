@@ -3438,9 +3438,51 @@ for _name, _current in REVIEWED_TIMEOUT_CHANGED.items():
     )
 
 
+
+# Exact probe provenance and ADD-only scope integration. Issued profiles remain
+# immutable; missing, dirty or mixed complete generations are never successors.
+REVIEWED_PROBE_AVG_CHANGED = {
+    "src/engine/ai_engine_openai.py": "19b8e360293f3e8a3542333775b8c7b342f1ec30b6b0f8dfcbe0b8f7f17f994b",
+    "src/engine/scalping/ai_market_snapshot.py": "91840590d93b9ac2a3fdfb97e5cedfb1ae5cd5e84875f18dbe6727a74ede8ee4",
+    "src/engine/scalping/entry_setup_live_policy.py": "d1fecf59bd0a0d6f358f40908aaf694f0d01e50f26ed4825aa28ca2d852fa2af",
+    "src/engine/scalping/avg_down_rebound.py": "aed10b239f4ddfe069f70db5c3f69cd4114380fab85e85da7a39f477c6adf112",
+    "src/engine/scalping/holding_path_vote_policy.py": "bd6c7b6dc00c90d80b9b66a146e76c4bf1110ec4b7267abcb9fe0b9b723b7432",
+    "src/engine/sniper_state_handlers.py": "cf559fca33ee59963675d9d068b353b8521999bec34f5872e634c146697b7cec",
+    "src/engine/monitoring/submission_bottleneck_monitor.py": "499c3b8a66d39b6eaa85da36a4ef0aa46a0201c4e2d18184f07ec02c7c071cf8",
+    "src/engine/error_detectors/artifact_freshness.py": "33949dda5fef2ff04d931bd94b61c812c5383c4adb5439c377ca05f36bbcb5e1"
+}
+REVIEWED_PROBE_AVG_PROFILE = {
+    **REVIEWED_TIMEOUT_TERMINAL_PROFILE, **REVIEWED_PROBE_AVG_CHANGED,
+}
+for _name, _current in REVIEWED_PROBE_AVG_CHANGED.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    if _name in REVIEWED_TIMEOUT_TERMINAL_PROFILE:
+        _origins.add(REVIEWED_TIMEOUT_TERMINAL_PROFILE[_name])
+    _history.update((origin, _current) for origin in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
+    probe_avg = (
+        current == REVIEWED_PROBE_AVG_PROFILE.get(relative)
+        and any(
+            (ROOT / name).is_file() and not (ROOT / name).is_symlink()
+            and _sha(ROOT / name) == expected
+            for name, expected in REVIEWED_PROBE_AVG_CHANGED.items()
+        )
+    )
+    if probe_avg and any(
+        (ROOT / name).is_symlink() or not (ROOT / name).is_file()
+        or _sha(ROOT / name) != expected
+        for name, expected in REVIEWED_PROBE_AVG_PROFILE.items()
+    ):
+        return False
+
     timeout_terminal = (
-        current == REVIEWED_TIMEOUT_TERMINAL_PROFILE.get(relative)
+        not probe_avg
+        and current == REVIEWED_TIMEOUT_TERMINAL_PROFILE.get(relative)
         and any(
             (ROOT / name).is_file() and not (ROOT / name).is_symlink()
             and _sha(ROOT / name) == expected
@@ -3450,7 +3492,7 @@ def reviewed_preparation_pair(relative, old, current):
     if (
         relative in REVIEWED_TIMEOUT_CHANGED
         and current == REVIEWED_TIMEOUT_CHANGED[relative]
-        and not timeout_terminal
+        and not (timeout_terminal or probe_avg)
     ):
         return False
     if timeout_terminal and any(
@@ -3464,7 +3506,7 @@ def reviewed_preparation_pair(relative, old, current):
         and _sha(ROOT / name) == expected
         for name, expected in REVIEWED_HOLDING_HISTORY_SOURCES.items()
     )
-    if timeout_terminal:
+    if probe_avg or timeout_terminal:
         pass
     elif holding_history:
         if any(
@@ -3502,7 +3544,7 @@ def reviewed_preparation_pair(relative, old, current):
             path = ROOT / name
             if path.is_symlink() or not path.is_file() or _sha(path) != expected:
                 return False
-    if not (holding_history or timeout_terminal) and current == REVIEWED_HELD_SELL_SOURCES.get(relative):
+    if not (holding_history or timeout_terminal or probe_avg) and current == REVIEWED_HELD_SELL_SOURCES.get(relative):
         for name, expected in REVIEWED_HELD_SELL_SOURCES.items():
             path = ROOT / name
             if path.is_symlink() or not path.is_file() or _sha(path) != expected:

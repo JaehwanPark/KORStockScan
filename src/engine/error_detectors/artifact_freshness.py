@@ -6245,7 +6245,7 @@ class ArtifactFreshnessDetector(BaseDetector):
                         and observation_health.get("reason")
                         == "bounded_source_quality_observation"
                         and observation_health.get("unmet_conditions")
-                        == ["current_input_provenance_invalid"]
+                        == ["scanner_population_not_quiet"]
                         and details.get(f"{aid}_observation_health_projection_match")
                         is True
                     ):

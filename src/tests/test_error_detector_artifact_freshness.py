@@ -6772,7 +6772,7 @@ def test_closed_market_retains_only_verified_noncurrent_scanner_population(
             == "closed_window_observation_only"
         )
         assert report["observation_health"]["unmet_conditions"] == [
-            "current_input_provenance_invalid"
+            "scanner_population_not_quiet"
         ]
         assert (
             report["entry_execution_tuning_semantics"]["entry_split"][

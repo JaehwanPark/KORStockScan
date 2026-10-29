@@ -7741,9 +7741,12 @@ def observation_health_projection(result):
         and order in {"initial", "advancing"}
         and inp.get("snapshot_order") == order
     )
+    require(input_provenance_valid, "current_input_provenance_invalid")
+    # A populated scanner cohort is not invalid provenance. Keep its quiet-window
+    # limitation separate from source identity, clock and generation failures.
     require(
-        input_provenance_valid and count(inp.get("row_count"), maximum=0),
-        "current_input_provenance_invalid",
+        count(inp.get("row_count"), maximum=0),
+        "scanner_population_not_quiet",
     )
 
     stages = [
@@ -9020,7 +9023,7 @@ def observation_health_projection(result):
         soft.update(
             {
                 "monitor_state_not_quiet_full_observation",
-                "current_input_provenance_invalid",
+                "scanner_population_not_quiet",
             }
         )
 

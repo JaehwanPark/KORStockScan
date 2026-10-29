@@ -1066,3 +1066,11 @@ generations. Exact per-file compatibility alone does not select a whole issued
 profile. Preserve the previous issuer/selector and contract-extension bindings,
 and exercise both native incumbent policy intake and independent candidate
 preparation before repeating the ordered transition.
+
+
+The probe-provenance and ADD-source integration uses the same complete source
+inventory in native handoff and independent preparation. Preserve every issued
+predecessor profile. A populated scanner cohort is a population observation,
+not a provenance failure; invalid source identities and clocks retain strict
+failure. Optional dated ADD source scope remains absent in old policy receipts
+and cannot be inferred from code deployment or a report-only observation.

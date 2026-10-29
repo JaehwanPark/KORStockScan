@@ -13416,6 +13416,37 @@ for _name in ("src/engine/sniper_state_handlers.py", "src/engine/scalping/zero_b
 
 
 
+
+# Exact reviewed integration; use this same complete inventory in candidate,
+# prepared and consumed readers. Original profiles retain their own identities.
+REVIEWED_PROBE_AVG_HASHES = {
+    **REVIEWED_TIMEOUT_TERMINAL_HASHES,
+    **{
+    "src/engine/ai_engine_openai.py": "19b8e360293f3e8a3542333775b8c7b342f1ec30b6b0f8dfcbe0b8f7f17f994b",
+    "src/engine/scalping/ai_market_snapshot.py": "91840590d93b9ac2a3fdfb97e5cedfb1ae5cd5e84875f18dbe6727a74ede8ee4",
+    "src/engine/scalping/entry_setup_live_policy.py": "d1fecf59bd0a0d6f358f40908aaf694f0d01e50f26ed4825aa28ca2d852fa2af",
+    "src/engine/scalping/avg_down_rebound.py": "aed10b239f4ddfe069f70db5c3f69cd4114380fab85e85da7a39f477c6adf112",
+    "src/engine/scalping/holding_path_vote_policy.py": "bd6c7b6dc00c90d80b9b66a146e76c4bf1110ec4b7267abcb9fe0b9b723b7432",
+    "src/engine/sniper_state_handlers.py": "cf559fca33ee59963675d9d068b353b8521999bec34f5872e634c146697b7cec",
+    "src/engine/monitoring/submission_bottleneck_monitor.py": "499c3b8a66d39b6eaa85da36a4ef0aa46a0201c4e2d18184f07ec02c7c071cf8",
+    "src/engine/error_detectors/artifact_freshness.py": "33949dda5fef2ff04d931bd94b61c812c5383c4adb5439c377ca05f36bbcb5e1",
+    "src/engine/infrastructure/startup_validation_code_context.py": "6a70400e4f1a3c09fcc2dcfd27cfeb9841c5ed8db0a6e382a7248d8a35e8f0a5"
+},
+}
+REVIEWED_PROBE_AVG_PROFILE = {
+    **REVIEWED_PREOPEN_VALIDATION_PROFILE, **REVIEWED_PROBE_AVG_HASHES,
+}
+REVIEWED_PROBE_AVG_VARIANTS = _holding_history_variants(REVIEWED_PROBE_AVG_HASHES)
+for _name, _current in REVIEWED_PROBE_AVG_HASHES.items():
+    _pairs = REVIEWED_ENTRY_COST_PAIRS.get(_name, ())
+    _origins = {value for pair in _pairs for value in pair}
+    if _name in REVIEWED_TIMEOUT_TERMINAL_PROFILE:
+        _origins.add(REVIEWED_TIMEOUT_TERMINAL_PROFILE[_name])
+    REVIEWED_ENTRY_COST_PAIRS[_name] = _pairs + tuple(
+        (origin, _current) for origin in _origins
+    )
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -14440,6 +14471,14 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_TIMEOUT_TERMINAL_PROFILE
         prepared_variants = REVIEWED_TIMEOUT_TERMINAL_VARIANTS
+    if any(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == sha
+        for name, sha in REVIEWED_PROBE_AVG_HASHES.items()
+        if sha != REVIEWED_TIMEOUT_TERMINAL_PROFILE.get(name)
+    ):
+        prepared_hashes = REVIEWED_PROBE_AVG_PROFILE
+        prepared_variants = REVIEWED_PROBE_AVG_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

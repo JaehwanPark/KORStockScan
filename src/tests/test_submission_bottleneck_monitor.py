@@ -7818,8 +7818,9 @@ def test_active_observations_keep_bounded_inflight_outcomes_as_warning(
     assert health["reason"] == "bounded_source_quality_observation"
     assert set(health["unmet_conditions"]) >= {
         "monitor_state_not_quiet_full_observation",
-        "current_input_provenance_invalid",
+        "scanner_population_not_quiet",
     }
+    assert "current_input_provenance_invalid" not in health["unmet_conditions"]
     assert not any(
         health[k]
         for k in (
