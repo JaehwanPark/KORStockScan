@@ -795,6 +795,116 @@ def test_branch_lifetime_cannot_reference_a_branch_outside_the_policy_scope():
         V.scope_hash([bid], {}, "union_v6", "code", policy)
 
 
+@pytest.mark.parametrize("retain_one", [False, True])
+def test_next_selection_carries_only_lifetimes_for_retained_branches(
+    monkeypatch, retain_one
+):
+    from src.engine.scalping import reversal_cumulative_postclose as Q
+
+    key, route = next(iter(V.scopes()))
+    old, kept, new = [
+        b
+        for b in C.DEFINITIONS
+        if C.applicable(b, key, route)
+        and C.branch(b)["decision_phase"] == "FIRST_UPTICK"
+    ][:3]
+    policy = dict(
+        schema="entry_signal_lifetime_policy_v2",
+        version="fixture",
+        default_max_signal_age_sec=5.0,
+        branch_max_signal_age_sec={old: 8.4, kept: 8.7},
+    )
+    cell = dict(
+        backend="union_v6",
+        payload=dict(branches=[C.branch(old), C.branch(kept)]),
+        signal_lifetime_policy=policy,
+    )
+    parent = dict(
+        continuous_reversal=dict(
+            machine_cells={key: dict(routes={route: cell})},
+            auxiliary_cells={key: dict(routes={route: dict(payload={})})},
+        )
+    )
+    selected = [kept, new] if retain_one else [new]
+    sid = V.scope_id(key, route)
+    monkeypatch.setattr(V, "scopes", lambda: [(key, route)])
+    result = Q.machine_cells(
+        parent,
+        dict(scopes={sid: selected}, cumulative_variant_groups={sid: {}}),
+        "code",
+    )[0]["routes"][route]
+    if retain_one:
+        assert result["signal_lifetime_policy"]["branch_max_signal_age_sec"] == {
+            kept: 8.7
+        }
+    else:
+        assert "signal_lifetime_policy" not in result
+    from src.engine.scalping.entry_deadline import (
+        bind_signal_lifetime,
+        signal_deadline_epoch,
+    )
+
+    event = dict(
+        epoch=100.0,
+        signal_id="new",
+        registry_generation="scope",
+        branch_signals={new: {}},
+        anchor_lineage={new: ["new"]},
+    )
+    bind_signal_lifetime(event, result.get("signal_lifetime_policy"))
+    assert signal_deadline_epoch(event) == 105.0
+    assert (
+        parent["continuous_reversal"]["machine_cells"][key]["routes"][route][
+            "signal_lifetime_policy"
+        ]
+        == policy
+    )
+
+
+def test_postclose_cell_cannot_invent_an_unissued_lifetime():
+    key, route = next(iter(V.scopes()))
+    parent = dict(
+        continuous_reversal=dict(machine_cells={key: dict(routes={route: {}})})
+    )
+    cell = dict(
+        backend="union_v6",
+        signal_lifetime_policy=dict(
+            schema="entry_signal_lifetime_policy_v1",
+            version="unexpected",
+            max_signal_age_sec=9.0,
+        ),
+    )
+    with pytest.raises(ValueError, match="requires_explicit_transition"):
+        V.carry_signal_lifetime(parent, key, route, cell)
+
+
+def test_legacy_scope_lifetime_is_not_extended_to_new_branch():
+    key, route = next(iter(V.scopes()))
+    old, new = [
+        b
+        for b in C.DEFINITIONS
+        if C.applicable(b, key, route)
+        and C.branch(b)["decision_phase"] == "FIRST_UPTICK"
+    ][:2]
+    prior = dict(
+        backend="union_v6",
+        payload=dict(branches=[C.branch(old)]),
+        signal_lifetime_policy=dict(
+            schema="entry_signal_lifetime_policy_v1",
+            version="legacy",
+            max_signal_age_sec=8.0,
+        ),
+    )
+    parent = dict(
+        continuous_reversal=dict(machine_cells={key: dict(routes={route: prior})})
+    )
+    selected = dict(
+        backend="union_v6", payload=dict(branches=[C.branch(old), C.branch(new)])
+    )
+    with pytest.raises(ValueError, match="requires_explicit_transition"):
+        V.carry_signal_lifetime(parent, key, route, selected)
+
+
 def test_lifetime_extension_rejects_unimplemented_branch_invalidation():
     bid = next(
         b

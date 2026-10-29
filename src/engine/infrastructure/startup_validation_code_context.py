@@ -3478,9 +3478,11 @@ for _name, _current in REVIEWED_STARTUP_STORAGE_CHANGED.items():
 
 REVIEWED_SCOPED_ENTRY_CHANGED = {
     "src/engine/ai_engine_openai.py": "630a5519af15150d74b751bd549422d1134c7abf9a4901e0ff9646fa76972dfb",
-    "src/engine/scalping/continuous_reversal_policy_v6.py": "074568bac354413eee81feceb6c4da9fc4960b2827752253c8be9c148a912251",
+    "src/engine/scalping/continuous_reversal_policy_v6.py": "9685e84a08faa6ebe65aa9e91dec5ccd22264c598bb333390e57169023350ca1",
     "src/engine/scalping/entry_deadline.py": "d976f683b52d6235b6fa8739f4123c7f667ae12bcb1a2c54d8bb2b6c606ec819",
     "src/engine/scalping/reversal_extended_intraday.py": "11ab9a7f08b2d595a40ef8efbb72bbda11b54178fa2c74b843589a431039f9fb",
+    "src/engine/scalping/reversal_extended_registration.py": "f74666d09ffaf31120f250e10abbd1a5a1f6af090b0f7eea3162c792f7fc651b",
+    "src/engine/scalping/reversal_joint_registration.py": "90858229b4e80407d698fefeb291c0cd7813d4d8a33bd168a7c9f31a63c7bec4",
     "src/engine/scalping/reversal_extended_runtime.py": "d71057c5dec014f5a3dfac40313bcc774d0dc10487f1237b05829767747aba47",
     "src/engine/scalping/reversal_extended_state.py": "6f9402d54333b03a89dba81f257a6eec9dc6b52d6b6ace6d8e823400b524650b",
     "src/engine/scalping/reversal_path_runtime.py": "5d1ae6236aeb94cec7f1e9c9728f0deb74539d0308164ca1aebf4bd29c1df4ae",
@@ -3490,6 +3492,8 @@ REVIEWED_SCOPED_ENTRY_ORIGINS = {
     "src/engine/scalping/continuous_reversal_policy_v6.py": "78c2e8a00ab0b87df3a42a0f35318598a3960e441bdbac0e090a0cb2e59a1b8b",
     "src/engine/scalping/entry_deadline.py": "af15f4b414bf0536002e9541fa67935e13de805bd97b4a01369f21a296e19a7c",
     "src/engine/scalping/reversal_extended_intraday.py": "710661a7957111db81a61daca914d41dd5a1eb6b830d019efa365cb8e809ddb3",
+    "src/engine/scalping/reversal_extended_registration.py": "639643acfa06a46ddd5602ccfae056fe84bf812f0a4a35fc070acec6c96911ab",
+    "src/engine/scalping/reversal_joint_registration.py": "53665208e48d459ad3a5e16d8492b7a01ffe0dd2fedd4994ad64452543d7ccb4",
     "src/engine/scalping/reversal_extended_runtime.py": "e80703262e2013f7164ffbb728d554e437476d2c83be0e6a919868e2934d40d7",
     "src/engine/scalping/reversal_extended_state.py": "a99704651c9c54cdc7f9131ed07b957fa10f8bf3d9625e408114559cc24ec21e",
     "src/engine/scalping/reversal_path_runtime.py": "a1ea25c96870f2d478f12f3e5de81bcab64f4eaeb3c02cedcc977e16b697b340",

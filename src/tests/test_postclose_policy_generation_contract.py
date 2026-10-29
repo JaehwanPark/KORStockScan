@@ -72,6 +72,12 @@ def attest(root, family):
         "scalping/continuous_reversal_policy_v6.py",
         "scalping/reversal_extended_catalog.py",
         "scalping/reversal_extended_state.py",
+        "scalping/reversal_extended_registration.py",
+        "scalping/reversal_joint_registration.py",
+        "scalping/reversal_extended_intraday.py",
+        "scalping/reversal_extended_runtime.py",
+        "scalping/reversal_path_runtime.py",
+        "scalping/entry_deadline.py",
     ],
 )
 def test_auxiliary_generation_binds_cumulative_producer_and_consumer(

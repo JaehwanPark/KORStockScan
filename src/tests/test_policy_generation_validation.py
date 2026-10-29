@@ -2014,3 +2014,85 @@ def test_source_review_extends_only_existing_capability_reader_membership(tmp_pa
             handoff.reviewed_source_transition(seal())
     else:
         assert set(handoff.reviewed_source_transition(seal())["pairs"]) == set(validation.PLANS)
+
+
+@pytest.mark.parametrize(
+    "damage", [None, "original_absent", "omitted_review", "unregistered_owner", "origin_deleted", "current_deleted"]
+)
+def test_source_review_preserves_original_auxiliary_inventory_while_binding_new_consumers(
+    tmp_path, monkeypatch, damage
+):
+    import copy
+    import subprocess
+
+    handoff, old, new, body, seal = _source_review_case(tmp_path, monkeypatch)
+    extra = (
+        "scalping/unreviewed_owner.py"
+        if damage == "unregistered_owner"
+        else "scalping/reversal_extended_registration.py"
+    )
+    updated = copy.deepcopy(generation.COMPONENTS)
+    updated["auxiliary"] = (*updated["auxiliary"], extra)
+    for role, root in (("origin", old), ("current", new)):
+        file = root / "src/engine" / extra
+        file.parent.mkdir(parents=True, exist_ok=True)
+        if role != "origin" or damage != "original_absent":
+            file.write_text("value = " + ("1" if role == "origin" else "2") + "\n")
+        if role == "current":
+            registry = root / "src/engine/monitoring/policy_generation_contract.py"
+            registry.write_text(
+                "COMPONENTS = "
+                + repr(updated)
+                + "\nCOMMON_CODE_COMPONENTS = "
+                + repr(generation.COMMON_CODE_COMPONENTS)
+                + "\n"
+            )
+        subprocess.run(["git", "add", "."], cwd=root, check=True, capture_output=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "auxiliary consumer",
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+        )
+        body[role + "_git_commit"] = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
+    monkeypatch.setattr(generation, "COMPONENTS", updated)
+    if damage != "omitted_review":
+        body["reviewed_files"]["src/engine/" + extra] = dict(
+            before=(
+                None
+                if damage == "original_absent"
+                else validation.file_sha(old / "src/engine" / extra)
+            ),
+            after=validation.file_sha(new / "src/engine" / extra),
+        )
+    if damage == "origin_deleted":
+        (old / "src/engine" / extra).unlink()
+    elif damage == "current_deleted":
+        (new / "src/engine" / extra).unlink()
+    if damage in {"omitted_review", "unregistered_owner", "origin_deleted", "current_deleted"}:
+        with pytest.raises((ValueError, OSError)):
+            handoff.reviewed_source_transition(seal())
+    else:
+        result = handoff.reviewed_source_transition(seal())
+        original = generation.digest(
+            {
+                "auxiliary.py": validation.file_sha(old / "src/engine/auxiliary.py"),
+                "shared.py": validation.file_sha(old / "src/engine/shared.py"),
+            }
+        )
+        assert result["pairs"]["auxiliary"][0] == original
+        assert result["pairs"]["auxiliary"][1] == generation.code_generation(
+            "auxiliary"
+        )

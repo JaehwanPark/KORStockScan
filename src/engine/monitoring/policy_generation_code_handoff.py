@@ -14,6 +14,17 @@ import subprocess
 from src.engine.monitoring import policy_generation_contract as generation
 from src.engine.monitoring import policy_generation_validation as validation
 
+_AUXILIARY_NATIVE_CONSUMER_EXTENSION = frozenset(
+    {
+        "scalping/reversal_extended_registration.py",
+        "scalping/reversal_joint_registration.py",
+        "scalping/reversal_extended_intraday.py",
+        "scalping/reversal_extended_runtime.py",
+        "scalping/reversal_path_runtime.py",
+        "scalping/entry_deadline.py",
+    }
+)
+
 
 def reviewed_source_transition(path, *, consumer_family=None):
     """Authenticate one reviewed source delta and derive every affected family.
@@ -66,10 +77,17 @@ def reviewed_source_transition(path, *, consumer_family=None):
         common = declarations["COMMON_CODE_COMPONENTS"]
         if set(components) != set(generation.COMPONENTS):
             raise ValueError("source_review_family_registry_changed")
-        families, relatives = {}, set()
+        families, relatives, absent_additions = {}, set(), set()
         for family, names in components.items():
             values = {}
-            for name in dict.fromkeys((*names, *common, *generation.COMMON_CODE_COMPONENTS)):
+            for name in dict.fromkeys(
+                (
+                    *names,
+                    *common,
+                    *generation.COMMON_CODE_COMPONENTS,
+                    *generation.COMPONENTS[family],
+                )
+            ):
                 source = root / "src/engine" / name
                 relative = source.resolve().relative_to(root.resolve()).as_posix()
                 ancestor = source
@@ -79,7 +97,21 @@ def reviewed_source_transition(path, *, consumer_family=None):
                     ancestor = ancestor.parent
                 key = str(source.resolve())
                 if key not in source_hashes:
-                    source_hashes[key] = validation.file_sha(source)
+                    new_only = (
+                        role == "origin"
+                        and family == "auxiliary"
+                        and name in _AUXILIARY_NATIVE_CONSUMER_EXTENSION
+                        and name not in names
+                        and name not in common
+                        and not source.exists()
+                    )
+                    if new_only:
+                        source_hashes[key] = None
+                        absent_additions.add(relative)
+                    else:
+                        source_hashes[key] = validation.file_sha(source)
+                if source_hashes[key] is None and (name in names or name in common):
+                    raise ValueError("source_review_required_origin_missing")
                 value = source_hashes[key]
                 if name in names or name in common:
                     values[name] = value
@@ -95,17 +127,41 @@ def reviewed_source_transition(path, *, consumer_family=None):
             ["git", "ls-files", "--", *sorted(relatives)],
             cwd=root, text=True, timeout=10,
         ).splitlines()
-        if set(tracked) != relatives:
+        if set(tracked) != relatives - absent_additions:
             raise ValueError("source_review_untracked_components")
         inventories.append((families, relatives, (components, common)))
     old, new = inventories
-    # The sole admitted membership extension binds this existing capability
-    # reader into future fixture generations. Family/execution owners cannot
-    # change through a source review. Old hashes retain their original members.
+    # The existing reader and the named auxiliary consumers may extend only
+    # future fixture membership. Execution authority stays with its owner;
+    # historical family hashes retain exactly their original members.
     reviewer = "monitoring/policy_generation_code_handoff.py"
+    old_components, new_components = old[2][0], new[2][0]
+    allowed_membership = new_components == generation.COMPONENTS and all(
+        (
+            old_components[family] == new_components[family]
+            if family != "auxiliary"
+            else (
+                tuple(
+                    name
+                    for name in old_components[family]
+                    if name not in _AUXILIARY_NATIVE_CONSUMER_EXTENSION
+                )
+                == tuple(
+                    name
+                    for name in new_components[family]
+                    if name not in _AUXILIARY_NATIVE_CONSUMER_EXTENSION
+                )
+                and set(old_components[family]) <= set(new_components[family])
+                and set(new_components[family]) - set(old_components[family])
+                <= _AUXILIARY_NATIVE_CONSUMER_EXTENSION
+                and len(new_components[family]) == len(set(new_components[family]))
+            )
+        )
+        for family in old_components
+    )
     if (
         old[1] != new[1]
-        or old[2][0] != new[2][0]
+        or not allowed_membership
         or tuple(n for n in old[2][1] if n != reviewer)
         != tuple(n for n in new[2][1] if n != reviewer)
         or (reviewer in old[2][1] and reviewer not in new[2][1])

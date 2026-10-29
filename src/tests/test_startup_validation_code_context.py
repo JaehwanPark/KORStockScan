@@ -3825,6 +3825,7 @@ def test_scoped_entry_keeps_original_reviewed_formatting_predecessor(
 def test_scoped_entry_profiles_cover_every_changed_native_contract_member():
     import subprocess
     from src.engine.scalping import continuous_reversal_policy_v6 as native
+    from src.engine.monitoring import policy_generation_contract as report
 
     baseline = "8fadd634d89d3e617680f5deabd1080cf89d6caf"
     paths = {Path(m.__file__).resolve().relative_to(ROOT).as_posix() for m in native.contract_modules()}
@@ -3836,8 +3837,15 @@ def test_scoped_entry_profiles_cover_every_changed_native_contract_member():
             changed.add(relative)
     assert changed == set(C.REVIEWED_SCOPED_ENTRY_CHANGED)
     preparation = "src/engine/infrastructure/startup_validation_code_context.py"
-    assert changed | {preparation} == set(H.REVIEWED_SCOPED_ENTRY_CHANGED)
-    for relative in changed | {preparation}:
+    report_paths = {str((ROOT / "src/engine" / name).resolve().relative_to(ROOT)) for names in report.COMPONENTS.values() for name in (*names, *report.COMMON_CODE_COMPONENTS)}
+    report_changed = set()
+    for relative in report_paths:
+        old = subprocess.check_output(["git", "show", f"{baseline}:{relative}"], cwd=ROOT)
+        if hashlib.sha256(old).hexdigest() != hashlib.sha256((ROOT / relative).read_bytes()).hexdigest():
+            report_changed.add(relative)
+    expected = changed | report_changed | {preparation}
+    assert expected == set(H.REVIEWED_SCOPED_ENTRY_CHANGED)
+    for relative in expected:
         assert hashlib.sha256((ROOT / relative).read_bytes()).hexdigest() == H.REVIEWED_SCOPED_ENTRY_CHANGED[relative]
 
 

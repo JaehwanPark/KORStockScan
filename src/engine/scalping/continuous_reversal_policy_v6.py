@@ -226,10 +226,35 @@ def carry_signal_lifetime(parent, key, route, cell):
 
     previous = parent["continuous_reversal"]["machine_cells"][key]["routes"][route]
     policy = previous.get("signal_lifetime_policy")
+    if policy is None and cell.get("signal_lifetime_policy") is not None:
+        raise ValueError("v6_lifetime_policy_requires_explicit_transition")
     if policy is not None:
         if cell["backend"] != "union_v6":
             raise ValueError("v6_lifetime_policy_requires_explicit_transition")
-        cell["signal_lifetime_policy"] = validate_lifetime_policy(policy)
+        policy = validate_lifetime_policy(policy)
+        if policy["schema"] == "entry_signal_lifetime_policy_v1":
+            try:
+                prior_ids = {b["branch_id"] for b in previous["payload"]["branches"]}
+                selected_ids = {b["branch_id"] for b in cell["payload"]["branches"]}
+            except (KeyError, TypeError):
+                raise ValueError("v6_lifetime_selected_branches_invalid") from None
+            if not selected_ids <= prior_ids:
+                raise ValueError("v6_lifetime_policy_requires_explicit_transition")
+        if policy["schema"] == "entry_signal_lifetime_policy_v2":
+            try:
+                selected = {b["branch_id"] for b in cell["payload"]["branches"]}
+            except (KeyError, TypeError):
+                raise ValueError("v6_lifetime_selected_branches_invalid") from None
+            carried = {
+                b: age
+                for b, age in policy["branch_max_signal_age_sec"].items()
+                if b in selected
+            }
+            if not carried:
+                cell.pop("signal_lifetime_policy", None)
+                return None
+            policy["branch_max_signal_age_sec"] = carried
+        cell["signal_lifetime_policy"] = policy
     return cell.get("signal_lifetime_policy")
 
 

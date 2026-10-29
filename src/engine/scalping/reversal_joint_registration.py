@@ -465,7 +465,9 @@ def initial_reports(
         payload = dict(
             composition="ANY_MATCH_ONE_INTENT", branches=[C.branch(b) for b in ids]
         )
-        lifetime = mc[key]["routes"][route].get("signal_lifetime_policy")
+        lifetime = V.carry_signal_lifetime(
+            parent, key, route, dict(backend="union_v6", payload=payload)
+        )
         mc[key]["routes"][route] = dict(
             **(
                 {"signal_lifetime_policy": copy.deepcopy(lifetime)}
@@ -480,7 +482,7 @@ def initial_reports(
                 aux,
                 "union_v6",
                 machine["execution_code_sha256"],
-                mc[key]["routes"][route].get("signal_lifetime_policy"),
+                lifetime,
             ),
             status=(
                 "operator_initial_registered"
