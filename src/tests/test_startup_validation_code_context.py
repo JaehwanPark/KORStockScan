@@ -3996,3 +3996,8 @@ def test_holding_history_independent_reader_requires_complete_generation(tmp_pat
         outside.write_bytes(damaged.read_bytes());damaged.unlink();damaged.symlink_to(outside)
     old = "0" * 64 if fault == "unknown" else C.REVIEWED_HOLDING_HISTORY_ORIGINS[relative]
     assert C.reviewed_preparation_pair(relative, old, C.REVIEWED_HOLDING_HISTORY_SOURCES[relative]) is (fault is None)
+    assert C.reviewed_preparation_pair(
+        "src/engine/holding_exit_sentinel.py",
+        "0" * 64 if fault == "unknown" else "c1d1868fee331a01bf8562965e3ada03c7ed20b61df4149f99308629b52a8b96",
+        C.REVIEWED_HOLDING_HISTORY_SOURCES["src/engine/holding_exit_sentinel.py"],
+    ) is (fault is None)

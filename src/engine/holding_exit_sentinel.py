@@ -33,7 +33,10 @@ from src.engine.scalping.holding_path_vote_policy import (
     policy_path as holding_vote_policy_path,
     verify_source_handoff as verify_holding_vote_source_handoff,
 )
-from src.engine.scalping.holding_profit_exit_semantics import audit_profit_exit_flow
+from src.engine.scalping.holding_profit_exit_semantics import (
+    audit_profit_exit_flow,
+    event_generation,
+)
 from src.utils.constants import DATA_DIR
 from src.utils.jsonl_io import existing_or_gzip_path, iter_jsonl
 from src.utils.market_day import is_krx_trading_day
@@ -1405,6 +1408,8 @@ def build_holding_exit_sentinel_report(
     dry_run: bool = False,
     use_cache: bool = False,
     historical_policy: bool = False,
+    source_generation: str | None = None,
+    source_session_event_count: int | None = None,
 ) -> dict[str, Any]:
     if (
         historical_policy
@@ -1440,6 +1445,28 @@ def build_holding_exit_sentinel_report(
     ]
 
     session_start = datetime.combine(_parse_target_date(target_date), SESSION_START)
+    if source_generation is not None or source_session_event_count is not None:
+        # A report can finish after its cache read. Authenticate the exact
+        # original sorted prefix, including pre-session rows, before re-auditing.
+        # A late insertion or changed row fails the original generation hash.
+        if (
+            not isinstance(source_generation, str)
+            or type(source_session_event_count) is not int
+            or not 0 <= source_session_event_count <= len(events)
+        ):
+            raise ValueError("holding_source_prefix_invalid")
+        before_session = sum(
+            1 for event in events
+            if (
+                event.emitted_at.astimezone(ZoneInfo("Asia/Seoul")).replace(tzinfo=None)
+                if event.emitted_at.tzinfo else event.emitted_at
+            ) < session_start
+        )
+        if source_session_event_count > len(events) - before_session:
+            raise ValueError("holding_source_prefix_invalid")
+        events = events[:before_session + source_session_event_count]
+        if event_generation(events) != source_generation:
+            raise ValueError("holding_source_prefix_generation_mismatch")
     session_summary = _summarize_events(events, start_at=session_start, end_at=as_of)
     windows = {}
     for minutes in sorted(set(windows_min)):
@@ -1784,6 +1811,8 @@ def publish_historical_buy_resolution(
             use_cache=True,
             dry_run=bool(original["dry_run"]),
             historical_policy=True,
+            source_generation=original["source_generation"],
+            source_session_event_count=original["current"]["session"]["event_count"],
         )
         if (
             rebuilt["source_generation"] != original["source_generation"]
@@ -1812,6 +1841,8 @@ def publish_historical_buy_resolution(
                 dry_run=False,
                 historical_policy=collection_date
                 < now.astimezone(ZoneInfo("Asia/Seoul")).date().isoformat(),
+                source_generation=collection["source_generation"],
+                source_session_event_count=collection["current"]["session"]["event_count"],
             )
             if (
                 audited["source_generation"] != collection["source_generation"]

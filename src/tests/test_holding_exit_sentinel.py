@@ -2533,6 +2533,7 @@ def _historical_resolution_fixture(tmp_path, monkeypatch):
         as_of=semantics["as_of"],
         source_generation=semantics["source_generation"],
         profit_exit_semantics=semantics,
+        current={"session": {"event_count": 0}},
         dry_run=False,
     )
     path = data / "report/holding_exit_sentinel/holding_exit_sentinel_2026-10-09.json"
@@ -3176,3 +3177,35 @@ def test_collection_pid_inventory_bounds_unrelated_receipts(tmp_path, monkeypatc
         sentinel.publish_historical_buy_resolution(
             "2026-10-09", ["21"], now=now, collection_date="2026-10-10"
         )
+
+
+@pytest.mark.parametrize("use_cache", [False, True])
+@pytest.mark.parametrize("damage", [None, "changed", "missing", "count", "generation"])
+def test_historical_reaudit_authenticates_original_prefix_after_late_append(
+    tmp_path, monkeypatch, use_cache, damage
+):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(sentinel, "_profit_exit_bootstrap_binding", lambda *a, **kw: (None, {}))
+    day = "2026-10-12"
+    cutoff = datetime(2026, 10, 12, 9, 5, 12, 123456)
+    rows = [_event(day, "07:59:59", "holding_ai_gate_pass"),
+            _event(day, "09:05:01.123456", "holding_ai_gate_pass")]
+    _write_events(tmp_path, day, rows)
+    original = sentinel.build_holding_exit_sentinel_report(day, as_of=cutoff, use_cache=False)
+    rows.append(_event(day, "09:05:11.999999", "holding_ai_gate_pass"))
+    if damage == "changed": rows[1] = _event(day, "09:05:01.123457", "holding_ai_gate_pass")
+    if damage == "missing": rows.pop(1)
+    _write_events(tmp_path, day, rows)
+    kwargs = dict(as_of=cutoff, use_cache=use_cache,
+                  source_generation="f" * 64 if damage == "generation" else original["source_generation"],
+                  source_session_event_count=2 if damage == "count" else original["current"]["session"]["event_count"])
+    if damage:
+        with pytest.raises(ValueError, match="holding_source_prefix"):
+            sentinel.build_holding_exit_sentinel_report(day, **kwargs)
+    else:
+        rebuilt = sentinel.build_holding_exit_sentinel_report(day, **kwargs)
+        assert rebuilt["profit_exit_semantics"] == original["profit_exit_semantics"]
+        assert rebuilt["current"] == original["current"]
+        current = sentinel.build_holding_exit_sentinel_report(day, as_of=cutoff, use_cache=use_cache)
+        assert current["source_generation"] != original["source_generation"]
+        assert current["current"]["session"]["event_count"] == 2
