@@ -262,3 +262,79 @@ postclose/controller/tuning. Original crontab bytes, source SHA and restoration
 intent are sealed by runtime_release_cron.10/30 PREOPEN07:35/Main07:55 remains
 unchanged. No data deletion occurred in this deployment. Sentinel plaintext
 remains protected until original/historical/rollback reader transfer succeeds.
+
+### Deployment-first hold and native issuer byte closure - 2026-10-29
+
+The user superseded the installed20:30 schedule: retain EOD, suspend all other
+postclose work until deployment, restart and actual-PID policy/health acceptance.
+At20:19 the native release-set/cron locks protected an exact crontab CAS/readback.
+Nine scheduled compute/controller/tuning/archive/cleanup/stop/restore entries
+were commented with an operator hold. The exact original and held bytes, actor
+identities and cancellation intent are retained under
+`data/audit/startup_storage/2026-10-29/deployment-priority-hold/`. The already
+running EOD3215926 and Main3154465 were preserved. The separately identified
+stop-only cron group3220123, still waiting for EOD and containing no Main/EOD,
+received SIGTERM; its original logs and old override receipt were not rewritten.
+Ordinary health checks and next-day startup schedules remain unchanged.
+
+The ordered follow-up is deployment/restart acceptance -> postclose recovery ->
+schedule-lifetime contract repair and verified data deletion -> next trading-day
+Main acceptance. The held rows may be restored only after deployment acceptance
+and source-date/native-stage reconciliation, avoiding duplicate scheduled/manual
+execution. Weakness research remains stopped until explicit resume. A failed
+or partial deployment must not release the hold or manufacture successful stages.
+
+The A1 candidate's isolated policy consumers passed, but parent recheck rejected
+six operating frozen bar sources above the ordinary64MiB input bound. The native
+original issuer had validated them in a subprocess without returning consumed
+byte custody. The existing preparation context captured only local digest
+sessions; calling the active child loader alone still omitted those same six.
+Original failure `6a2ab41d31d24ec4a28e96a7a6a3b5f8` and the unsuccessful closure
+prototype remain immutable. No policy/source bytes, read bound or deadline changed.
+
+The preparation context now sends historical v6 validation through the existing
+original-issuer native byte capsule owner. The original clean code runs full
+source validation; its exact invocation/PID/boot/root/bundle/identity-bound bytes
+are admitted without importing a semantic verdict. Local semantic validation
+still executes. The current lifetime child and its immediate dated parent are
+captured as distinct observed generations and the current pointer is rechecked
+through the isolated last reader. The ordinary runtime validators are retained;
+only preparation's verdict-only subprocess handoff is replaced. No new module,
+permissive fallback, policy criterion, source cap or runtime guard is introduced.
+
+Exact original failed-child reproduction now covers12/12 large sources with
+zero missing digest entries in73.99s. Native capsule invalid-issuer, source,
+identity and seal failures remain rejected by its existing owner. Closure,
+new-generation, pointer/parent/date and complete-consumer profile regressions
+must pass before a clean successor candidate is issued. This evidence is code
+closure only; candidate/selected P5, new PID consumption, first observer/health,
+unassisted startup and economics remain separate acceptance states.
+
+Review also found that the complete successor profile rejected previously
+reviewed historical source pairs and unchanged consumers outside the changed
+member list. The existing pair reader now preserves exact reviewed pairs only
+after the whole current profile passes; its caller still authenticates both
+endpoints. Unknown pairs and missing/dirty/mixed generations remain rejected.
+The source-copy fixture omitted two required shell dispatchers and now copies
+them before Git attestation. Private native-origin fixtures substitute only
+their explicitly reviewed Git endpoint; production profile negatives remain real.
+
+Startup memo cost has a separate owner: report memoization deliberately binds
+the complete Git revision and source delta. Each deployment therefore discards
+previous-generation calculation reuse. Ordered preparation now invokes the
+existing candidate BUY report producer after source-window/summary preparation,
+under the same sentinel lock and existing120s command bound, before Main's150s
+process deadline begins. Native success shape and exact target day are checked.
+This is optional diagnostic cache preparation: its failure is retained, while
+actual-PID source production, observer and first health remain mandatory and
+unchanged. No old report becomes a current-PID success, and changed input/code
+forces recomputation. This replaces no source, semantic validation or guard.
+
+Final targeted checks:656 startup/ordered-transition tests passed and41 native
+issuer/independent/historical-boundary tests passed. A prior broad review was
+interrupted after450 PASS when the remaining preparation source changed; that
+intermediate source generation is not final validation. The earlier incomplete
+fixture/profile failures and supplemental repairs remain in the same evidence
+folder. Exact candidate admission and selected-generation consumption are the
+next closure checks. Large source files, historical loss/nulls and the halted
+weakness-research state remain protected.

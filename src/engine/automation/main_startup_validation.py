@@ -334,6 +334,8 @@ if capture:
     import importlib.util
     from src.engine.infrastructure import validation_digest_session as V
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.scalping import continuous_reversal_policy_v6 as V6
+    from src.engine.scalping import reversal_code_handoff as code_handoff
     from src.engine.scalping import reversal_auxiliary_next_session as A
     from src.engine.automation import pre_submit_delay_partitioned_research as D
     from src.engine.scalping import pre_submit_delay_initial_policy as I
@@ -344,6 +346,15 @@ if capture:
     original_manifest=A.validate_manifest
     original_delay=D.validate
     original_activate=V.DigestSession.activate
+    original_v6_sources=V6._validate_sources
+    def v6_sources(bundle,data_root,*,code_root=None):
+        if code_root is None:
+            return original_v6_sources(bundle,data_root)
+        # Preserve the immutable issuer's full native validation and carry
+        # only its observed bytes through the existing native capsule reader.
+        # A successful subprocess alone does not transfer source custody.
+        return code_handoff._validate_prepared_issuer(bundle,data_root,code_root)
+    V6._validate_sources=v6_sources
     def snapshot_session(session):
         if session.binding.get('role')!='postclose':
             return
@@ -541,7 +552,33 @@ try:
                     print('P5_NATIVE_STOPPED_PREPARATION='+json.dumps(custody,sort_keys=True),file=sys.stderr)
                 if postclose_review:
                     print('P5_NATIVE_STOPPED_POSTCLOSE='+json.dumps(custody,sort_keys=True),file=sys.stderr)
-                runpy.run_module('src.engine.automation.next_preopen_readiness',run_name='__main__')
+                try:
+                    runpy.run_module('src.engine.automation.next_preopen_readiness',run_name='__main__')
+                except SystemExit as finished:
+                    if finished.code not in (None,0):
+                        raise
+                if capture:
+                    # The dated-report reader consumes this exact current child
+                    # only for an immediate same-day lifetime parent. Transfer
+                    # the bytes actually checked by its native current loader.
+                    pointer=Path(DATA_DIR)/'runtime/mechanistic_entry_policy/current.json'
+                    prepared=Path(DATA_DIR)/'runtime/mechanistic_entry_policy/candidates'/('policy_'+sys.argv[-1]+'.json')
+                    before=pointer.read_bytes() if pointer.is_file() else None
+                    current_pointer=json.loads(before) if before is not None else {}
+                    if current_pointer.get('effective_date')==sys.argv[-1] and prepared.is_file():
+                        generation=current_pointer.get('bundle_sha256')
+                        if not isinstance(generation,str) or len(generation)!=64 or any(c not in '0123456789abcdef' for c in generation):
+                            raise ValueError('startup_report_parent_current_generation_invalid')
+                        current=N._read(pointer.parent/'generations'/(generation+'.json'))
+                        activation=(current.get('continuous_reversal') or {}).get('registration_activation') or {}
+                        dated=N._read(prepared)
+                        if (activation.get('schema')=='main_intraday_entry_lifetime_transition_v1'
+                                and activation.get('parent_bundle_sha256')==dated.get('bundle_sha256')):
+                            checked=N.load_effective(data_root=Path(DATA_DIR),target_date=sys.argv[-1])
+                            if (not checked or checked.get('bundle_sha256')!=generation or pointer.read_bytes()!=before):
+                                raise ValueError('startup_report_parent_current_changed')
+                            closure['bundles'][generation]=dict(target_date=checked['target_date'],family_sha256=checked['continuous_reversal']['family_sha256'])
+                            closure['report_parent_current']=dict(pointer_path=str(pointer),pointer_sha256=hashlib.sha256(before).hexdigest(),bundle_sha256=generation,parent_bundle_sha256=dated['bundle_sha256'],target_date=sys.argv[-1])
         finally:
             if capture:
                 snapshot_session(session)

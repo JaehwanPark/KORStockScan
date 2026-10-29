@@ -1339,6 +1339,8 @@ def test_parent_independently_rejects_malformed_or_unbound_child_semantics(defec
         "preserved",
         "prepared",
         "prepared_unbounded",
+        "issuer",
+        "issuer_rejected",
     ],
 )
 def test_native_cli_closure_is_collected_from_executed_native_boundaries(
@@ -1348,6 +1350,12 @@ def test_native_cli_closure_is_collected_from_executed_native_boundaries(
     package = code / "src/engine/scalping"
     package.mkdir()
     (package / "__init__.py").touch()
+    (package / "continuous_reversal_policy_v6.py").write_text(
+        "def _validate_sources(bundle,data_root,*,code_root=None): return bundle\n"
+    )
+    (package / "reversal_code_handoff.py").write_text(
+        "def _validate_prepared_issuer(bundle,data_root,origin): return bundle\n"
+    )
     (
         code / "src/engine/automation/pre_submit_delay_partitioned_research.py"
     ).write_text("def validate(*a,**k): return None\n")
@@ -1407,6 +1415,26 @@ def validate_manifest(data_root,manifest,bundle,**kwargs):
         calls = calls.replace(
             "b=N.load(data_root=DATA_DIR,target_date=target_date)",
             'b=__import__("json").loads((DATA_DIR/"bundle.json").read_text()); N.validate(b,target_date=target_date)',
+        )
+    if boundary in {"issuer", "issuer_rejected"}:
+        (package / "continuous_reversal_policy_v6.py").write_text(
+            "def _validate_sources(bundle,data_root,*,code_root=None):\n"
+            "    if code_root is not None: raise AssertionError('custody discarded')\n"
+            "    return bundle\n"
+        )
+        (package / "reversal_code_handoff.py").write_text(
+            "from src.engine.infrastructure.validation_digest_session import ACTIVE\n"
+            "from pathlib import Path\n"
+            "def _validate_prepared_issuer(bundle,data_root,origin):\n"
+            "    assert ACTIVE.get().binding['role']=='postclose'\n"
+            "    assert Path(origin)==Path(data_root)/'original-issuer'\n"
+            + ("    raise ValueError('issuer_source_rejected')\n"
+               if boundary == "issuer_rejected" else "    return bundle\n")
+        )
+        calls += (
+            "    from src.engine.scalping import continuous_reversal_policy_v6 as V6\n"
+            "    V6._validate_sources(b,DATA_DIR,code_root=DATA_DIR/'original-issuer')\n"
+            "    V6._validate_sources(b,DATA_DIR)\n"
         )
     if boundary in {"prepared", "prepared_unbounded"}:
         prepared = data / "runtime/policy_bootstrap/prepared" / DAY / "generation"
@@ -1542,7 +1570,7 @@ def verify_bootstrap(day,write=True):return dict(status='pass',findings=[],targe
     assert marker in text
     cli.write_text(text.replace(marker, calls + marker, 1))
     run_id = "1" * 32
-    if boundary == "prepared_unbounded":
+    if boundary in {"prepared_unbounded", "issuer_rejected"}:
         with pytest.raises(ValueError, match="startup_native_preparation_failed"):
             validation._native_preparation_check(code, DAY, "2026-10-16", run_id)
         return

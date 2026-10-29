@@ -1251,7 +1251,13 @@ class Deployment:
         if result.returncode:
             raise ValueError("deployment_validation_failed:" + module)
         value = json.loads(result.stdout)
-        if value.get("status") != "pass":
+        expected_status = (
+            "success" if module == "src.engine.buy_funnel_sentinel" else "pass"
+        )
+        if value.get("status") != expected_status or (
+            module == "src.engine.buy_funnel_sentinel"
+            and value.get("target_date") != self.day
+        ):
             raise ValueError("deployment_validation_not_pass:" + module)
         return value
 
@@ -1994,6 +2000,22 @@ class Deployment:
 
             check_pending_migration(self.workspace / "data", self.day)
             _, summary = buy.load_pipeline_event_summaries(self.day)
+            # Populate exact-code, exact-input report memoization before Main's
+            # process-start deadline begins. This is not current-PID evidence:
+            # the new PID still runs both native producers and their checks.
+            try:
+                report_preparation = self.run_json(
+                    self.candidate,
+                    "src.engine.buy_funnel_sentinel",
+                    "--date", self.day, "--use-cache", "--use-summary",
+                )
+            except (ValueError, subprocess.SubprocessError) as exc:
+                # Cache preparation is diagnostic, not policy admission. Keep
+                # the failure visible; the new PID's producer/health owns it.
+                report_preparation = dict(
+                    status="failed", reason=str(exc), target_date=self.day,
+                    runtime_effect=False, actual_pid_consumed=False,
+                )
         from src.engine.automation import prepared_policy_code_handoff as code
 
         handoffs = code.issue_selected(
@@ -2004,6 +2026,7 @@ class Deployment:
             "prepared",
             sentinel_source_window=source_window,
             sentinel_summary=summary,
+            sentinel_report_preparation=report_preparation,
             native_prepared_code_handoffs=handoffs,
         )
 

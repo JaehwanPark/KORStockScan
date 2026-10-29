@@ -1095,3 +1095,23 @@ predecessor profile. A populated scanner cohort is a population observation,
 not a provenance failure; invalid source identities and clocks retain strict
 failure. Optional dated ADD source scope remains absent in old policy receipts
 and cannot be inferred from code deployment or a report-only observation.
+
+### Native startup preparation byte custody and diagnostic report memo
+
+The existing P5 preparation context carries historical v6 source validation
+through the original-issuer byte capsule owner. Only digests actually consumed
+by a full native original reader cross the subprocess boundary; issuer/root,
+bundle, invocation, boot and current file identities remain mandatory. Local
+semantic validation still executes. A current lifetime child used to verify its
+immediate dated report parent is an independently observed generation; recheck
+its current pointer through the last preparation reader. Keep the ordinary
+small-source bound and original validation deadlines unchanged.
+
+The ordered transition prepares the existing sentinel source window and
+incremental summary under its sentinel lock, then invokes the candidate's native
+BUY report producer before Main starts. This populates exact-code/exact-input
+calculation memoization; it supplies no new-PID or semantic-coverage verdict.
+Record optional report preparation failure without making report-only work a
+new policy admission gate. After start, the actual PID must still run the native
+source producer and observer within the original process-start deadline and
+complete its first health sweep. Changed inputs or code cannot reuse the memo.

@@ -49,6 +49,12 @@ def releases(tmp_path_factory):
     base = tmp_path_factory.mktemp("native-code-context")
     root, selected = base / "candidate", base / "selected"
     _source_copy(root)
+    # Independent preparation profiles include their real shell dispatchers.
+    # A Python-only copy cannot exercise a complete candidate generation.
+    for relative in ("src/run_bot.sh", "deploy/run_threshold_cycle_postclose.sh"):
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((ROOT / relative).read_bytes())
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     original_commit = _commit(root, "genuine source origin")
     _git(root, "worktree", "add", "--detach", str(selected), original_commit)
@@ -1443,6 +1449,12 @@ def test_nested_native_inventories_keep_distinct_git_origins(
     )
     commit = _commit(r["root"], "distinct current native source generation")
     new = C._sha(source)
+    # This test reviews one private fixture edit, not a production successor.
+    # Keep the complete fixture inventory while substituting that exact Git
+    # endpoint; real missing/dirty/mixed profile tests use the unchanged table.
+    monkeypatch.setattr(C, "REVIEWED_ACTIVE_REPORT_CLOSURE_PROFILE", {
+        **C.REVIEWED_ACTIVE_REPORT_CLOSURE_PROFILE, owner: new,
+    })
     parent = fixture["bundle"]
     bundle = dict(
         bundle_sha256="d" * 64,
@@ -2121,6 +2133,39 @@ def test_reviewed_sor_scope_keeps_original_code_pin_and_rejects_other_bytes():
     C._pairs({name: old}, {name: current})
     with pytest.raises(ValueError, match="unreviewed"):
         C._pairs({name: old}, {name: "0" * 64})
+
+
+@pytest.mark.parametrize("fault", [None, "pointer", "parent", "target", "unobserved", "path"])
+def test_report_parent_closure_binds_current_pointer_and_observed_child(
+    request_fixture, monkeypatch, fault
+):
+    f = request_fixture
+    main = _main_fixture(f, monkeypatch)
+    proof = main["proof"]
+    data = Path(f["request"]["data_root"])
+    pointer = data / "runtime/mechanistic_entry_policy/current.json"
+    child = "d" * 64
+    pointer.write_text(json.dumps(dict(effective_date=DAY, bundle_sha256=child)))
+    proof["closure"]["bundles"][child] = dict(target_date=DAY, family_sha256="e" * 64)
+    observed = dict(pointer_path=str(pointer), pointer_sha256=C._sha(pointer),
+                    target_date=DAY, bundle_sha256=child,
+                    parent_bundle_sha256=proof["policy_sha256"])
+    proof["closure"]["report_parent_current"] = observed
+    if fault == "pointer":
+        pointer.write_text(pointer.read_text() + "\n")
+    elif fault == "parent":
+        observed["parent_bundle_sha256"] = "f" * 64
+    elif fault == "target":
+        observed["target_date"] = "2026-10-20"
+    elif fault == "unobserved":
+        del proof["closure"]["bundles"][child]
+    elif fault == "path":
+        observed["pointer_path"] = str(data / "alternate.json")
+    _write_request(f, f["request"])
+    result = _child(f, MAIN_CHILD_SETUP + "\nassert_no_forbidden_attempts()\n")
+    assert (result.returncode == 0) is (fault is None), result.stderr
+    if fault:
+        assert "startup_report_parent_current_unbound" in result.stderr
 
 
 @pytest.mark.parametrize("fault", [None, "missing", "outside", "signature"])
@@ -3835,7 +3880,7 @@ def test_scoped_entry_profiles_cover_every_changed_native_contract_member():
         old = subprocess.check_output(["git", "show", f"{baseline}:{relative}"], cwd=ROOT)
         if hashlib.sha256(old).hexdigest() != hashlib.sha256((ROOT / relative).read_bytes()).hexdigest():
             changed.add(relative)
-    assert changed <= set(C.REVIEWED_DATED_REPORT_PARENT_CHANGED)
+    assert changed <= set(C.REVIEWED_ACTIVE_REPORT_CLOSURE_CHANGED)
     preparation = "src/engine/infrastructure/startup_validation_code_context.py"
     report_paths = {str((ROOT / "src/engine" / name).resolve().relative_to(ROOT)) for names in report.COMPONENTS.values() for name in (*names, *report.COMMON_CODE_COMPONENTS)}
     report_changed = set()
@@ -3851,9 +3896,9 @@ def test_scoped_entry_profiles_cover_every_changed_native_contract_member():
                    and not n.startswith("src/tests/")
                    and not n.endswith(("intraday_release_handoff.py", "startup_validation_code_context.py"))}
     assert expected <= all_changed | {preparation}
-    assert all_changed | {preparation} == set(H.REVIEWED_DATED_REPORT_PARENT_CHANGED)
+    assert all_changed | {preparation} == set(H.REVIEWED_ACTIVE_REPORT_CLOSURE_CHANGED)
     for relative in expected:
-        assert hashlib.sha256((ROOT / relative).read_bytes()).hexdigest() == H.REVIEWED_DATED_REPORT_PARENT_CHANGED[relative]
+        assert hashlib.sha256((ROOT / relative).read_bytes()).hexdigest() == H.REVIEWED_ACTIVE_REPORT_CLOSURE_CHANGED[relative]
 
 
 def test_issued_entry_member_is_bound_without_rewriting_old_policy_inventory(monkeypatch):

@@ -2424,6 +2424,28 @@ def test_run_json_uses_predecessor_session_only_when_compatible_and_keeps_timeou
     assert options["timeout"] == 17 and options["cwd"] == previous
 
 
+@pytest.mark.parametrize("status,day,accepted", [
+    ("success", "2026-10-29", True),
+    ("pass", "2026-10-29", False),
+    ("failed", "2026-10-29", False),
+    ("success", "2026-10-28", False),
+])
+def test_report_preparation_uses_exact_native_return_shape_and_day(
+    tmp_path, monkeypatch, status, day, accepted
+):
+    d = object.__new__(D.Deployment)
+    d.candidate = tmp_path
+    d.day = "2026-10-29"
+    payload = dict(status=status, target_date=day)
+    monkeypatch.setattr(D.subprocess, "run", lambda argv, **kw:
+        subprocess.CompletedProcess(argv, 0, json.dumps(payload), ""))
+    if accepted:
+        assert d.run_json(tmp_path, "src.engine.buy_funnel_sentinel") == payload
+    else:
+        with pytest.raises(ValueError, match="deployment_validation_not_pass"):
+            d.run_json(tmp_path, "src.engine.buy_funnel_sentinel")
+
+
 @pytest.mark.parametrize(
     "damage",
     [
@@ -2920,7 +2942,7 @@ def test_report_preflight_reuses_native_currentness_and_preserves_economic_gaps(
     assert seen == ([] if fault == "code" else [(tmp_path / "candidate", source)])
 
 
-@pytest.mark.parametrize("failure", [False, True, "handoff"])
+@pytest.mark.parametrize("failure", [False, True, "handoff", "report"])
 def test_prepare_binds_native_source_window_before_start(
     monkeypatch, tmp_path, failure
 ):
@@ -2936,7 +2958,15 @@ def test_prepare_binds_native_source_window_before_start(
     driver.state = dict(candidate_report_currentness=_report_currentness_fixture(driver.workspace, driver.candidate, driver.day))
     calls = []
     driver.assert_hold = lambda: calls.append("hold")
-    driver.run_json = lambda root, module, *args: calls.append(module)
+    def run(root, module, *args):
+        calls.append(module)
+        if module == "src.engine.buy_funnel_sentinel":
+            assert root == driver.candidate
+            assert args == ("--date", driver.day, "--use-cache", "--use-summary")
+            if failure == "report":
+                raise ValueError("deployment_validation_failed:" + module)
+            return {"status": "success", "target_date": driver.day}
+    driver.run_json = run
     driver.checkpoint = lambda phase, **kw: calls.append((phase, kw))
     proof = {"schema": "sentinel_source_window_preparation_v1", "runtime_effect": False}
 
@@ -2964,7 +2994,7 @@ def test_prepare_binds_native_source_window_before_start(
 
     def issue(data, day, *, release_root):
         assert data == tmp_path / "data" and day == driver.day
-        assert release_root == driver.candidate and calls[-1] == "native_summary"
+        assert release_root == driver.candidate and calls[-1] == "src.engine.buy_funnel_sentinel"
         calls.append("prepared_code_handoffs")
         if failure == "handoff":
             raise ValueError("prepared_code_source_changed")
@@ -2975,6 +3005,13 @@ def test_prepare_binds_native_source_window_before_start(
         with pytest.raises(ValueError, match="source_window_cache_unverified"):
             driver.prepare()
         assert calls[-1] == "source_window"
+    elif failure == "report":
+        driver.prepare()
+        phase, proof = calls[-1]
+        assert phase == "prepared"
+        assert proof["sentinel_report_preparation"]["status"] == "failed"
+        assert "deployment_validation_failed" in proof["sentinel_report_preparation"]["reason"]
+        assert proof["sentinel_report_preparation"]["actual_pid_consumed"] is False
     elif failure == "handoff":
         with pytest.raises(ValueError, match="prepared_code_source_changed"):
             driver.prepare()
@@ -2986,6 +3023,7 @@ def test_prepare_binds_native_source_window_before_start(
             {
                 "sentinel_source_window": proof,
                 "sentinel_summary": {"status": "ok"},
+                "sentinel_report_preparation": {"status": "success", "target_date": driver.day},
                 "native_prepared_code_handoffs": handoffs,
             },
         )
