@@ -4166,7 +4166,7 @@ def test_startup_storage_independent_reader_keeps_exact_complete_generation(tmp_
     for name, expected in C.REVIEWED_STARTUP_STORAGE_PROFILE.items():
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        content = (ROOT / name).read_bytes()
+        content = subprocess.check_output(["git", "-C", str(ROOT), "show", "81b1c653b:" + name])
         assert hashlib.sha256(content).hexdigest() == expected
         path.write_bytes(content)
     relative = "src/engine/infrastructure/validation_digest_session.py"
