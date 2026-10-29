@@ -21,6 +21,80 @@ LIFETIME_AUTHORITY = "APPROVED_OPERATOR_SCOPED_ENTRY_LIFETIME_20261029"
 LIFETIME_OPERATOR_MAX_SEC = 9.6
 
 
+def lifetime_parent_origin(parent):
+    """Keep the original producer, independently of the later active pointer."""
+    family = parent["continuous_reversal"]
+    refresh = family.get("code_refresh") or {}
+    origin = family.get("release_root") or refresh.get("activation_parent_origin_root")
+    if origin is None:
+        return None
+    commit = family["release_commit"]
+    if (not isinstance(origin, str) or not Path(origin).is_absolute()
+            or not re.fullmatch(r"[0-9a-f]{40}", str(commit))
+            or not family.get("release_root")
+            and refresh.get("activation_parent_origin_commit") != commit):
+        raise ValueError("lifetime_parent_origin_invalid")
+    return dict(root=origin, commit=commit)
+
+
+def validate_lifetime_auxiliary(family, parent, data_root):
+    """Reconcile the immutable as-of auxiliary sources, never a later pointer."""
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.scalping import reversal_auxiliary_registry as G
+    from src.engine.scalping import continuous_reversal_policy_v6 as V
+
+    validate_lifetime_parent(family, parent)
+    a = validate_lifetime_activation(family)
+    snapshot = a.get("auxiliary_handoff") or {}
+    expected = {}
+    for key, route in V.scopes():
+        cell = parent["continuous_reversal"]["auxiliary_cells"][key]["routes"][route]
+        payload = cell["payload"]
+        expected[V.scope_id(key, route)] = G.definition(
+            payload["arm"], input_version=payload["binding"]["input_version"]
+        )["registry_sha256"]
+    expected.update(I.inherited(data_root, parent))
+    overlay = None
+    reference = snapshot.get("overlay_generation")
+    if reference is not None:
+        path = I.root(data_root) / "generations" / (reference["generation"] + ".json")
+        if P.file_hash(path) != reference.get("sha256"):
+            raise ValueError("lifetime_auxiliary_overlay_changed")
+        overlay = I.read(path)
+        if overlay.get("artifact_content_sha256") != reference["generation"]:
+            raise ValueError("lifetime_auxiliary_overlay_changed")
+        I.validate_record(data_root, overlay, parent, check_definitions=True)
+        expected.update(overlay["bindings"])
+    independent = sorted(I.independent_scopes(data_root, parent, overlay))
+    if (snapshot.get("bindings") != expected
+            or snapshot.get("independent_scopes") != independent):
+        raise ValueError("lifetime_auxiliary_parent_changed")
+    source = N.root(Path(data_root)) / "sources" / (
+        "reversal-" + family["auxiliary_report_sha256"] + ".json")
+    report = I.read(source)
+    if (report.get("auxiliary_registry_bindings") != expected
+            or report.get("auxiliary_independent_scopes") != independent
+            or report.get("auxiliary_reader_code_hashes") != snapshot.get("reader_hashes")):
+        raise ValueError("lifetime_auxiliary_handoff_changed")
+    for ident in set(expected.values()):
+        G.load(data_root, ident)
+    return snapshot
+
+
+def validate_lifetime_current_auxiliary(parent, activation, data_root, day):
+    """Machine publisher lock also serializes the native auxiliary publisher."""
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+
+    snapshot = activation.get("auxiliary_handoff") or {}
+    overlay = I.current(data_root, parent, day=day)
+    observed = overlay["artifact_content_sha256"] if overlay else None
+    expected = (snapshot.get("overlay_generation") or {}).get("generation")
+    if (observed != expected
+            or I.effective_bindings(data_root, parent, day=day) != snapshot.get("bindings")
+            or sorted(I.independent_scopes(data_root, parent, overlay)) != snapshot.get("independent_scopes")):
+        raise ValueError("lifetime_auxiliary_parent_advanced")
+
+
 def validate_lifetime_activation(family):
     """Validate the operator's explicit per-scope transition envelope."""
     from src.engine.scalping.entry_deadline import validate_lifetime_policy
@@ -75,7 +149,8 @@ def validate_lifetime_parent(family, parent):
         raise ValueError("lifetime_intraday_parent_changed")
     previous = parent["continuous_reversal"]
     if (
-        family["operating_manifest"]
+        a.get("parent_validation_origin") != lifetime_parent_origin(parent)
+        or family["operating_manifest"]
         != V.detector_manifest(parent, effective_date=family["effective_date"])
         or previous["auxiliary_cells"] != family["auxiliary_cells"]
         or previous["source_date"] != family["source_date"]
@@ -135,6 +210,19 @@ def stage_lifetime(
     if parent.get("bundle_sha256") != expected_parent_bundle_sha256:
         raise ValueError("lifetime_intraday_parent_cas_failed")
     previous = parent["continuous_reversal"]
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+
+    overlay = I.current(data_root, parent, day=day)
+    auxiliary_handoff = dict(
+        bindings=I.effective_bindings(data_root, parent, day=day),
+        independent_scopes=sorted(I.independent_scopes(data_root, parent, overlay)),
+        reader_hashes=I.code_hashes(),
+        overlay_generation=(dict(
+            generation=overlay["artifact_content_sha256"],
+            sha256=P.file_hash(I.root(data_root) / "generations" /
+                              (overlay["artifact_content_sha256"] + ".json")),
+        ) if overlay else None),
+    )
     policies = {sid: validate_lifetime_policy(p) for sid, p in scope_lifetimes.items()}
     if any(p["schema"] != "entry_signal_lifetime_policy_v2" for p in policies.values()):
         raise ValueError("lifetime_intraday_branch_policy_required")
@@ -188,6 +276,8 @@ def stage_lifetime(
             schema="main_intraday_entry_lifetime_transition_v1",
             authority=confirm,
             parent_bundle_sha256=parent["bundle_sha256"],
+            parent_validation_origin=lifetime_parent_origin(parent),
+            auxiliary_handoff=auxiliary_handoff,
             selection_parent_bundle_sha256=previous["parent_bundle_sha256"],
             scope_lifetimes=policies,
             source_date=previous["source_date"],
@@ -236,6 +326,9 @@ def stage_lifetime(
             common,
             cells=list(auxiliary_cells.values()),
             machine_report_sha256=machine["artifact_content_sha256"],
+            auxiliary_registry_bindings=auxiliary_handoff["bindings"],
+            auxiliary_independent_scopes=auxiliary_handoff["independent_scopes"],
+            auxiliary_reader_code_hashes=auxiliary_handoff["reader_hashes"],
         )
     )
     return V.stage(

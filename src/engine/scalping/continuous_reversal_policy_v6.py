@@ -594,7 +594,22 @@ def _validate_sources(bundle, data_root, *, code_root=None):
         )
         parent = N._read(parent_path)
         N.validate(parent, target_date=f["effective_date"])
-        validate_sources(parent, data_root)
+        origin = activation.get("parent_validation_origin")
+        parent_family = parent["continuous_reversal"]
+        current = {Path(m.__file__).name: file_hash(m.__file__) for m in contract_modules()}
+        native_current = {Path(m.__file__).name: file_hash(m.__file__)
+                          for m in V4.contract_modules()}
+        native_parent = parent_family.get("native_parent_bundle", parent)
+        original_code = (
+            parent_family["contract_file_sha256"] == current
+            and native_parent["continuous_reversal"]["contract_file_sha256"] == native_current
+        )
+        if not original_code and origin is None:
+            raise ValueError("lifetime_parent_original_reader_missing")
+        if origin is not None and origin.get("commit") != parent_family["release_commit"]:
+            raise ValueError("lifetime_parent_original_reader_changed")
+        validate_sources(parent, data_root,
+                         code_root=Path(origin["root"]) if not original_code else None)
         validate_lifetime_parent(f, parent)
     N.validate(
         f["native_parent_bundle"], target_date=f["native_parent_bundle"]["target_date"]
@@ -619,6 +634,10 @@ def _validate_sources(bundle, data_root, *, code_root=None):
 
         if not verify_validation_main_code(bundle, code_paths, actual_code):
             raise ValueError("v6_contract_code_changed:" + changed[0])
+    if activation.get("schema") == "main_intraday_entry_lifetime_transition_v1":
+        from src.engine.scalping.reversal_extended_intraday import validate_lifetime_auxiliary
+
+        validate_lifetime_auxiliary(f, parent, data_root)
     for name in ("machine", "auxiliary"):
         p = (
             N.root(Path(data_root))
@@ -700,6 +719,7 @@ def _behavioral_family(family):
         "contract_file_sha256",
         "execution_code_sha256",
         "release_commit",
+        "release_root",
         "family_sha256",
         "machine_report_sha256",
         "auxiliary_report_sha256",
@@ -789,6 +809,7 @@ def _write_refreshed_bundle(
         Path(m.__file__).name: file_hash(m.__file__) for m in modules
     }
     f["release_commit"] = release_commit
+    f["release_root"] = str(Path(__file__).resolve().parents[3])
     if f["schema"] == SCHEMA:
         f["execution_code_sha256"] = digest(f["contract_file_sha256"])
         for key, route in scopes():
@@ -1327,6 +1348,10 @@ def stage(
                 ).load_offline_parent(data_root, publication)
         if not parent or machine["parent_bundle_sha256"] != parent["bundle_sha256"]:
             raise ValueError("v6_parent_cas_failed")
+        if (registration_activation or {}).get("schema") == "main_intraday_entry_lifetime_transition_v1":
+            from src.engine.scalping.reversal_extended_intraday import validate_lifetime_current_auxiliary
+
+            validate_lifetime_current_auxiliary(parent, registration_activation, data_root, target_date)
         for report in (machine, auxiliary):
             if (
                 report["artifact_content_sha256"]
@@ -1363,7 +1388,9 @@ def stage(
             native = _write_refreshed_bundle(
                 native, data_root, release_commit=release_commit, proof=None
             )
-        elif effective_mode == "next_session":
+        elif (effective_mode == "next_session" or
+              (registration_activation or {}).get("schema") ==
+              "main_intraday_entry_lifetime_transition_v1"):
             native = _carry_native_parent(
                 parent, data_root, release_commit=release_commit
             )
@@ -1384,6 +1411,7 @@ def stage(
                 else "cumulative_raw_win_fraction"
             ),
             release_commit=release_commit,
+            release_root=str(Path(__file__).resolve().parents[3]),
             parent_bundle_sha256=parent["bundle_sha256"],
             native_parent_bundle=native,
             operating_manifest=machine["operating_manifest"],
@@ -1581,6 +1609,10 @@ def activate(
             return dict(status="already_active", bundle_sha256=bundle["bundle_sha256"])
         if not parent or parent["bundle_sha256"] != f["parent_bundle_sha256"]:
             raise ValueError("v6_activation_parent_cas_failed")
+        if activation.get("schema") == "main_intraday_entry_lifetime_transition_v1":
+            from src.engine.scalping.reversal_extended_intraday import validate_lifetime_current_auxiliary
+
+            validate_lifetime_current_auxiliary(parent, activation, data_root, target_date)
         receipt = dict(
             schema="continuous_reversal_current_v6",
             bundle_sha256=bundle["bundle_sha256"],

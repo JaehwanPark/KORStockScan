@@ -391,6 +391,38 @@ def test_v6_stage_keeps_old_versions_and_adds_exact_thirteen(
         N.validate(issued_lifetime, target_date="2026-10-12")
         V.validate_sources(issued_lifetime, root)
         intraday.validate_lifetime_parent(issued_lifetime["continuous_reversal"], new)
+        from src.engine.scalping import reversal_auxiliary_intraday as auxiliary
+
+        expected_bindings = auxiliary.effective_bindings(root, new, day="2026-10-12")
+        auxiliary_path = N.root(root) / "sources" / (
+            "reversal-" + issued_lifetime["continuous_reversal"]["auxiliary_report_sha256"] + ".json")
+        assert N._read(auxiliary_path)["auxiliary_registry_bindings"] == expected_bindings
+        assert auxiliary.effective_bindings(root, issued_lifetime, day="2026-10-12") == expected_bindings
+        # Parent custody is historical after the authorized pointer advances.
+        pointer = N.root(root) / "current.json"
+        pointer_before = pointer.read_bytes() if pointer.exists() else None
+        N._atomic_write_json(pointer, {"bundle_sha256": issued_lifetime["bundle_sha256"]})
+        try:
+            V.validate_sources(issued_lifetime, root)
+        finally:
+            if pointer_before is None:
+                pointer.unlink()
+            else:
+                pointer.write_bytes(pointer_before)
+        damaged = copy.deepcopy(issued_lifetime["continuous_reversal"])
+        activation = damaged["registration_activation"]
+        activation["auxiliary_handoff"]["bindings"][sid] = "0" * 64
+        damaged["registration_activation"] = P.seal(activation)
+        with pytest.raises(ValueError, match="auxiliary_parent_changed"):
+            intraday.validate_lifetime_auxiliary(damaged, new, root)
+        with pytest.raises(ValueError, match="auxiliary_parent_advanced"):
+            intraday.validate_lifetime_current_auxiliary(new, activation, root, "2026-10-12")
+        damaged = copy.deepcopy(issued_lifetime["continuous_reversal"])
+        activation = damaged["registration_activation"]
+        activation["parent_validation_origin"]["commit"] = "b" * 40
+        damaged["registration_activation"] = P.seal(activation)
+        with pytest.raises(ValueError, match="parent_behavior_changed"):
+            intraday.validate_lifetime_parent(damaged, new)
         for expected, authority in [
             (None, intraday.LIFETIME_AUTHORITY),
             ("0" * 64, intraday.LIFETIME_AUTHORITY),

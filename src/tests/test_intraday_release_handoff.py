@@ -5362,7 +5362,7 @@ def test_pre_submit_handoff_rejects_unreviewed_dependency(tmp_path, family, depe
     )
 
 
-@pytest.mark.parametrize("dependency", sorted(handoff.REVIEWED_STARTUP_SCOPED_AUX_CHANGED))
+@pytest.mark.parametrize("dependency", sorted(handoff.REVIEWED_LIFETIME_SOURCE_PHASE_CHANGED))
 @pytest.mark.parametrize("fault", ["missing", "dirty", "committed_change"])
 def test_scoped_entry_handoff_rejects_each_missing_dirty_or_mixed_consumer(tmp_path, dependency, fault):
     test_entry_cost_handoff_keeps_exact_complete_generation(
@@ -5432,7 +5432,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_STARTUP_SCOPED_AUX_PROFILE,
+        "current": handoff.REVIEWED_LIFETIME_SOURCE_PHASE_PROFILE,
         "probe_avg_consumed": handoff.REVIEWED_PROBE_AVG_PROFILE,
         "startup_storage": handoff.REVIEWED_STARTUP_STORAGE_PROFILE,
         "holding_history_consumed": handoff.REVIEWED_HOLDING_HISTORY_PREDECESSOR_PROFILE,

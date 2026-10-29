@@ -176,3 +176,40 @@ loader diagnostic outside candidate admission correctly failed
 `active_policy_code_reader_root_changed`; no valid policy data was changed.
 The first live startup and source-producer deadline remain the closure test for
 the startup repair, with measured timing and original failure evidence retained.
+
+
+### Lifetime policy parent phase and auxiliary custody repair - 2026-10-29
+
+The exact active parent fa20ad8d51a5c4ddfdaf0395b988d2978b3955f58f28ac5eb25f7a2203c79401
+has an original ce358bce0 reader. Its native full source validation passed in
+8.79 seconds. The lifetime publisher previously omitted effective auxiliary
+registry bindings in 128/128 scopes, and its child validation tried to verify
+that historical parent against a later active pointer/code context. Neither
+failure permits changing valid parent data or accepting an old PASS.
+
+The existing lifetime owner now snapshots the effective auxiliary bindings,
+independent scopes and immutable overlay generation. The native machine
+publisher lock rechecks that snapshot at both stage and activation; changed
+auxiliary pointers fail closed. Historical child readers validate the immutable
+as-of sources rather than the later current pointer. The declared original
+parent reader authenticates source custody, and the existing native code-only
+parent handoff carries execution identity into the issued child. No numerical
+auxiliary values, optional FIRST_UPTICK input, orders or hard guards change.
+The issued lifetime limits remain an explicitly authorized initial budget, not
+a claim of economic superiority or observed signal lifetime.
+
+Replacement disposition: lifetime parent validation and auxiliary report
+production are repaired in their existing owners; no wrapper or new module is
+added. The previous exact startup/scoped/aftermarket profiles remain historical
+readers; the final phase profile covers the complete same consumer inventory
+for deployment and independent preparation. Existing quantity and trailing
+calculation/source proofs retain their unchanged fingerprints. Only the
+changed auxiliary report capability requires a new native fixture. Original
+failed P5 and compatibility repair receipts remain preserved under
+`data/audit/startup_storage/2026-10-29/final-aftermarket/`.
+
+Validation: lifetime stage/consumer, pointer advancement, altered binding and
+altered parent origin regressions passed (207 tests); complete independent
+current/historical profile intake and changed-generation negatives are checked
+separately. Native live activation, actual PID consumption, first health,
+tonight's stop/cleanup and natural route acceptance remain separate states.
