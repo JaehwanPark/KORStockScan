@@ -13294,7 +13294,8 @@ REVIEWED_ENTRY_COST_PAIRS = {**REVIEWED_ENTRY_COST_PAIRS, **{
 # Reviewed orchestration and original compressed-source custody successor.
 # Policy values, source generations, hard guards and all issued profiles remain.
 REVIEWED_PREOPEN_VALIDATION_HASHES = {
-    "src/engine/infrastructure/startup_validation_code_context.py": "cd7d5fda94a5757fe02ff4a8910d742a3b0999c26386dd681539623206419352",
+    "src/engine/automation/ordered_intraday_deploy.py": "76097fa94f4eb66f6efc7f7ba3b5fc6b697672a072fb21919d80af9ee7b08a85",
+    "src/engine/infrastructure/startup_validation_code_context.py": "aa6237699df227d261790190aa227a8d538f617c3e9ed54a2f6700f8eec73bde",
     "src/engine/automation/main_stop_postclose.py": "866997e7d0a376f6cb2b8cdcba0d8324ce9ffd5af19eafa080335364f9ecbf0d",
     "src/engine/automation/next_preopen_readiness.py": "c89c5869690c7a17c2f3b631a5a6cb2ca0319b11e4a04b426b09e4a5bd128895",
     "src/engine/automation/postclose_done_controller.py": "58df8d4a53c042b20bce02fe0408ca40a0429ee350389f1c9507f0c3947fef18",
@@ -13303,6 +13304,7 @@ REVIEWED_PREOPEN_VALIDATION_HASHES = {
     "src/run_bot.sh": "0c1f6378db03d3cc71bd65f9d8c884ee02479ef1af0326d2b061bde3c1c381a6"
 }
 REVIEWED_PREOPEN_VALIDATION_ORIGINS = {
+    "src/engine/automation/ordered_intraday_deploy.py": "779332fbb54665bef40ab39b993c8fcdb3aeb2850ac043b4fd3f668e162162f9",
     "src/engine/infrastructure/startup_validation_code_context.py": "8209e5c78f08f178c04800f5d89581fb88dbf181459f4889358d59039a752bb1",
     "src/engine/automation/main_stop_postclose.py": "a2ea988c1bc93962f021d3f23dab2adbc67521e5fa0bfe41dc6fd1a5e9c5946e",
     "src/engine/automation/next_preopen_readiness.py": "ba72842e94099ffbf36fe7b04f41ffb823bf6690d047a6364858d5ac7a308bcc",

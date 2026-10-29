@@ -2113,6 +2113,41 @@ def test_publish_preserves_concurrent_work_checklist(driver, monkeypatch):
     assert d.selection.read_bytes() == d.published
 
 
+@pytest.mark.parametrize("preserve", [True, False])
+def test_preflight_reads_git_checklist_only_when_replacing_it(driver, monkeypatch, preserve):
+    """An unversioned working checklist is valid only in preservation mode."""
+    d = driver
+    _failed_hold_fixture(d, monkeypatch)
+    calls = _mock_adoption_preflight(d, monkeypatch)
+    d.adopt_failed_hold = False
+    d.hold.unlink()
+    d.preserve_editable_checklist = preserve
+    checklist = d.workspace / "docs/checklists" / (d.day + "-stage2-todo-checklist.md")
+    before = checklist.read_bytes()
+
+    def native(root, module, *args, **kwargs):
+        calls.append(module)
+        assert not d.hold.exists()
+        return {"status": "pass", "basis": "intraday_policy_preserving_handoff"}
+
+    d.run_json = native
+
+    def unavailable(*args, **kwargs):
+        raise subprocess.CalledProcessError(128, args[0])
+
+    monkeypatch.setattr(D.subprocess, "check_output", unavailable)
+    if preserve:
+        d.preflight()
+        assert d.document_after == before
+        assert d._preflight_native_verified is True
+    else:
+        with pytest.raises(subprocess.CalledProcessError):
+            d.preflight()
+        assert d._preflight_native_verified is False
+    assert d.checklist.read_bytes() == before
+    assert not d.hold.exists()
+
+
 def test_publish_replaces_inherited_candidate_p5(driver, monkeypatch):
     d = driver
     d.old.update(

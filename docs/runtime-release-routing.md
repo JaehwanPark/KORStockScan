@@ -1049,3 +1049,10 @@ is insufficient. Regression must exercise the independent native pair reader
 and reject a missing, changed, aliased or mixed sibling; retain issued profiles
 and all policy/source validation. Authenticate the isolated reader's own bytes
 through the operational profile as well.
+
+When the native deployment preserves the editable operating checklist, it reads
+and retains those existing working bytes after authenticating the consumed
+historical checklist. It must not request an unused candidate Git blob first.
+Replacement mode still requires the exact committed candidate document; an
+unversioned/missing candidate document never supplies replacement authority.
+Preservation is not a substitute for native predecessor/policy/source validation.

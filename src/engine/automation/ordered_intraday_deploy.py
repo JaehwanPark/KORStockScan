@@ -1476,23 +1476,23 @@ class Deployment:
             / (self.day + "-stage2-todo-checklist.md")
         )
         self.document_before = self.checklist.read_bytes()
-        self.document_after = subprocess.check_output(
-            [
-                "git",
-                "-C",
-                str(self.candidate),
-                "show",
-                self.commit + ":docs/checklists/" + self.checklist.name,
-            ],
-            timeout=10,
-        )
         if getattr(self, "preserve_editable_checklist", False):
-            self.state["candidate_checklist_sha256"] = _digest(self.document_after)
             self.document_after = self.document_before
             # Policy/source receipts remain frozen. The live PID proof above
             # independently validated its consumed historical document.
             self.frozen = dict(self.frozen)
             self.frozen.pop(str(self.checklist), None)
+        else:
+            self.document_after = subprocess.check_output(
+                [
+                    "git",
+                    "-C",
+                    str(self.candidate),
+                    "show",
+                    self.commit + ":docs/checklists/" + self.checklist.name,
+                ],
+                timeout=10,
+            )
         _atomic(self.directory / "checklist-before.md", self.document_before)
         self.assert_unchanged()
         from src.engine.monitoring.sentinel_summary_contract import (

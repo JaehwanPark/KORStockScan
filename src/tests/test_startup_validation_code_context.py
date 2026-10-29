@@ -3894,7 +3894,7 @@ def test_held_sell_independent_reader_requires_complete_native_pair(tmp_path, mo
     for name in C.REVIEWED_POSTCLOSE_INTEGRATED_SOURCES:
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes((ROOT / name).read_bytes())
+        path.write_bytes(subprocess.check_output(["git", "-C", str(ROOT), "show", "3f6dd4852:" + name]))
     monkeypatch.setattr(C, "ROOT", tmp_path)
     damaged = next(name for name in C.REVIEWED_POSTCLOSE_INTEGRATED_SOURCES if name != relative)
     path = tmp_path / damaged
@@ -3937,7 +3937,7 @@ def test_preopen_validation_inventory_reaches_both_native_readers():
 def test_preopen_validation_independent_reader_requires_whole_generation(
     tmp_path, monkeypatch, fault, relative
 ):
-    for name in C.REVIEWED_PREOPEN_VALIDATION_SOURCES:
+    for name in C.REVIEWED_PREOPEN_VALIDATION_PROFILE:
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes((ROOT / name).read_bytes())

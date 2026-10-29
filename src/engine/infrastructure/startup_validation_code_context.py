@@ -3358,6 +3358,7 @@ for _name, _sha in REVIEWED_POSTCLOSE_INTEGRATED_SOURCES.items():
 REVIEWED_PREOPEN_VALIDATION_SOURCES = {
     "src/engine/automation/main_stop_postclose.py": "866997e7d0a376f6cb2b8cdcba0d8324ce9ffd5af19eafa080335364f9ecbf0d",
     "src/engine/automation/next_preopen_readiness.py": "c89c5869690c7a17c2f3b631a5a6cb2ca0319b11e4a04b426b09e4a5bd128895",
+    "src/engine/automation/ordered_intraday_deploy.py": "76097fa94f4eb66f6efc7f7ba3b5fc6b697672a072fb21919d80af9ee7b08a85",
     "src/engine/automation/postclose_done_controller.py": "58df8d4a53c042b20bce02fe0408ca40a0429ee350389f1c9507f0c3947fef18",
     "src/engine/scalping/continuous_reversal_policy_v6.py": "78c2e8a00ab0b87df3a42a0f35318598a3960e441bdbac0e090a0cb2e59a1b8b",
     "src/engine/verify_threshold_cycle_postclose_chain.py": "1a03cda3865c6c9fc3ed43a28827da848c480c0d47bd23d2677fcde1ce54aab2",
@@ -3366,10 +3367,15 @@ REVIEWED_PREOPEN_VALIDATION_SOURCES = {
 REVIEWED_PREOPEN_VALIDATION_ORIGINS = {
     "src/engine/automation/main_stop_postclose.py": "a2ea988c1bc93962f021d3f23dab2adbc67521e5fa0bfe41dc6fd1a5e9c5946e",
     "src/engine/automation/next_preopen_readiness.py": "ba72842e94099ffbf36fe7b04f41ffb823bf6690d047a6364858d5ac7a308bcc",
+    "src/engine/automation/ordered_intraday_deploy.py": "779332fbb54665bef40ab39b993c8fcdb3aeb2850ac043b4fd3f668e162162f9",
     "src/engine/automation/postclose_done_controller.py": "659a031cb296e8e23c614f4fb1f496a25500ff2fc05aacf74c9348885be059d1",
     "src/engine/scalping/continuous_reversal_policy_v6.py": "dba3674350cb2a0b3b563236da605c79076d1fc0f3679ce1d9792144d4eb7499",
     "src/engine/verify_threshold_cycle_postclose_chain.py": "da729cdbbd5cc34c7ce48910055788c6886c77dc37ee15d4e6aa3b1323f78c1f",
     "src/run_bot.sh": "e32584ab0ceea9b0a7a08428204d437f5abd022014c091d1771e6ee3f6d63d5e",
+}
+REVIEWED_PREOPEN_VALIDATION_PROFILE = {
+    **REVIEWED_POSTCLOSE_INTEGRATED_SOURCES,
+    **REVIEWED_PREOPEN_VALIDATION_SOURCES,
 }
 for _name, _sha in REVIEWED_PREOPEN_VALIDATION_SOURCES.items():
     _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
@@ -3381,15 +3387,25 @@ for _name, _sha in REVIEWED_PREOPEN_VALIDATION_SOURCES.items():
 
 
 def reviewed_preparation_pair(relative, old, current):
-    if current == REVIEWED_PREOPEN_VALIDATION_SOURCES.get(relative):
-        for name, expected in REVIEWED_PREOPEN_VALIDATION_SOURCES.items():
+    if current == REVIEWED_PREOPEN_VALIDATION_PROFILE.get(relative) and (
+        current != REVIEWED_POSTCLOSE_INTEGRATED_SOURCES.get(relative)
+        or any(
+            (ROOT / name).is_file()
+            and not (ROOT / name).is_symlink()
+            and _sha(ROOT / name) == expected
+            for name, expected in REVIEWED_PREOPEN_VALIDATION_SOURCES.items()
+            if expected != REVIEWED_POSTCLOSE_INTEGRATED_SOURCES.get(name)
+        )
+    ):
+        for name, expected in REVIEWED_PREOPEN_VALIDATION_PROFILE.items():
             path = ROOT / name
             if path.is_symlink() or not path.is_file() or _sha(path) != expected:
                 return False
-    if current == REVIEWED_POSTCLOSE_INTEGRATED_SOURCES.get(relative) and (
+    elif current == REVIEWED_POSTCLOSE_INTEGRATED_SOURCES.get(relative) and (
         current != REVIEWED_HELD_SELL_SOURCES.get(relative)
         or any(
-            (ROOT / name).is_file() and not (ROOT / name).is_symlink()
+            (ROOT / name).is_file()
+            and not (ROOT / name).is_symlink()
             and _sha(ROOT / name) == expected
             for name, expected in REVIEWED_POSTCLOSE_INTEGRATED_SOURCES.items()
             if expected != REVIEWED_HELD_SELL_SOURCES.get(name)

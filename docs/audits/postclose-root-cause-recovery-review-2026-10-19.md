@@ -5842,3 +5842,38 @@ parsed DirectFamilyPreopenPolicyHandoff owner remains Due10/30. Supplemental
 scope from8e98cf343: non-test source+34/-3, tests+91/-41, docs+49/-0 including
 this note. Growth binds both independent owners and retains negative coverage;
 no new validator/module, execution owner or broader authority was introduced.
+
+### Editable-checklist preservation owner correction
+
+Candidate3f6dd4852 isolated P5 run e5fa8ce79dab4d938756f5cbea6fa815 passed:
+load check true, child exit0/terminated, protected sources unchanged, findings[].
+Its ordered transition then failed in preflight before hold/drain/publication:
+the source checkout correctly had no committed10/29 checklist, while native
+`preserve_editable_checklist=True` still executed an unused candidate `git show`
+before discarding its bytes. Original failed transition/log and candidate remain
+preserved. Incumbentce/PID1366991 and policyfa20 were not changed.
+
+Repair the native preflight branch: preserving the working checklist never
+reads the unused Git blob; replacement mode still requires the exact committed
+blob and rejects its absence. The old unused candidate-checklist diagnostic is
+removed; current working and historical consumed checklist contracts remain
+separate. No fallback document or ad hoc transition caller is introduced.
+Regression uses actual preflight with unavailable Git document in both modes,
+plus existing source-rejection and concurrent-document preservation cases.
+Its first fixture incorrectly retained an unrelated test path/hold assumption;
+those setup failures are retained and corrected to the native workspace path.
+No production source was changed to accommodate the fixture.
+
+Because the ordered owner changes, both independent/operational profiles bind
+its exact bytes with the entire current sibling generation. Old complete
+profiles still use their original frozen Git bytes, not today's changed file.
+Focused independent inventory/old-profile/current guards187 PASS. All affected
+original source, cost/null, policy, hold, date and failure-unwind guards remain.
+Correction to the prior supplement count: its docs delta was52 additions, not49.
+
+Original-code replay of the new native preflight regression:1 FAIL in preserve
+mode,1 PASS in strict replacement mode. Fixed affected cases9 PASS; full ordered
+suite484 PASS plus2 corrected setup-only assertions; independent profile187
+PASS and operational full-profile43 PASS. Compile/diff/print-only parser PASS.
+Baseline3f6dd4852 and source/test/doc additions/removals are recorded exactly in
+`/home/ubuntu/KORStockScan-storage-archives/postclose-monitor-20261028/phase2-preservation-diff-scope.json`.
