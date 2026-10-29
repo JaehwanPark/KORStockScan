@@ -4648,6 +4648,19 @@ def test_probe_source_gap_keeps_candle_failure_reason(tmp_path):
     assert result["diagnostics"] == {"machine_probe:candle_source_missing": 1}
 
 
+@pytest.mark.parametrize("damage", [None, "unknown", "unbound"])
+def test_candle_unknown_age_is_recognized_without_promoting_source_coverage(damage):
+    result, gap = _derived_coverage_health_fixture()
+    reason = "machine_probe:" + ("unknown_candle_reason" if damage == "unknown" else "candle_unknown_age")
+    gap["diagnostics"] = {reason: 1}
+    gap["diagnostics_by_scope"] = {"009410|krx_nxt_integrated|" + reason: 2 if damage == "unbound" else 1}
+    original = dict(gap["probe_route_source_covered_counts"])
+    health = monitor.observation_health_projection(result)
+    assert ("unknown_or_unbound_source_diagnostic" in health["unmet_conditions"]) == (damage is not None)
+    assert gap["probe_route_source_covered_counts"] == original
+    assert gap["issues"]  # The route source failure remains actionable.
+
+
 def test_probe_preflight_gap_example_retains_exact_attempt(tmp_path):
     now = START + timedelta(minutes=10)
     row = _probe_source_row(

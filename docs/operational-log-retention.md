@@ -151,6 +151,12 @@ The native postclose snapshot and stop CLIs share this invocation-local session
 through their full producer/publication boundary. Intraday snapshots and normal
 library callers retain full native reads; no persistent validator verdict is
 published. Diagnostic full/reused bytes remain separate from semantic results.
+Cold runtime policy intake and ordered transition can reuse the same independent
+original-writer and archiver byte proofs. Both original logical generation and
+current physical gzip epoch must agree; semantic policy/parent/census checks run
+normally. A later plain generation never authenticates an older archive: that
+case retains cold physical verification. Source mutation, invalid seals and
+unbound logical bytes fail closed under the unchanged read/deadline contracts.
 Content-consuming research streams gzip and checks CRC. Old archives without
 an original-identity receipt cannot fabricate a former raw inode or close an
 existing source gap.

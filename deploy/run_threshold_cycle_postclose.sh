@@ -143,12 +143,15 @@ while IFS= read -r assignment; do
   if [[ -n "$assignment" ]]; then export "$assignment"; fi
 done <<< "$native_custody_assignments"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
+POSTCLOSE_STOP_ONLY=false
 RESUME_INITIAL_QUANTITY=false
 RESUME_FINAL_HANDOFF=false
 FINAL_HANDOFF_ORIGIN_CODE_HANDOFF=""
 unset POSTCLOSE_INITIAL_QUANTITY_RESUME_RECEIPT
 unset POSTCLOSE_FINAL_HANDOFF_RESUME_RECEIPT
-if [[ "${2:-}" == "--resume-from-initial-quantity" && "$#" -eq 2 ]]; then
+if [[ "${2:-}" == "--stop-only" && "$#" -eq 2 ]]; then
+  POSTCLOSE_STOP_ONLY=true
+elif [[ "${2:-}" == "--resume-from-initial-quantity" && "$#" -eq 2 ]]; then
   RESUME_INITIAL_QUANTITY=true
 elif [[ "${2:-}" == "--resume-from-final-handoff" && ( "$#" -eq 2 || ( "$#" -eq 4 && "${3:-}" == "--origin-code-handoff" ) ) ]]; then
   RESUME_FINAL_HANDOFF=true
@@ -163,6 +166,13 @@ if [[ "$source_calendar_state" == "non_trading" ]]; then
   exit 0
 fi
 [[ "$source_calendar_state" == "trading" ]] || exit 2
+if [[ "$POSTCLOSE_STOP_ONLY" == "true" ]]; then
+  wait_for_eod_terminal "$PROJECT_DIR" "$TARGET_DATE" postclose-stop \
+    "${THRESHOLD_CYCLE_EOD_WAIT_SEC:-5400}" "${THRESHOLD_CYCLE_EOD_WAIT_INTERVAL_SEC:-30}"
+  exec env PYTHONPATH="$PROJECT_DIR" "$VENV_PY" -B -m src.engine.automation.ordered_intraday_deploy \
+    --workspace "$(readlink -f "$PROJECT_DIR/data/..")" --target-date "$TARGET_DATE" \
+    --stop-after-eod --confirm APPROVED_ORDERED_INTRADAY_DEPLOY_AND_RESTART
+fi
 POLICY_PUBLICATION_DATE="${THRESHOLD_CYCLE_POLICY_PUBLICATION_DATE:-$TARGET_DATE}"
 export POSTCLOSE_POLICY_PUBLICATION_DATE="$POLICY_PUBLICATION_DATE"
 PREPARED_EFFECTIVE_DATE="$(cd "$PROJECT_DIR" && PYTHONPATH=. "$VENV_PY" -c 'import sys; from src.engine.build_next_stage2_checklist import _next_krx_trading_day; print(_next_krx_trading_day(sys.argv[1]))' "$POLICY_PUBLICATION_DATE")"
@@ -191,7 +201,6 @@ POSTCLOSE_RESOURCE_AUTO_REFRESH_SAMPLER="${THRESHOLD_CYCLE_POSTCLOSE_RESOURCE_AU
 POSTCLOSE_RESOURCE_SAMPLER_CMD="${THRESHOLD_CYCLE_POSTCLOSE_RESOURCE_SAMPLER_CMD:-$PROJECT_DIR/deploy/run_system_metric_sampler_cron.sh}"
 POSTCLOSE_BOT_ACTION="${THRESHOLD_CYCLE_POSTCLOSE_BOT_ACTION:-none}"
 POSTCLOSE_BOT_SESSION="${THRESHOLD_CYCLE_POSTCLOSE_BOT_SESSION:-bot}"
-POSTCLOSE_BOT_RESTART_WAIT_SEC="${THRESHOLD_CYCLE_POSTCLOSE_BOT_RESTART_WAIT_SEC:-5}"
 SKIP_DB="${THRESHOLD_CYCLE_SKIP_DB:-false}"
 RUN_SWING_POSTCLOSE="${THRESHOLD_CYCLE_RUN_SWING_POSTCLOSE:-false}"
 if [[ "$RUN_SWING_POSTCLOSE" == "true" || "$RUN_SWING_POSTCLOSE" == "1" ]]; then
@@ -569,31 +578,6 @@ emit_postclose_marker() {
 BOT_WAS_RUNNING=false
 BOT_RESTART_DONE=false
 
-write_postclose_bot_isolation_marker() {
-  local started_at
-  started_at="$(TZ=Asia/Seoul date +%FT%T%:z)"
-  "$VENV_PY" - "$POSTCLOSE_BOT_ISOLATION_MARKER" "$TARGET_DATE" "$POSTCLOSE_BOT_SESSION" "$POSTCLOSE_BOT_ACTION" "$started_at" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-target_date, session, action, started_at = sys.argv[2:6]
-payload = {
-    "schema_version": 1,
-    "active": True,
-    "target_date": target_date,
-    "session": session,
-    "action": action,
-    "reason": "threshold_cycle_postclose_resource_isolation",
-    "started_at": started_at,
-    "runtime_effect": False,
-}
-path.parent.mkdir(parents=True, exist_ok=True)
-path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-PY
-}
-
 clear_postclose_bot_isolation_marker() {
   rm -f "$POSTCLOSE_BOT_ISOLATION_MARKER"
 }
@@ -615,18 +599,10 @@ stop_postclose_bot_if_requested() {
       ;;
   esac
 
-  if bot_session_exists; then
-    BOT_WAS_RUNNING=true
-    echo "[threshold-cycle] stopping bot for postclose resource isolation session=$POSTCLOSE_BOT_SESSION action=$POSTCLOSE_BOT_ACTION"
-    tmux kill-session -t "$POSTCLOSE_BOT_SESSION" 2>/dev/null || true
-    write_postclose_bot_isolation_marker
-    run_postclose_cmd sleep "$POSTCLOSE_BOT_RESTART_WAIT_SEC"
-  else
-    echo "[threshold-cycle] bot stop skipped reason=session_not_running session=$POSTCLOSE_BOT_SESSION action=$POSTCLOSE_BOT_ACTION"
-    if [ "$POSTCLOSE_BOT_ACTION" = "restart" ]; then
-      write_postclose_bot_isolation_marker
-    fi
-  fi
+  if bot_session_exists; then BOT_WAS_RUNNING=true; fi
+  run_postclose_cmd env PYTHONPATH="$PROJECT_DIR" "$VENV_PY" -B -m src.engine.automation.ordered_intraday_deploy \
+    --workspace "$(readlink -f "$PROJECT_DIR/data/..")" --target-date "$TARGET_DATE" \
+    --stop-after-eod --confirm APPROVED_ORDERED_INTRADAY_DEPLOY_AND_RESTART
 }
 
 restart_postclose_bot_if_requested() {

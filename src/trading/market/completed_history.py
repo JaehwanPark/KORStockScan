@@ -526,7 +526,11 @@ def publish(root, identity, rows, source_meta, *, now, consumption_receipt=None)
         or source_meta.get("request_code") != identity["item"]
     ):
         return False
-    completed, forming = _completed(rows, now)
+    # Publication may cross a minute boundary after HTTP ingress. Only bars
+    # already closed at ingress have provider completion evidence; elapsed
+    # local time cannot turn the old forming bar into a completed revision.
+    received_epoch = received / 1000
+    completed, forming = _completed(rows, received_epoch)
     if not completed:
         return False
     path = _path(root, identity)
@@ -535,7 +539,7 @@ def publish(root, identity, rows, source_meta, *, now, consumption_receipt=None)
         return False
     receipt = dict(
         received_at=received / 1000,
-        verified_cutoff=int(now // 60),
+        verified_cutoff=int(received_epoch // 60),
         forming=forming,
         forming_expires_at=min(
             received / 1000 + 3,

@@ -229,6 +229,11 @@ def _cache_set(namespace, key, value, ttl_sec):
     now = time.time()
     expires_at = now + float(ttl_sec)
     if namespace == "ka10080_minutes_with_meta" and meta.get("rest_received_ts_ms"):
+        if int(float(meta["rest_received_ts_ms"]) / 60000) != int(now // 60):
+            # A pre-close response can finish normalization after close. Do
+            # not cache it under the new local publication minute and delay
+            # the next caller's independently verified completed-bar refresh.
+            return value
         expires_at = min(expires_at, float(meta["rest_received_ts_ms"]) / 1000 + 3.0)
     if meta.get("read_response_cache_expires_at") is not None:
         expires_at = min(expires_at, float(meta["read_response_cache_expires_at"]))
@@ -5461,7 +5466,13 @@ def get_minute_candles_ka10080_with_meta(
                 "unavailable:" + type(exc).__name__
             )
     if not include_forming:
-        cutoff = datetime.fromtimestamp(time.time(), _KST).strftime("%Y%m%d%H%M00")
+        received = source_meta.get("rest_received_ts_ms")
+        # Never complete a pre-close response merely because local parsing or
+        # cache publication crossed the boundary. The next read must obtain
+        # a source verified after close within its existing request budget.
+        if type(received) is not int or received <= 0:
+            return [], source_meta
+        cutoff = datetime.fromtimestamp(received / 1000, _KST).strftime("%Y%m%d%H%M00")
         refined_candles = [r for r in refined_candles if r["source_timestamp"] < cutoff]
     refined_candles = refined_candles[-int(limit or len(refined_candles) or 1) :]
     if (

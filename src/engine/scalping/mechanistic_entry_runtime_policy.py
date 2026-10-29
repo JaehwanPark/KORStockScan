@@ -20,7 +20,7 @@ import time
 from collections import OrderedDict, namedtuple
 from datetime import date, datetime, timedelta
 from contextvars import ContextVar
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from threading import RLock, Event
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -3885,7 +3885,26 @@ def _load_current(
         dependencies = {}
         token = _READ_DEPENDENCIES.set(dependencies)
         try:
-            bundle = _load_current_uncached(data_root, target_date)
+            from src.engine.infrastructure import validation_digest_session as digests
+
+            scope = nullcontext()
+            if digests.ACTIVE.get() is None:
+                pointer = root(data_root) / "current.json"
+                header = _read(pointer) if pointer.is_file() else {}
+                generation = header.get("bundle_sha256")
+                if re.fullmatch("[0-9a-f]{64}", str(generation)):
+                    original = _read(root(data_root) / "generations" / (generation + ".json"))
+                    source_day = original.get("source_date")
+                    if (isinstance(source_day, str)
+                            and date.fromisoformat(source_day).isoformat() == source_day):
+                        # The cold runtime leader owns this one read scope.
+                        # Original policy/parent/source validators still run;
+                        # only native writer/archive byte proofs are shared.
+                        scope = digests.postclose_session(data_root, source_day)
+            with scope as observed_digests:
+                bundle = _load_current_uncached(data_root, target_date)
+            if observed_digests is not None:
+                facts["validation_io"] = dict(observed_digests.stats)
             facts["bundle_sha256"] = (bundle or {}).get("bundle_sha256")
             if bundle is not None:
                 if not dependencies_unchanged(dependencies):

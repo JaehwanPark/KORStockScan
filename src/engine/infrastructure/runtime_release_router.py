@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 OWNED = {
     "preopen": ("threshold_cycle_preopen", "threshold_cycle_preopen_cron"),
     "postclose": ("threshold_cycle_postclose", "threshold_cycle_postclose_cron"),
+    "postclose-stop": ("threshold_cycle_postclose", "postclose_stop_cron"),
     "controller": ("postclose_done_controller", "postclose_done_controller_cron"),
     "tuning": ("tuning_monitoring_postclose", "tuning_monitoring_postclose_cron"),
     "finalize": ("postclose_finalization", "postclose_finalization_cron"),
@@ -1242,6 +1243,8 @@ def make_plan(
             str(root / "deploy" / f"run_{script}.sh"),
             "--resolve-effective-today" if operation == "finalize" else target_date,
         ]
+        if operation == "postclose-stop":
+            command.append("--stop-only")
     elif operation == "validate-startup":
         command = [
             str(root / ".venv/bin/python"),
@@ -1525,7 +1528,7 @@ def _one_day_delay_plan(original: str, workspace: Path, day: str) -> tuple[str, 
     """Make only the approved three schedule edits and one recovery entry."""
     if render_crontab(original, workspace, require_snapshot_group=True) != original:
         raise ValueError("delay_cron_routing_invalid")
-    if _DELAY_RESTORE_TAG in original:
+    if _DELAY_RESTORE_TAG in original or "POSTCLOSE_STOP_DELAY_ONCE" in original:
         raise ValueError("delay_restore_already_present")
     rows, before, installed = [], {}, {}
     for line in original.splitlines():
@@ -1545,11 +1548,15 @@ def _one_day_delay_plan(original: str, workspace: Path, day: str) -> tuple[str, 
         f"bash {workspace}/deploy/run_runtime_release.sh --restore-postclose-delay-once {day} "
         f"# {_DELAY_RESTORE_TAG}"
     )
-    rows.append(restore)
+    stop = (
+        f"10 20 * * 1-5 bash {workspace}/deploy/run_runtime_release.sh postclose-stop {day} "
+        "# POSTCLOSE_STOP_DELAY_ONCE"
+    )
+    rows.extend((stop, restore))
     new = "\n".join(rows) + "\n"
     if render_crontab(new, workspace, require_snapshot_group=True) != new:
         raise ValueError("delay_new_routing_invalid")
-    return new, dict(original_lines=before, installed_lines=installed, restore_line=restore)
+    return new, dict(original_lines=before, installed_lines=installed, restore_line=restore, stop_line=stop)
 
 
 def _delay_restored_cron(current: str, workspace: Path, intent: dict) -> str:
@@ -1559,8 +1566,13 @@ def _delay_restored_cron(current: str, workspace: Path, intent: dict) -> str:
     original, installed, restore = intent["original_lines"], intent["installed_lines"], intent["restore_line"]
     if set(original) != set(_DELAY_TAGS) or set(installed) != set(_DELAY_TAGS):
         raise ValueError("delay_receipt_rows_invalid")
-    rows, seen, restore_count = [], set(), 0
+    rows, seen, restore_count, stop_count = [], set(), 0, 0
     for line in current.splitlines():
+        if intent.get("stop_line") and line == intent["stop_line"]:
+            stop_count += 1
+            continue
+        if "# POSTCLOSE_STOP_DELAY_ONCE" in line:
+            raise ValueError("delay_stop_owned_schedule_changed")
         if line == restore:
             restore_count += 1
             continue
@@ -1571,7 +1583,8 @@ def _delay_restored_cron(current: str, workspace: Path, intent: dict) -> str:
             seen.add(tag)
             line = original[tag]
         rows.append(line)
-    if seen != set(_DELAY_TAGS) or restore_count != 1:
+    if (seen != set(_DELAY_TAGS) or restore_count != 1
+            or stop_count != int(bool(intent.get("stop_line")))):
         raise ValueError("delay_restore_entry_missing_or_duplicate")
     result = "\n".join(rows) + "\n"
     if render_crontab(result, workspace, require_snapshot_group=True) != result:

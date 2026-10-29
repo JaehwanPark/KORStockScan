@@ -100,8 +100,10 @@ def publish_native_bytes(data_root, path, generation):
 def _native_bytes(data_root, path):
     """A missing proof permits only the caller's existing bounded fallback."""
     path = Path(path)
+    archived = path.name.endswith(".json.gz")
+    logical = path.with_suffix("") if archived else path
     try:
-        proof_path = _native_proof_path(data_root, path)
+        proof_path = _native_proof_path(data_root, logical)
     except ValueError:
         return None
     if not proof_path.exists():
@@ -114,15 +116,50 @@ def _native_bytes(data_root, path):
         identity(proof_path) != before
         or value.get("schema") != "native_report_source_byte_proof_v1"
         or value.get("producer") != "native_monitor_snapshot_writer"
-        or value.get("path") != str(path.resolve())
+        or value.get("path") != str(logical.resolve())
         or value.get("proof_sha256")
         != _sha({k: v for k, v in value.items() if k != "proof_sha256"})
         or value.get("semantic_verdict") is not False
         or value.get("runtime_effect") is not False
         or value.get("allowed_runtime_apply") is not False
-        or value.get("source_stat") != identity(path)[2:7]
+        or not archived and value.get("source_stat") != identity(path)[2:7]
     ):
         raise ValidationDeferred("validation_deferred:native_byte_proof_changed")
+    if archived:
+        from src.engine.lifecycle import snapshot_archive as archive
+
+        # The original writer's cold byte proof is independent of the archive
+        # receipt. Both must agree on the original epoch and logical bytes;
+        # the archiver separately verifies the unchanged physical gzip epoch.
+        receipt_path = Path(str(path) + ".archive_receipt.json")
+        if not receipt_path.exists():
+            return None
+        receipt_before = identity(receipt_path)
+        if receipt_before[4] > archive.MAX_RECEIPT_BYTES:
+            raise ValidationDeferred("validation_deferred:native_archive_proof_unbounded")
+        preliminary = json.loads(receipt_path.read_bytes())
+        original = preliminary.get("original_identity") or {}
+        if identity(receipt_path) != receipt_before:
+            raise ValidationDeferred("validation_deferred:native_archive_origin_changed")
+        if value.get("source_stat") != [original.get(k) for k in
+                ("device", "inode", "size", "mtime_ns", "ctime_ns")]:
+            # A later native plain generation may coexist with this immutable
+            # historical archive. Its writer pointer cannot authenticate the
+            # old epoch: retain the ordinary cold physical-byte verification.
+            return None
+        receipt = archive.archived_receipt(
+            logical, bound_logical_generation=value["generation"]
+        )
+        if identity(receipt_path) != receipt_before or identity(proof_path) != before:
+            raise ValidationDeferred("validation_deferred:native_archive_proof_changed")
+        physical = receipt["archive_generation"]
+        return dict(
+            generation=dict(path=path.name, size=physical["size"],
+                            sha256=receipt["archive_sha256"]),
+            source_stat=[physical[k] for k in
+                         ("device", "inode", "size", "mtime_ns", "ctime_ns")],
+            proof_sha256=receipt["artifact_content_sha256"],
+        )
     return value
 
 
@@ -381,6 +418,8 @@ class DigestSession:
     def digest(self, path):
         if self.binding["role"] == "postclose" and self.binding["pid"] != os.getpid():
             return None  # A fork cannot inherit invocation-local digest authority.
+        if self.binding["role"] == "transition" and self.invocation_pid != os.getpid():
+            return None  # A launcher child must open its own bound transition scope.
         path = Path(path).absolute()
         before = identity(path)
         entry = self.entries.get(str(path), {})
@@ -395,7 +434,7 @@ class DigestSession:
             and isinstance(created, (int, float))
             and time.time() - created > self.ttl
         )
-        if self.binding["role"] == "postclose" and expired_native:
+        if self.binding["role"] in {"postclose", "transition"} and expired_native:
             proof = _native_bytes(self.data_root, path)
             if (
                 proof is not None
@@ -409,18 +448,24 @@ class DigestSession:
                 )
                 entry = self.entries[str(path)]
         if (
-            self.binding["role"] == "postclose"
+            self.binding["role"] in {"postclose", "transition"}
             and before[4] >= MIN_BYTES
             and not (isinstance(entry, dict) and entry.get("native_generation_proof"))
         ):
             proof = _native_bytes(self.data_root, path)
             if proof is not None:
-                self.admit_native_generation(
-                    path,
-                    proof["generation"],
-                    proof["source_stat"],
-                    proof_sha256=proof["proof_sha256"],
-                )
+                admitted = self.entries.get(str(path), {})
+                if not (
+                    admitted.get("identity") == before
+                    and admitted.get("native_generation_proof") == proof["proof_sha256"]
+                    and admitted.get("digest") == proof["generation"]["sha256"]
+                ):
+                    self.admit_native_generation(
+                        path,
+                        proof["generation"],
+                        proof["source_stat"],
+                        proof_sha256=proof["proof_sha256"],
+                    )
                 entry = self.entries[str(path)]
         if (
             before[4] < MIN_BYTES
@@ -478,7 +523,11 @@ class DigestSession:
         This admits a file digest only; every semantic reader still executes.
         It is distinct from loading an observer/transition verdict or store.
         """
-        if self.binding["role"] != "postclose" or self.binding["pid"] != os.getpid():
+        if (
+            self.binding["role"] not in {"postclose", "transition"}
+            or self.invocation_pid != os.getpid()
+            or self.binding.get("pid", os.getpid()) != os.getpid()
+        ):
             raise ValueError("native_source_generation_proof_requires_postclose_owner")
         path = Path(path).absolute()
         observed = identity(path)

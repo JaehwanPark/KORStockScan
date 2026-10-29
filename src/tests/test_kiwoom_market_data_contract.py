@@ -74,6 +74,40 @@ def _clear_market_data_cache():
         kiwoom_utils._MARKET_DATA_CACHE.clear()
 
 
+def test_009410_preclose_reply_is_not_completed_or_cached_after_local_boundary(tmp_path, monkeypatch):
+    from datetime import datetime
+    from src.trading.market import completed_history
+
+    _clear_market_data_cache()
+    received = datetime.fromisoformat("2026-10-29T16:13:59.664+09:00").timestamp()
+    clock = [datetime.fromisoformat("2026-10-29T16:14:00.464647+09:00").timestamp()]
+    monkeypatch.setattr(kiwoom_utils.time, "time", lambda: clock[0])
+    monkeypatch.setattr(kiwoom_utils, "_market_data_cache_scope", lambda _: ("offline",))
+    monkeypatch.setattr(kiwoom_utils, "get_api_url", lambda _: "https://offline.test/chart")
+    monkeypatch.setattr(kiwoom_utils, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(completed_history, "read", lambda *a, **kw: None)
+    calls = []
+
+    def fetch(**kwargs):
+        calls.append(kwargs)
+        return [dict(stk_min_pole_chart_qry=[dict(cntr_tm="2026102916" + minute + "00",
+                    cur_prc="100", open_pric="100", high_pric="101", low_pric="99", trde_qty="10")
+                    for minute in ("12", "13")])], dict(rest_received_ts_ms=int((received if len(calls) == 1 else clock[0]) * 1000),
+                    read_rate_control_status="admitted", last_http_status_code=200)
+
+    monkeypatch.setattr(kiwoom_utils, "_fetch_kiwoom_api_continuous_with_meta", fetch)
+    args = dict(limit=1, base_dt="20261029", explicit_request_code=True, include_forming=False)
+    rows, meta = kiwoom_utils.get_minute_candles_ka10080_with_meta("offline", "009410_AL", **args)
+    assert rows[0]["source_timestamp"] == "20261029161200"
+    assert meta["rest_received_ts_ms"] == int(received * 1000)
+    assert not kiwoom_utils._MARKET_DATA_CACHE
+    clock[0] += .1
+    fresh, newer = kiwoom_utils.get_minute_candles_ka10080_with_meta("offline", "009410_AL", **args)
+    assert fresh[0]["source_timestamp"] == "20261029161300"
+    assert newer["rest_received_ts_ms"] == int(clock[0] * 1000)
+    assert len(calls) == 2
+
+
 def test_ka10080_continuous_pages_are_sorted_oldest_to_latest(monkeypatch):
     _clear_market_data_cache()
     monkeypatch.setattr(kiwoom_utils, "get_effective_kiwoom_code", lambda code: code)

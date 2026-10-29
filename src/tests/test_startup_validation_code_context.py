@@ -4050,7 +4050,7 @@ def test_probe_avg_independent_reader_preserves_complete_profile(tmp_path, monke
     for name, expected in C.REVIEWED_PROBE_AVG_PROFILE.items():
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        content = (ROOT / name).read_bytes()
+        content = subprocess.check_output(["git", "-C", str(ROOT), "show", "8fadd634d:" + name])
         assert hashlib.sha256(content).hexdigest() == expected
         path.write_bytes(content)
     monkeypatch.setattr(C, "ROOT", tmp_path)
@@ -4070,3 +4070,25 @@ def test_probe_avg_independent_reader_preserves_complete_profile(tmp_path, monke
             ["git", "-C", str(ROOT), "show", "cc4028ba8:" + relative]))
     old = "0" * 64 if fault == "unknown" else C.REVIEWED_TIMEOUT_TERMINAL_HANDLER
     assert C.reviewed_preparation_pair(relative, old, C.REVIEWED_PROBE_AVG_CHANGED[relative]) is (fault is None)
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "changed", "symlink", "unknown", "predecessor_mix"])
+def test_startup_storage_independent_reader_keeps_exact_complete_generation(tmp_path, monkeypatch, fault):
+    for name, expected in C.REVIEWED_STARTUP_STORAGE_PROFILE.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        content = (ROOT / name).read_bytes()
+        assert hashlib.sha256(content).hexdigest() == expected
+        path.write_bytes(content)
+    relative = "src/engine/infrastructure/validation_digest_session.py"
+    damaged = tmp_path / relative
+    if fault == "missing": damaged.unlink()
+    elif fault == "changed": damaged.write_bytes(damaged.read_bytes() + b"\n")
+    elif fault == "symlink":
+        outside = tmp_path / "outside.py"; outside.write_bytes(damaged.read_bytes())
+        damaged.unlink(); damaged.symlink_to(outside)
+    elif fault == "predecessor_mix":
+        damaged.write_bytes(subprocess.check_output(["git", "-C", str(ROOT), "show", "8fadd634d:" + relative]))
+    monkeypatch.setattr(C, "ROOT", tmp_path)
+    old = "0" * 64 if fault == "unknown" else C.REVIEWED_STARTUP_STORAGE_ORIGINS[relative][0]
+    assert C.reviewed_preparation_pair(relative, old, C.REVIEWED_STARTUP_STORAGE_CHANGED[relative]) is (fault is None)

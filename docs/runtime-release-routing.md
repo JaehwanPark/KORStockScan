@@ -164,6 +164,16 @@ The main `start`/`restart` transition, cron installation, and every repository s
 
 Supported operations: `start`, `restart`, `validate-startup`, `preopen`, `postclose`, `paired-replay`, `controller`, `tuning`, `finalize`, `eod`, `archive`, `buy-funnel`, `holding-exit-sentinel`, `monitor-snapshot`. Intraday holding-exit sentinel cron uses `holding-exit-sentinel` so its report code follows the selected release. Invocation resolves the selection once and pins `PROJECT_DIR/PYTHONPATH/VENV_PY` for its child chain. The selector does not update an already-running supervisor; moving the current PID requires a separately authorized graceful restart.
 
+Explicitly authorized `postclose-stop SOURCE_DATE` routes the existing wrapper's
+`--stop-only` branch. After native calendar/EOD admission, the ordered transition
+owner pins code, consumed policy, actor and collector, requests cooperative
+termination and verifies Main/supervisor/writer closure. It neither selects nor
+starts code. Only that owner's hold can be removed after closure; failed requests
+retain their original evidence. Closed-log/tmp retention uses its existing bounds
+before calculation. Foreign holds, changed sources, unclosed writers or failed
+cleanup block calculation. The one-day delay restores its stop-only row together
+with the exact owned schedule rows; normal next-session PREOPEN stays separate.
+
 Read-only checks from the canonical workspace:
 
 ```bash

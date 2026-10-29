@@ -987,6 +987,32 @@ def completed_history_fixture(root, *, price=101, item="003010_AL", day="2026-10
     return start.timestamp() + 30, identity, records, now
 
 
+def test_completed_history_preserves_009410_preclose_ingress_across_publication(tmp_path):
+    from datetime import datetime
+    from src.trading.market import completed_history as H
+
+    received = datetime.fromisoformat("2026-10-29T16:13:59.664+09:00").timestamp()
+    published = datetime.fromisoformat("2026-10-29T16:14:00.464647+09:00").timestamp()
+    key = H.key(["offline"], "009410_AL", "20261029", "SOR_AFTERMARKET")
+    rows = [dict(source_timestamp="2026102916" + minute + "00",
+                 시가=100, 고가=100, 저가=99, 현재가=100, 거래량=1)
+            for minute in ("12", "13")]
+    meta = dict(api_id="ka10080", request_code="009410_AL",
+                rest_received_ts_ms=int(received * 1000))
+    assert H.publish(tmp_path, key, rows, meta, now=published)
+    # Local publication cannot advance the original provider-verified cutoff.
+    import sqlite3
+    with sqlite3.connect(H._path(tmp_path, key)) as db:
+        receipt = H._unpack(db.execute("SELECT receipt FROM current").fetchone()[0])
+    assert receipt["verified_cutoff"] == int(received // 60)
+    assert receipt["forming"][0]["source_timestamp"] == "20261029161300"
+    assert H.read(tmp_path, key, now=published, limit=1, include_forming=False) is None
+    meta["rest_received_ts_ms"] = int((published + .1) * 1000)
+    assert H.publish(tmp_path, key, rows, meta, now=published + .2)
+    fresh = H.read(tmp_path, key, now=published + .2, limit=1, include_forming=False)
+    assert fresh[0][0]["source_timestamp"] == "20261029161300"
+
+
 def test_native_rest_revision_reaches_machine_outcome_source(tmp_path):
     at, _, _, _ = completed_history_fixture(tmp_path)
     bars, receipts = P.completed_bars(tmp_path, "2026-10-08")

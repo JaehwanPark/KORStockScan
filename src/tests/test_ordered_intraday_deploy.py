@@ -11,6 +11,52 @@ import pytest
 from src.engine.automation import ordered_intraday_deploy as D
 
 
+@pytest.mark.parametrize("damage", [None, "selector", "eod", "hold", "consumer", "cleanup", "clock"])
+def test_postclose_stop_resumes_only_exact_closed_actor_before_cleanup(tmp_path, monkeypatch, damage):
+    from datetime import datetime
+    from src.engine.infrastructure import log_retention
+
+    day = "2026-10-29"
+    root = Path(D.__file__).resolve().parents[3]
+    directory = tmp_path / "data/runtime/postclose_stop" / day
+    directory.mkdir(parents=True)
+    selection = tmp_path / "data/runtime/runtime_release_selection.json"
+    selection.write_text(json.dumps(dict(release_root=str(root), git_commit="c" * 40)))
+    eod = tmp_path / "data/runtime/update_kospi_status" / ("update_kospi_" + day + ".json")
+    eod.parent.mkdir()
+    eod.write_text(json.dumps(dict(target_date=day, status="completed", finished_at=day + "T20:07:00+09:00",
+                                   db_state=dict(latest_quote_date=day, rows_on_latest_date=10))))
+    state = dict(schema="native_postclose_stop_v1", source_date=day, phase="stopped", status="running",
+                 release_root=str(root), git_commit="c" * 40, selection_sha256=D._digest(selection.read_bytes()),
+                 eod_sha256=D._digest(eod.read_bytes()), actor=dict(pid=2147483601, start_ticks="123"),
+                 launcher=2147483602, collector_pin={})
+    (directory / "status.json").write_bytes(D._json_bytes(state))
+    monkeypatch.setattr(D.R, "selected_release", lambda _: (root, "c" * 40))
+    monkeypatch.setattr(D, "_main_pids", lambda: [1] if damage == "consumer" else [])
+    monkeypatch.setattr(D, "_session_absent", lambda: True)
+    calls = []
+
+    def cleanup(*a, **kw):
+        calls.append((a, kw))
+        return dict(status="incomplete" if damage == "cleanup" else "complete", deleted_bytes=123)
+
+    monkeypatch.setattr(log_retention, "resume_pre_postclose_logs", cleanup)
+    monkeypatch.setattr(log_retention, "maintain_tmp", lambda *a, **kw: dict(status="complete", deleted_bytes=0))
+    if damage == "selector": selection.write_text("changed")
+    if damage == "eod":
+        changed = json.loads(eod.read_bytes()); changed["status"] = "failed"; eod.write_text(json.dumps(changed))
+    if damage == "hold": selection.with_name("operator_startup_hold.json").write_text("foreign")
+    now = datetime.fromisoformat(day + ("T16:00:00+09:00" if damage == "clock" else "T20:10:00+09:00"))
+    if damage:
+        with pytest.raises(ValueError): D.stop_after_eod(tmp_path, day, D.CONFIRM, now=now)
+        assert len(calls) == (1 if damage == "cleanup" else 0)
+    else:
+        assert D.stop_after_eod(tmp_path, day, D.CONFIRM, now=now)["phase"] == "cleanup_complete"
+        assert D.stop_after_eod(tmp_path, day, D.CONFIRM, now=now)["status"] == "pass"
+        assert len(calls) == 1
+    assert not (tmp_path / "restart.flag").exists()
+
+
 def _report_currentness_fixture(workspace, candidate, day):
     from src.engine.monitoring.policy_generation_code_handoff import consumer_inventory
     return dict(status="pass", source_date=day,

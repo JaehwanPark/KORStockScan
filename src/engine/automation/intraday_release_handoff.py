@@ -13447,6 +13447,25 @@ for _name, _current in REVIEWED_PROBE_AVG_HASHES.items():
     )
 
 
+# The same exact integrated inventory spans candidate, selection and PID phases.
+REVIEWED_STARTUP_STORAGE_CHANGED = {'deploy/run_threshold_cycle_postclose.sh': '18bac5fbc4aae04338a61ea618bc811395e0a4d58de334fbca28d49ab1c614b6', 'src/bot_main.py': '162c15efe5caf925274186071db64eda1b0b726e68f5f408b86741145fc888ea', 'src/engine/automation/ordered_intraday_deploy.py': '43f5856b6d8963b627c21981911e4f944dbca98b8ef706436b053bc96209f003', 'src/engine/error_detectors/cron_completion.py': '281acdf8a5afa76e66e7c16c5ae53469c9a399a177b273fc790720b6c3548f9c', 'src/engine/infrastructure/log_retention.py': '24774b9c5e6328203fc56f918ec6b58e5efacf261d5f3f723b222a4302201a9f', 'src/engine/infrastructure/runtime_release_router.py': '49533a69b9cdd178ee6f580dd23085b97802391b9a8c2de1111fb17a2b710054', 'src/engine/infrastructure/validation_digest_session.py': 'ef61f71629f277d128faf7160c6c474258fb38767ccee8e6b6d7d5aa976000ee', 'src/engine/monitoring/intraday_entry_flow_report.py': '546a76bf36773b055fab4e13939ea7701af1890fd01141dd5851a9bb8ba05a30', 'src/engine/monitoring/main_fixed_watch_policy_research.py': 'ebcde8b6bc1fb368482b1bb4129fecbc15f3c1a8087c46e86d6b2eb71dbb6032', 'src/engine/monitoring/submission_bottleneck_monitor.py': '0a527ad29a96caf0f408db3467e8d407dccb8e552330f8f55e3e09a40dfc198e', 'src/engine/scalping/entry_policy_deep_research.py': '2ad114c4be7bf217545b8ce9bc36cc66394ea6f9e880816bd38ba1b63f3070e6', 'src/engine/scalping/entry_policy_hypothesis_research.py': 'd172f54324899b7acf77a848d2e90f4884b8137aab24f194ec4b55b154f1a494', 'src/engine/scalping/mechanistic_entry_runtime_policy.py': '0fa74a8a2d245ea28a098073a215419095bde1d9d34cd974beff5fa488ae621a', 'src/engine/scalping/samsung_fixed_watch_evaluation_research.py': 'c4caa832c252cdb8e8088d5234beb4193180619e1ebc569c4f0c036603f0bc36', 'src/trading/market/completed_history.py': 'e1a55df448d146ac26e2c526ab060b297b3afeff1baef0ee7628624d7f0abbb0', 'src/utils/kiwoom_utils.py': '84cb769fd56cb2273973d22260ded580147bf3c284e2c31b93fc53533205444a', 'src/engine/infrastructure/startup_validation_code_context.py': 'f20d6d7a2d94416b7cc5672ce95839ce1b50a17ce9a0ba648f981ee7246d993d'}
+REVIEWED_STARTUP_STORAGE_ORIGINS = {'deploy/run_threshold_cycle_postclose.sh': '21df7914eb2f21733dee4fe6d57378cdb0a66b00793d30599e1193dcb740e63d', 'src/bot_main.py': '6ee76f8cd712f79eccacc69a4df5911499bf15db15754c93a13d9ecd64dbac5d', 'src/engine/automation/ordered_intraday_deploy.py': '76097fa94f4eb66f6efc7f7ba3b5fc6b697672a072fb21919d80af9ee7b08a85', 'src/engine/error_detectors/cron_completion.py': '87416fe29bff97db7afc637294a4352c48209e0a034934b9e4fc30e83db98410', 'src/engine/infrastructure/log_retention.py': '4d27d4f11b3054d7604387201e9428a91cce5797ffb75d2a5c3d1ec755d10443', 'src/engine/infrastructure/runtime_release_router.py': 'dde5a9007bd25d918233642574ceb567de672b4ebe3a59a4363e24c3e2742f29', 'src/engine/infrastructure/validation_digest_session.py': 'd99dd1bb98a950f8ca05fc87275f883f7965eb63e34a7dd6bee061c2e87d04ff', 'src/engine/monitoring/intraday_entry_flow_report.py': '2a8beb347d7fa5bf8b81b6b47ef4c5e5e39c55d3a769c1c0e0897b5fb6ca36f0', 'src/engine/monitoring/main_fixed_watch_policy_research.py': '73c8e1a9082708ed81945cba3fd70739bf4d08e33ced2546e99fa67844afc96b', 'src/engine/monitoring/submission_bottleneck_monitor.py': '499c3b8a66d39b6eaa85da36a4ef0aa46a0201c4e2d18184f07ec02c7c071cf8', 'src/engine/scalping/entry_policy_deep_research.py': 'cf4b349b4776c29937184570e174e3a32bed85b75a1468ec55161c833b5e912e', 'src/engine/scalping/entry_policy_hypothesis_research.py': '474148295179e11d9465d4be93649af32a92fd82c9728446ec6b8423fff0db79', 'src/engine/scalping/mechanistic_entry_runtime_policy.py': 'b3f63db7ba451860bb397c4a5c7838747ab53173509697df30b5a750dadc6537', 'src/engine/scalping/samsung_fixed_watch_evaluation_research.py': '85c7331abac4df49b0650ecdf9c17e90b0ea4adb1820f71a95441c81727cf622', 'src/trading/market/completed_history.py': '4c300481759830843a9a3077f0690fcb6264a4e4d5ef9ce6c0eb35e7ef05dfbb', 'src/utils/kiwoom_utils.py': '57f948fc300aa86aff52b698c7863c1b85ad2afe5d015545df9f6264b93513eb', 'src/engine/infrastructure/startup_validation_code_context.py': '6a70400e4f1a3c09fcc2dcfd27cfeb9841c5ed8db0a6e382a7248d8a35e8f0a5'}
+REVIEWED_STARTUP_STORAGE_HASHES = {
+    **REVIEWED_PROBE_AVG_HASHES, **REVIEWED_STARTUP_STORAGE_CHANGED,
+}
+REVIEWED_STARTUP_STORAGE_PROFILE = {
+    **REVIEWED_PREOPEN_VALIDATION_PROFILE, **REVIEWED_STARTUP_STORAGE_HASHES,
+}
+REVIEWED_STARTUP_STORAGE_VARIANTS = _holding_history_variants(REVIEWED_STARTUP_STORAGE_HASHES)
+for _name, _current in REVIEWED_STARTUP_STORAGE_CHANGED.items():
+    _pairs = REVIEWED_ENTRY_COST_PAIRS.get(_name, ())
+    _origins = {value for pair in _pairs for value in pair}
+    _origins.add(REVIEWED_STARTUP_STORAGE_ORIGINS[_name])
+    REVIEWED_ENTRY_COST_PAIRS[_name] = _pairs + tuple(
+        (origin, _current) for origin in _origins if origin != _current
+    )
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -14479,6 +14498,14 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_PROBE_AVG_PROFILE
         prepared_variants = REVIEWED_PROBE_AVG_VARIANTS
+    if any(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == sha
+        for name, sha in REVIEWED_STARTUP_STORAGE_CHANGED.items()
+        if sha != REVIEWED_PROBE_AVG_PROFILE.get(name)
+    ):
+        prepared_hashes = REVIEWED_STARTUP_STORAGE_PROFILE
+        prepared_variants = REVIEWED_STARTUP_STORAGE_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present

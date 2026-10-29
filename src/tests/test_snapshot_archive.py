@@ -48,6 +48,48 @@ def test_existing_legacy_gzip_is_verified_without_replacing_it(snapshot):
     assert byte_generation(snapshot) == generation
 
 
+@pytest.mark.parametrize("role", ["postclose", "transition"])
+@pytest.mark.parametrize("damage", [None, "archive", "original", "logical", "missing"])
+def test_digest_intake_binds_original_writer_and_archive_before_large_read(
+    snapshot, monkeypatch, role, damage
+):
+    import hashlib
+    from src.engine.infrastructure import validation_digest_session as D
+
+    snapshot.write_bytes(b"native snapshot\n" * 100)
+    root = snapshot.parents[2]
+    D.publish_native_bytes(root, snapshot, byte_generation(snapshot))
+    assert archive._gzip_file(snapshot, dry_run=False)[0]
+    packed = Path(str(snapshot) + ".gz")
+    expected = hashlib.sha256(packed.read_bytes()).hexdigest()
+    proof = D._native_proof_path(root, snapshot)
+    if damage in {"original", "logical"}:
+        value = json.loads(proof.read_bytes())
+        if damage == "original":
+            value["source_stat"][1] += 1
+        else:
+            value["generation"]["sha256"] = "a" * 64
+        value["proof_sha256"] = D._sha({k: v for k, v in value.items() if k != "proof_sha256"})
+        proof.write_text(json.dumps(value))
+    elif damage == "archive":
+        packed.write_bytes(packed.read_bytes() + b"changed")
+    elif damage == "missing":
+        proof.unlink()
+    monkeypatch.setattr(D, "MIN_BYTES", 1)
+    checked = D.DigestSession(root, "2026-10-08", role=role, generation={})
+    with checked.activate():
+        if damage in {"logical", "archive"}:
+            with pytest.raises((ValueError, D.ValidationDeferred)):
+                D.reused_digest(packed)
+        else:
+            assert D.reused_digest(packed) == expected
+            assert checked.stats["full_reads"] == (1 if damage in {"missing", "original"} else 0)
+            assert D.reused_digest(packed) == expected
+            if role == "transition":
+                checked.invocation_pid += 1
+                assert D.reused_digest(packed) is None
+
+
 def test_existing_conflicting_gzip_keeps_original_bytes(snapshot):
     original = snapshot.read_bytes()
     archived = Path(str(snapshot) + ".gz")

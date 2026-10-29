@@ -5424,7 +5424,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_PROBE_AVG_PROFILE,
+        "current": handoff.REVIEWED_STARTUP_STORAGE_PROFILE,
+        "probe_avg_consumed": handoff.REVIEWED_PROBE_AVG_PROFILE,
         "holding_history_consumed": handoff.REVIEWED_HOLDING_HISTORY_PREDECESSOR_PROFILE,
         "preopen_validation": handoff.REVIEWED_PREOPEN_VALIDATION_PROFILE,
         "postclose_integrated": handoff.REVIEWED_POSTCLOSE_INTEGRATED_PROFILE,
@@ -5531,6 +5532,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     "show",
                     {
                         "preopen_validation": "6d9ed3575",
+                        "probe_avg_consumed": "8fadd634d",
                         "holding_history_consumed": "a1c403555",
                         "postclose_integrated": "8ad99e22a",
                         "member_carry": "c780d4679",
@@ -7305,4 +7307,18 @@ def test_holding_history_successor_rechecks_exact_consumed_generation(tmp_path, 
 def test_timeout_terminal_complete_generation_reaches_each_existing_reader(tmp_path, family, fault, dependency):
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, fault, "current", dependency
+    )
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("fault", [None, "missing", "dirty", "committed_change", "parent_mix"])
+@pytest.mark.parametrize("dependency", ["src/utils/kiwoom_utils.py", "src/engine/scalping/mechanistic_entry_runtime_policy.py"])
+def test_startup_storage_complete_generation_reaches_native_consumers(tmp_path, family, fault, dependency):
+    test_entry_cost_handoff_keeps_exact_complete_generation(tmp_path, family, fault, "current", dependency)
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+def test_startup_storage_preserves_issued_probe_avg_predecessor(tmp_path, family):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, None, "probe_avg_consumed", "src/utils/kiwoom_utils.py"
     )

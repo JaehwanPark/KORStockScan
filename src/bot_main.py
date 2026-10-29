@@ -330,6 +330,8 @@ def _refresh_startup_observer(identity, *, monotonic=None, wait=None, heartbeat=
                 )
             # Keep 25 seconds for the observer plus its five-second cleanup.
             # Attestation uses the same original 150-second process deadline.
+            producer_started = monotonic()
+            receipt["remaining_before_producer_sec"] = round(deadline - producer_started, 3)
             producer = run(
                 [
                     "src.engine.buy_funnel_sentinel",
@@ -340,6 +342,7 @@ def _refresh_startup_observer(identity, *, monotonic=None, wait=None, heartbeat=
                 ],
                 max(0.0, deadline - monotonic() - 30),
             )
+            receipt["producer_elapsed_sec"] = round(monotonic() - producer_started, 3)
             if producer is None:
                 return dict(
                     receipt,
@@ -370,7 +373,9 @@ def _refresh_startup_observer(identity, *, monotonic=None, wait=None, heartbeat=
             ]
             if producer != 0:
                 observer.append("--source-only")
+            observer_started = monotonic()
             code = run(observer, remaining)
+            receipt["observer_elapsed_sec"] = round(monotonic() - observer_started, 3)
             if code is None:
                 return dict(
                     receipt,

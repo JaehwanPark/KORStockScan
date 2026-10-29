@@ -10,6 +10,33 @@ from src.engine.scalping import ai_action_outcome_calibration as calibration
 from src.engine.scalping import mechanistic_entry_runtime_policy as policy
 
 
+def test_cold_runtime_leader_owns_source_dated_digest_scope_without_verdict_reuse(tmp_path, monkeypatch):
+    from src.engine.infrastructure import validation_digest_session as D
+
+    directory = policy.root(tmp_path)
+    (directory / "generations").mkdir(parents=True)
+    generation = "a" * 64
+    (directory / "current.json").write_text(json.dumps(dict(bundle_sha256=generation)))
+    (directory / "generations" / (generation + ".json")).write_text(json.dumps(dict(source_date="2026-10-28")))
+    calls = []
+
+    def validate(data, day):
+        session = D.ACTIVE.get()
+        assert session.binding["role"] == "postclose"
+        assert session.binding["day"] == "2026-10-28"
+        calls.append(day)
+        return dict(bundle_sha256=generation, parent_validated=True)
+
+    monkeypatch.setattr(policy, "_load_current_uncached", validate)
+    policy._CURRENT_CACHE.clear()
+    assert policy._load_current(tmp_path, "2026-10-29")["parent_validated"] is True
+    assert D.ACTIVE.get() is None
+    policy._CURRENT_CACHE.clear()  # A second cold intake must execute the validator again.
+    assert policy._load_current(tmp_path, "2026-10-29")["parent_validated"] is True
+    assert calls == ["2026-10-29", "2026-10-29"]
+    policy._CURRENT_CACHE.clear()
+
+
 def test_source_anchor_is_cwd_independent_and_cache_tracks_mount(tmp_path, monkeypatch):
     from pathlib import Path
 

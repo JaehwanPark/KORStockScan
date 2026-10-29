@@ -7860,6 +7860,7 @@ def observation_health_projection(result):
             "0B_age_exceeded",
             "0D_missing",
             "0D_age_exceeded",
+            "candle_unknown_age",
         )
     }
     allowed_diagnostics.update(

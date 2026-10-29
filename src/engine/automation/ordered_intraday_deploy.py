@@ -516,6 +516,28 @@ def _wait(predicate, timeout, reason):
         time.sleep(0.25)
 
 
+def _drain_actor(workspace, identity, launcher, launcher_start, *, request, guard):
+    """One cooperative Main/supervisor shutdown, with the original bounds."""
+    guard()
+    if H._identity(identity["pid"]) != identity:
+        raise ValueError("deployment_predecessor_identity_changed")
+    if (Path("/proc", str(launcher), "stat").read_text().rsplit(")", 1)[1].split()[19]
+            != launcher_start):
+        raise ValueError("deployment_supervisor_identity_changed")
+    flag = Path(workspace) / "restart.flag"
+    with flag.open("x") as out:
+        out.write(request)
+        out.flush()
+        os.fsync(out.fileno())
+    _wait(lambda: not Path("/proc", str(identity["pid"])).exists(),
+          90, "deployment_graceful_stop_timeout")
+    _wait(lambda: not Path("/proc", str(launcher)).exists() and _session_absent(),
+          20, "deployment_supervisor_stop_timeout")
+    guard()
+    if _main_pids() or flag.exists() or flag.is_symlink():
+        raise ValueError("deployment_drain_not_complete")
+
+
 @contextmanager
 def _source_database_epoch(workspace, day):
     """Keep native WAL readers resident across drain, launch and attestation."""
@@ -1855,43 +1877,15 @@ class Deployment:
                 ),
             )
             return
-        if H._identity(self.identity["pid"]) != self.identity:
-            raise ValueError("deployment_predecessor_identity_changed")
-        if (
-            Path("/proc", str(self.launcher), "stat")
-            .read_text()
-            .rsplit(")", 1)[1]
-            .split()[19]
-            != self.launcher_stat
-        ):
-            raise ValueError("deployment_supervisor_identity_changed")
         self.assert_unchanged()
         self.collector_shutdown_pin = pin_collector_shutdown(
             self.workspace, self.identity
         )
         self.checkpoint(self.phase, collector_shutdown_pin=self.collector_shutdown_pin)
-        with self.flag.open("x") as out:
-            out.write(
-                "source=ordered_intraday_deploy old_pid="
-                + str(self.identity["pid"])
-                + "\n"
-            )
-            out.flush()
-            os.fsync(out.fileno())
         self.checkpoint("draining")
-        _wait(
-            lambda: not Path("/proc", str(self.identity["pid"])).exists(),
-            90,
-            "deployment_graceful_stop_timeout",
-        )
-        _wait(
-            lambda: not Path("/proc", str(self.launcher)).exists()
-            and _session_absent(),
-            20,
-            "deployment_supervisor_stop_timeout",
-        )
-        if _main_pids() or self.flag.exists():
-            raise ValueError("deployment_drain_not_complete")
+        _drain_actor(self.workspace, self.identity, self.launcher, self.launcher_stat,
+                     request="source=ordered_intraday_deploy old_pid=" + str(self.identity["pid"]) + "\n",
+                     guard=lambda: (self.assert_hold(), self.assert_unchanged()))
         closure = verify_collector_shutdown(self.collector_shutdown_pin)
         self.checkpoint(
             "drained",
@@ -2542,19 +2536,178 @@ class StoppedDeploymentRecovery(Deployment):
         )
 
 
+def stop_after_eod(workspace, day, confirm, *, now=None):
+    """Native stop-only boundary for postclose; never selects or starts code.
+
+    Failed requests retain their exact hold and baseline. A later invocation
+    may finish that same stopped actor, but never sends a second stop request.
+    """
+    from src.trading.market.session_contract import resolve_market_session, MARKET_SESSION_REGIME_CLOSED
+    from src.utils.market_day import is_krx_trading_day
+    from src.engine.infrastructure.validation_digest_session import postclose_session
+    from src.engine.infrastructure.log_retention import resume_pre_postclose_logs, maintain_tmp
+
+    workspace = Path(workspace).resolve(strict=True)
+    current = now or datetime.now(H.KST)
+    if (confirm != CONFIRM or current.tzinfo is None
+            or current.astimezone(H.KST).date().isoformat() != day
+            or current.astimezone(H.KST).hour < 20
+            or not is_krx_trading_day(current.astimezone(H.KST).date())
+            or resolve_market_session(current).session_regime != MARKET_SESSION_REGIME_CLOSED):
+        raise ValueError("postclose_stop_market_or_authority_invalid")
+    root, commit = R.selected_release(workspace)
+    if root != Path(__file__).resolve().parents[3]:
+        raise ValueError("postclose_stop_reader_not_selected")
+    selection = workspace / "data/runtime/runtime_release_selection.json"
+    eod = workspace / "data/runtime/update_kospi_status" / ("update_kospi_" + day + ".json")
+    terminal, eod_raw = R._startup_receipt(eod)
+    finished = datetime.fromisoformat(terminal.get("finished_at") or "")
+    finished = finished.replace(tzinfo=H.KST) if finished.tzinfo is None else finished
+    db = terminal.get("db_state") or {}
+    if (terminal.get("target_date") != day
+            or terminal.get("status") not in {"completed", "completed_with_warnings"}
+            or finished.astimezone(H.KST).date().isoformat() != day or finished > current
+            or db.get("latest_quote_date") != day
+            or type(db.get("rows_on_latest_date")) is not int or db["rows_on_latest_date"] <= 0):
+        raise ValueError("postclose_stop_eod_not_complete")
+    directory = workspace / "data/runtime/postclose_stop" / day
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / "owner.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        status_path = directory / "status.json"
+        hold_path = workspace / "data/runtime/operator_startup_hold.json"
+        if status_path.exists():
+            state, _, _ = _owned_metadata(status_path)
+        else:
+            selected, selection_raw = R._startup_receipt(selection)
+            receipt = selected.get("actual_pid_receipt") or {}
+            actor = H._identity(receipt["pid"])
+            if (selected.get("actual_pid_consumed") is not True
+                    or receipt.get("start_ticks") != actor["start_ticks"]
+                    or actor["cwd"] != str(root / "src")
+                    or hold_path.exists() or hold_path.is_symlink()):
+                raise ValueError("postclose_stop_actor_or_hold_invalid")
+            with postclose_session(workspace / "data", day):
+                verified = H.verify_predecessor_consumption(day, pid=actor["pid"])
+            if verified.get("status") != "pass":
+                raise ValueError("postclose_stop_policy_consumption_invalid")
+            pin = pin_collector_shutdown(workspace, actor)
+            closure = (verify_collector_shutdown(pin)
+                       if pin.get("basis") in {"native_market_close", "native_observer_canary_stop"}
+                       else None)
+            parent = Path("/proc", str(actor["pid"]), "stat").read_text().rsplit(")", 1)[1].split()[1]
+            launcher = int(parent)
+            launcher_start = Path("/proc", parent, "stat").read_text().rsplit(")", 1)[1].split()[19]
+            if str(root / "src/run_bot.sh").encode() not in Path("/proc", parent, "cmdline").read_bytes().split(b"\0"):
+                raise ValueError("postclose_stop_supervisor_unrecognized")
+            state = dict(schema="native_postclose_stop_v1", source_date=day,
+                         phase="verified", status="running", release_root=str(root), git_commit=commit,
+                         selection_sha256=_digest(selection_raw), eod_sha256=_digest(eod_raw),
+                         actor=actor, launcher=launcher, launcher_start=launcher_start,
+                         collector_pin=pin, collector_closure=closure,
+                         policy_consumption=verified, started_at=current.isoformat(),
+                         runtime_effect=False, actual_pid_consumed=False)
+            _atomic(directory / "selection-before.json", selection_raw)
+            _atomic(directory / "eod-before.json", eod_raw)
+            _atomic(status_path, _json_bytes(state))
+
+        def guard():
+            if (state.get("schema") != "native_postclose_stop_v1" or state.get("source_date") != day
+                    or state.get("phase") not in {"verified", "draining", "stopped", "cleanup_complete"}
+                    or state.get("release_root") != str(root) or state.get("git_commit") != commit
+                    or _digest(selection.read_bytes()) != state["selection_sha256"]
+                    or _digest(eod.read_bytes()) != state["eod_sha256"]):
+                raise ValueError("postclose_stop_sources_changed")
+
+        guard()
+        hold = _json_bytes(dict(schema="native_postclose_stop_hold_v1", source_date=day,
+                               authority=CONFIRM, source_pid=state["actor"]["pid"],
+                               source_start_ticks=state["actor"]["start_ticks"],
+                               evidence=str(status_path)))
+        try:
+            if state["phase"] == "verified":
+                if hold_path.exists() or hold_path.is_symlink():
+                    if (hold_path.is_symlink() or hold_path.read_bytes() != hold
+                            or not (directory / "hold-original.json").exists()
+                            or (directory / "hold-original.json").read_bytes() != hold):
+                        raise ValueError("postclose_stop_foreign_hold")
+                else:
+                    _atomic(directory / "hold-original.json", hold)
+                    with hold_path.open("xb") as out:
+                        out.write(hold); out.flush(); os.fsync(out.fileno())
+                state.update(phase="draining", drain_requested_at=datetime.now(H.KST).isoformat())
+                _atomic(status_path, _json_bytes(state))
+
+                def held_guard():
+                    guard()
+                    if hold_path.is_symlink() or hold_path.read_bytes() != hold:
+                        raise ValueError("postclose_stop_hold_changed")
+
+                _drain_actor(workspace, state["actor"], state["launcher"], state["launcher_start"],
+                             request="source=native_postclose_stop old_pid=" + str(state["actor"]["pid"]) + "\n",
+                             guard=held_guard)
+            if state["phase"] == "draining":
+                guard()
+                if (_main_pids() or not _session_absent()
+                        or Path("/proc", str(state["actor"]["pid"])).exists()
+                        or Path("/proc", str(state["launcher"])).exists()
+                        or (workspace / "restart.flag").exists()):
+                    raise ValueError("postclose_stop_original_drain_incomplete")
+                state["collector_closure"] = verify_collector_shutdown(state["collector_pin"])
+                # This is the isolation owner's native receipt, issued only
+                # after exact PID/supervisor/writer closure, never a stop signal.
+                isolation = dict(schema_version=1, active=True, target_date=day, session="bot",
+                                 action="stop", reason="threshold_cycle_postclose_resource_isolation",
+                                 started_at=datetime.now(H.KST).isoformat(), native_stop=str(status_path))
+                _atomic(workspace / "tmp/postclose_bot_isolation.json", _json_bytes(isolation))
+                if hold_path.is_symlink() or hold_path.read_bytes() != hold:
+                    raise ValueError("postclose_stop_hold_changed")
+                state.update(phase="stopped", stopped_at=datetime.now(H.KST).isoformat())
+                _atomic(status_path, _json_bytes(state))
+            if state["phase"] in {"stopped", "cleanup_complete"}:
+                guard()
+                if _main_pids() or not _session_absent():
+                    raise ValueError("postclose_stop_consumer_reappeared")
+                if hold_path.exists() or hold_path.is_symlink():
+                    if hold_path.is_symlink() or hold_path.read_bytes() != hold:
+                        raise ValueError("postclose_stop_hold_changed")
+                    hold_path.unlink()  # Remove only this owner's verified hold.
+                if state["phase"] != "cleanup_complete":
+                    cleanup = resume_pre_postclose_logs(workspace, apply=True)
+                    state["cleanup"] = cleanup
+                    if cleanup.get("status") != "complete":
+                        raise ValueError("postclose_stop_cleanup_incomplete")
+                    cleanup["tmp"] = maintain_tmp(workspace, apply=True)
+                    if cleanup["tmp"].get("status") != "complete":
+                        raise ValueError("postclose_stop_tmp_cleanup_incomplete")
+                    state.update(phase="cleanup_complete", status="pass", finished_at=datetime.now(H.KST).isoformat())
+                    _atomic(status_path, _json_bytes(state))
+                if state.get("cleanup", {}).get("status") != "complete":
+                    raise ValueError("postclose_stop_cleanup_proof_invalid")
+            return state
+        except BaseException as exc:
+            state.update(status="failed", error=str(exc))
+            _atomic(directory / (uuid.uuid4().hex + ".failure.json"), _json_bytes(state))
+            _atomic(status_path, _json_bytes(state))
+            raise
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace", type=Path, default=H.DATA_DIR.parent)
-    parser.add_argument("--release-root", type=Path, required=True)
+    parser.add_argument("--release-root", type=Path)
+    parser.add_argument("--stop-after-eod", action="store_true")
     parser.add_argument("--target-date", required=True)
-    parser.add_argument("--candidate-p5-path", type=Path, required=True)
-    parser.add_argument("--candidate-p5-sha256", required=True)
+    parser.add_argument("--candidate-p5-path", type=Path)
+    parser.add_argument("--candidate-p5-sha256")
     parser.add_argument("--confirm", required=True)
     args = parser.parse_args(argv)
+    if not args.stop_after_eod and not all((args.release_root, args.candidate_p5_path, args.candidate_p5_sha256)):
+        parser.error("deployment requires release root and exact candidate P5")
     try:
         with R.runtime_release_set_lock(args.workspace):
             with detector_transition_lock(args.workspace):
-                result = execute(
+                result = stop_after_eod(args.workspace, args.target_date, args.confirm) if args.stop_after_eod else execute(
                     Deployment(
                         args.workspace,
                         args.release_root,
