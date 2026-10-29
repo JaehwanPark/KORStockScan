@@ -1816,6 +1816,8 @@ def test_dated_vote_policy_activates_only_its_mandatory_context(monkeypatch, cas
             "SOR",
             "INTEGRATED_AFTERMARKET",
         ),
+        ("krx_nxt_aftermarket", 17, "", "krx_only", "SOR", "INTEGRATED_AFTERMARKET"),
+        ("krx_nxt_aftermarket", 17, "_NX", "nxt_only", "NXT", "INTEGRATED_AFTERMARKET"),
     ],
 )
 def test_vote_context_builds_fresh_input_with_overlay_off(

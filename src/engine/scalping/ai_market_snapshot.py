@@ -594,16 +594,18 @@ def _normalize_venue_cohort(*, venue: str, session: str) -> tuple[str, str]:
     session_value = str(session or "").strip().lower()
     if "premarket" in session_value or venue_value == "PREMARKET_KRX_LIKE":
         return "PREMARKET_KRX_LIKE", "session"
-    if venue_value in {
-        "SOR",
-        "INTEGRATED",
-        "KRX_NXT_INTEGRATED",
-    }:
+    if venue_value in {"SOR", "INTEGRATED", "KRX_NXT_INTEGRATED"} or (
+        venue_value == "KRX_NXT" and "krx_nxt_aftermarket" in session_value
+    ):
         if session_value == "krx_regular":
             return "KRX", "legacy_route_value_normalized_by_session"
         return "KRX_NXT_INTEGRATED", "integrated_scope"
     if "krx_nxt_aftermarket" in session_value:
-        return "KRX_NXT_INTEGRATED", "integrated_scope"
+        # The clock identifies the session, not the source venue.  A plain
+        # KRX or _NX receipt remains exact; an absent venue stays unproven.
+        if venue_value in {"KRX", "NXT"}:
+            return venue_value, "explicit"
+        return venue_value or "UNKNOWN", "explicit_or_missing"
     if "nxt" in session_value or venue_value == "NXT":
         return "NXT", "explicit_or_session"
     if venue_value == "KRX":

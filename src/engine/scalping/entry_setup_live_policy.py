@@ -777,6 +777,13 @@ def _normalize_cohort(venue: Any, session: Any) -> tuple[str, str]:
     normalized_session = _normalize_session(session)
     if normalized_venue in {"INTEGRATED", "SOR", "KRX_NXT"}:
         normalized_venue = "KRX_NXT_INTEGRATED"
+    if (
+        normalized_venue == "NXT"
+        and normalized_session == "KRX_NXT_AFTERMARKET"
+    ):
+        # The session owner names the shared window. An explicitly selected
+        # NXT cohort uses its existing NXT aftermarket policy, not the SOR one.
+        normalized_session = "NXT_AFTERMARKET"
     if normalized_venue == "KRX_NXT_INTEGRATED" and normalized_session in {
         "NXT_AFTERMARKET",
         "KRX_NXT_AFTERMARKET",

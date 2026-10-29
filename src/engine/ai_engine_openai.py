@@ -14146,6 +14146,8 @@ class GPTSniperEngine:
                     **blocked,
                     "reason": "shared_main_entry_policy_scope_missing",
                     "policy_status": live.get("status"),
+                    "effective_venue": venue,
+                    "session_bucket": session,
                 }
             bundle = {
                 "bundle_sha256": live["machine_bundle_sha256"],

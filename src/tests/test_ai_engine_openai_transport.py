@@ -9338,6 +9338,9 @@ def test_shared_rebound_producer_uses_real_entry_core_and_never_provider(
     assert scopes[0]["effective_venue"] == "KRX"
     assert scopes[0]["session_bucket"] == "krx_regular"
     assert result["should_add"] is (case in {"rebound", "pullback"}), result
+    if case == "policy_gap":
+        assert result["effective_venue"] == "KRX"
+        assert result["session_bucket"] == "krx_regular"
     if case == "source_gap":
         assert result["preflight_primary_blocker"] == "tick_context_stale"
         assert result["preflight_blockers"] == ["tick_context_stale", "quote_missing"]

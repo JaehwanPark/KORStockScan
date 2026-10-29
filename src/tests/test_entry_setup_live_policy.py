@@ -1522,8 +1522,16 @@ def test_preopen_honors_explicit_process_level_operator_off(monkeypatch, tmp_pat
     assert "operator_disabled" in activation["blocking_reasons"]
 
 
-def test_integrated_legacy_aftermarket_label_resolves_to_canonical_policy_scope(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize(
+    "venue,session,expected_scope,enabled",
+    [
+        ("INTEGRATED", "nxt_aftermarket", ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET"), True),
+        ("NXT", "krx_nxt_aftermarket", ("NXT", "NXT_AFTERMARKET"), True),
+        ("KRX", "krx_nxt_aftermarket", ("KRX", "KRX_NXT_AFTERMARKET"), False),
+    ],
+)
+def test_aftermarket_label_resolves_to_authorized_exact_policy_scope(
+    monkeypatch, tmp_path, venue, session, expected_scope, enabled
 ):
     from src.engine.scalping import mechanistic_entry_runtime_policy as initial
     from src.tests.test_mechanistic_entry_runtime_policy import source
@@ -1546,26 +1554,34 @@ def test_integrated_legacy_aftermarket_label_resolves_to_canonical_policy_scope(
         configured_prompt_version=(
             DECISION_QUALITY_V2_13_RECOVERY_CONFIRMATION_PROMPT_VERSION
         ),
-        effective_venue="INTEGRATED",
-        session_bucket="nxt_aftermarket",
+        effective_venue=venue,
+        session_bucket=session,
         position_tag="SCANNER",
         strategy="SCALPING",
         now=datetime(2026, 8, 7, 16, 20, tzinfo=policy.KST),
     )
 
-    assert resolved["enabled"] is True
-    assert resolved["effective_venue"] == "KRX_NXT_INTEGRATED"
-    assert resolved["session_bucket"] == "KRX_NXT_AFTERMARKET"
-    assert resolved["machine_policy_scope"] == [
-        "KRX_NXT_INTEGRATED",
-        "KRX_NXT_AFTERMARKET",
-    ]
+    assert resolved["enabled"] is enabled
+    assert (resolved["effective_venue"], resolved["session_bucket"]) == expected_scope
+    if enabled:
+        assert resolved["machine_policy_scope"] == list(expected_scope)
+    else:
+        assert "machine_policy_scope" not in resolved
 
 
 def test_integrated_close_only_bucket_is_not_collapsed_into_entry_scope():
     assert policy._normalize_cohort(
         "KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET_CLOSE_ONLY"
     ) == ("KRX_NXT_INTEGRATED", "KRX_NXT_AFTERMARKET_CLOSE_ONLY")
+    assert policy._normalize_cohort("NXT", "KRX_NXT_AFTERMARKET_CLOSE_ONLY") == (
+        "NXT", "KRX_NXT_AFTERMARKET_CLOSE_ONLY"
+    )
+    assert policy._normalize_cohort("NXT", "KRX_NXT_AFTERMARKET_TERMINAL_EXIT") == (
+        "NXT", "KRX_NXT_AFTERMARKET_TERMINAL_EXIT"
+    )
+    assert policy._normalize_cohort("KRX", "KRX_NXT_AFTERMARKET") == (
+        "KRX", "KRX_NXT_AFTERMARKET"
+    )
 
 
 def test_running_process_with_previous_runtime_date_falls_back(monkeypatch, tmp_path):

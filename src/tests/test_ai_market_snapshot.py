@@ -1543,6 +1543,47 @@ def test_nxt_aftermarket_rejects_integrated_route_without_event_venue_proof():
     )
 
 
+def test_holding_aftermarket_preserves_jusung_krx_source_scope():
+    # The original 2026-10-28 vote input carried KRX-only 0B/0D during the
+    # integrated session. The session is not evidence that those rows are _AL.
+    now = datetime(2026, 10, 28, 16, 1, 17, tzinfo=KST).timestamp()
+    ws = _ws(now, code="036930", effective_venue="KRX")
+    candle = _candle(request_code="036930")
+
+    def build(data, *, venue="KRX"):
+        return mod.build_ai_market_snapshot(
+            stock_code="036930",
+            decision_stage="holding_path_vote",
+            ws_data=data,
+            effective_venue=venue,
+            session_bucket="krx_nxt_aftermarket",
+            broker_route="SOR",
+            candle_context=candle,
+            now_ts=now,
+        )
+
+    snapshot = build(ws)
+    assert snapshot["effective_venue"] == "KRX"
+    assert snapshot["market_data_route"] == "krx_only"
+    assert snapshot["broker_route"] == "SOR"
+    assert snapshot["ai_input_preflight_v1"]["source_allowed"] is True
+    assert snapshot["actual_execution_venue"] == "UNKNOWN"
+
+    stale = _ws(now - 60, code="036930", effective_venue="KRX")
+    assert build(stale)["ai_input_preflight_v1"]["source_allowed"] is False
+    assert build(ws, venue="KRX_NXT_INTEGRATED")["ai_input_preflight_v1"][
+        "source_allowed"
+    ] is False
+    alias = build(ws, venue="KRX_NXT")
+    assert alias["effective_venue"] == "KRX_NXT_INTEGRATED"
+    assert alias["ai_input_preflight_v1"]["source_allowed"] is False
+    assert build(ws, venue="UNKNOWN")["ai_input_preflight_v1"][
+        "source_allowed"
+    ] is False
+    mismatched = _ws(now, suffix="_NX", route="nxt_only", code="036930")
+    assert build(mismatched)["ai_input_preflight_v1"]["source_allowed"] is False
+
+
 def test_integrated_aftermarket_keeps_scope_without_actual_venue_attribution():
     now = datetime(2026, 7, 23, 18, 0, tzinfo=KST).timestamp()
     snapshot = mod.build_ai_market_snapshot(
