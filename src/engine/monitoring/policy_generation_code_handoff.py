@@ -27,7 +27,11 @@ _AUXILIARY_NATIVE_CONSUMER_EXTENSION = frozenset(
 
 
 _REVIEWED_CONSUMER_EXTENSIONS = {
-    "auxiliary": _AUXILIARY_NATIVE_CONSUMER_EXTENSION,
+    "auxiliary": _AUXILIARY_NATIVE_CONSUMER_EXTENSION | frozenset({
+        "scalping/reversal_auxiliary_research_population.py",
+        "../trading/market/completed_history.py",
+        "../utils/kiwoom_utils.py",
+    }),
     "entry_cancel_wait": frozenset({"lifecycle/research_storage.py"}),
 }
 

@@ -215,6 +215,7 @@ def causal_prefixes(root, requests):
     if not isinstance(requests, list) or len(requests) > 4096:
         raise ValueError("history_causal_request_bounds")
     from collections import defaultdict
+    from src.utils.kiwoom_utils import is_canonical_stock_code
 
     groups = defaultdict(list)
     results = [
@@ -226,7 +227,9 @@ def causal_prefixes(root, requests):
             type(at) not in (int, float)
             or not math.isfinite(at)
             or not isinstance(item, str)
-            or not re.fullmatch(r"\d{6}(?:_NX|_AL)?", item)
+            or not is_canonical_stock_code(
+                item[:-3] if item.endswith(("_NX", "_AL")) else item
+            )
             or not isinstance(session, str)
             or not session
         ):

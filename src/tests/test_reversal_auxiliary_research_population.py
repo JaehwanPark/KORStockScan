@@ -625,6 +625,38 @@ def test_history_generation_does_not_borrow_later_originals(tmp_path):
     assert snapshot[1]["entry_candle_context"] is None
 
 
+@pytest.mark.parametrize("item", ["0011A0_AL", "0010F0_AL", "0088M0_AL", "0011A0_NX", "0011A0"])
+def test_causal_history_keeps_canonical_alphanumeric_item_and_route(tmp_path, item):
+    from src.trading.market import completed_history as H
+
+    event = dict(
+        epoch=datetime(2026, 10, 29, 10, 5, 30, tzinfo=R.K.KST).timestamp(),
+        source_item=item,
+    )
+    history_prefix(tmp_path, event)
+    snapshot = [event, {}]
+    R.attach_completed_contexts(tmp_path, [snapshot])
+    context = snapshot[1]["entry_candle_context"]
+    assert context["request_code"] == item
+    foreign = [dict(event, source_item="0011A0_NX" if item.endswith("_AL") else "0011A0_AL"), {}]
+    R.attach_completed_contexts(tmp_path, [foreign])
+    assert foreign[1]["entry_candle_context"] is None
+    # Later revisions cannot fill a causal gap at the confirmation clock.
+    future = [dict(event, epoch=event["epoch"] - 1), {}]
+    R.attach_completed_contexts(tmp_path, [future])
+    assert future[1]["entry_candle_context"] is None
+
+
+@pytest.mark.parametrize("item", ["0011a0_AL", "0011A0_KRX", "A0011A0_AL", "0011A_AL", "0011A00_AL", " 0011A0_AL", "0011A0_AL ", "００１１Ａ０_AL", 11, None])
+def test_causal_history_does_not_normalize_invalid_item_into_admission(tmp_path, item):
+    from src.trading.market import completed_history as H
+
+    request = dict(at=datetime(2026, 10, 29, 10, 5, 30, tzinfo=R.K.KST).timestamp(),
+                   item=item, session="KRX_REGULAR")
+    with pytest.raises(ValueError, match="history_causal_request_invalid"):
+        H.causal_prefixes(tmp_path, [request])
+
+
 def test_indexed_reader_can_read_full_writer_but_keeps_read_budget(
     tmp_path, monkeypatch
 ):

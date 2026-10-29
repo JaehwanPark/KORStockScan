@@ -44,6 +44,10 @@ COMPONENTS = {
         "scalping/reversal_auxiliary_compatibility.py",
         "scalping/reversal_auxiliary_wire.py",
         "scalping/reversal_auxiliary_production_input.py",
+        # Causal source qualification is consumed before paired selection.
+        "scalping/reversal_auxiliary_research_population.py",
+        "../trading/market/completed_history.py",
+        "../utils/kiwoom_utils.py",
         # Versioned cumulative membership and materialization are consumed by
         # auxiliary comparison/initial carry; their changes need fresh fixtures.
         "scalping/reversal_cumulative_catalog.py",

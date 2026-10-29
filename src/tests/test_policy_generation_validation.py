@@ -1476,6 +1476,29 @@ def test_shared_numeric_owner_invalidates_capability_generation(
     assert generation.code_generation(family) != before
 
 
+@pytest.mark.parametrize("dependency", [
+    "scalping/reversal_auxiliary_research_population.py",
+    "../trading/market/completed_history.py",
+    "../utils/kiwoom_utils.py",
+])
+def test_auxiliary_causal_intake_dependency_invalidates_capability_generation(
+    dependency, monkeypatch, tmp_path
+):
+    import shutil
+
+    engine = tmp_path / "src/engine"
+    names = (*generation.COMPONENTS["auxiliary"], *generation.COMMON_CODE_COMPONENTS)
+    for name in names:
+        target = engine / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(generation.ENGINE / name, target)
+    monkeypatch.setattr(generation, "ENGINE", engine)
+    before = generation.code_generation("auxiliary")
+    target = engine / dependency
+    target.write_bytes(target.read_bytes() + b"\n# changed causal intake dependency\n")
+    assert generation.code_generation("auxiliary") != before
+
+
 @pytest.mark.parametrize(
     "family,origin",
     [
@@ -2020,6 +2043,9 @@ def test_source_review_extends_only_existing_capability_reader_membership(tmp_pa
     "damage", [None, "original_absent", "omitted_review", "unregistered_owner", "origin_deleted", "current_deleted"]
 )
 @pytest.mark.parametrize("family,extension", [("auxiliary", "scalping/reversal_extended_registration.py"),
+                                          ("auxiliary", "scalping/reversal_auxiliary_research_population.py"),
+                                          ("auxiliary", "../trading/market/completed_history.py"),
+                                          ("auxiliary", "../utils/kiwoom_utils.py"),
                                           ("entry_cancel_wait", "lifecycle/research_storage.py")])
 def test_source_review_preserves_original_family_inventory_while_binding_new_consumers(
     tmp_path, monkeypatch, damage, family, extension
@@ -2071,7 +2097,8 @@ def test_source_review_preserves_original_family_inventory_while_binding_new_con
         ).strip()
     monkeypatch.setattr(generation, "COMPONENTS", updated)
     if damage != "omitted_review":
-        body["reviewed_files"]["src/engine/" + extra] = dict(
+        relative = (old / "src/engine" / extra).resolve().relative_to(old).as_posix()
+        body["reviewed_files"][relative] = dict(
             before=(
                 None
                 if damage == "original_absent"
@@ -2084,7 +2111,10 @@ def test_source_review_preserves_original_family_inventory_while_binding_new_con
     elif damage == "current_deleted":
         (new / "src/engine" / extra).unlink()
     if (damage in {"omitted_review", "unregistered_owner", "origin_deleted", "current_deleted"}
-            or family == "entry_cancel_wait" and damage == "original_absent"):
+            or damage == "original_absent" and not (
+                family == "auxiliary"
+                and extension == "scalping/reversal_extended_registration.py"
+            )):
         with pytest.raises((ValueError, OSError)):
             handoff.reviewed_source_transition(seal())
     else:

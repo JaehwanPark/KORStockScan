@@ -1452,8 +1452,8 @@ def test_nested_native_inventories_keep_distinct_git_origins(
     # This test reviews one private fixture edit, not a production successor.
     # Keep the complete fixture inventory while substituting that exact Git
     # endpoint; real missing/dirty/mixed profile tests use the unchanged table.
-    monkeypatch.setattr(C, "REVIEWED_CANCEL_STORAGE_REVIEW_PROFILE", {
-        **C.REVIEWED_CANCEL_STORAGE_REVIEW_PROFILE, owner: new,
+    monkeypatch.setattr(C, "REVIEWED_CAUSAL_ITEM_PROFILE", {
+        **C.REVIEWED_CAUSAL_ITEM_PROFILE, owner: new,
     })
     parent = fixture["bundle"]
     bundle = dict(
@@ -3880,7 +3880,7 @@ def test_scoped_entry_profiles_cover_every_changed_native_contract_member():
         old = subprocess.check_output(["git", "show", f"{baseline}:{relative}"], cwd=ROOT)
         if hashlib.sha256(old).hexdigest() != hashlib.sha256((ROOT / relative).read_bytes()).hexdigest():
             changed.add(relative)
-    assert changed <= set(C.REVIEWED_CANCEL_STORAGE_REVIEW_CHANGED)
+    assert changed <= set(C.REVIEWED_CAUSAL_ITEM_CHANGED)
     preparation = "src/engine/infrastructure/startup_validation_code_context.py"
     report_paths = {str((ROOT / "src/engine" / name).resolve().relative_to(ROOT)) for names in report.COMPONENTS.values() for name in (*names, *report.COMMON_CODE_COMPONENTS)}
     report_changed = set()
@@ -3896,9 +3896,9 @@ def test_scoped_entry_profiles_cover_every_changed_native_contract_member():
                    and not n.startswith("src/tests/")
                    and not n.endswith(("intraday_release_handoff.py", "startup_validation_code_context.py"))}
     assert expected <= all_changed | {preparation}
-    assert all_changed | {preparation} == set(H.REVIEWED_CANCEL_STORAGE_REVIEW_CHANGED)
+    assert all_changed | {preparation} == set(H.REVIEWED_CAUSAL_ITEM_CHANGED)
     for relative in expected:
-        assert hashlib.sha256((ROOT / relative).read_bytes()).hexdigest() == H.REVIEWED_CANCEL_STORAGE_REVIEW_CHANGED[relative]
+        assert hashlib.sha256((ROOT / relative).read_bytes()).hexdigest() == H.REVIEWED_CAUSAL_ITEM_CHANGED[relative]
 
 
 def test_issued_entry_member_is_bound_without_rewriting_old_policy_inventory(monkeypatch):
@@ -4228,7 +4228,7 @@ def test_startup_storage_independent_reader_keeps_exact_complete_generation(tmp_
     assert C.reviewed_preparation_pair(relative, old, C.REVIEWED_STARTUP_STORAGE_CHANGED[relative]) is (fault is None)
 
 
-@pytest.mark.parametrize("profile,commit", [("STARTUP_SCOPED", "fda0b109c"), ("STARTUP_SCOPED_AUX", "4b69dfc05"), ("LIFETIME_SOURCE_PHASE", "c6d3f010b"), ("DATED_REPORT_PARENT", "a1ef8c897"), ("CANCEL_STATE_STORAGE", "a5904ac8f")])
+@pytest.mark.parametrize("profile,commit", [("STARTUP_SCOPED", "fda0b109c"), ("STARTUP_SCOPED_AUX", "4b69dfc05"), ("LIFETIME_SOURCE_PHASE", "c6d3f010b"), ("DATED_REPORT_PARENT", "a1ef8c897"), ("CANCEL_STATE_STORAGE", "a5904ac8f"), ("CANCEL_STORAGE_REVIEW", "0dc6b0393")])
 @pytest.mark.parametrize("fault", [None, "missing", "mixed", "origin", "unknown", "future"])
 def test_combined_startup_scoped_independent_exact_generation(tmp_path, monkeypatch, fault, profile, commit):
     hashes = getattr(C, "REVIEWED_" + profile + "_PROFILE")
@@ -4254,7 +4254,7 @@ def test_combined_startup_scoped_independent_exact_generation(tmp_path, monkeypa
     endpoint = hashes.get(relative, "1" * 64)
     if fault == "future":
         relative = "src/engine/monitoring/policy_generation_code_handoff.py"
-        old = C.REVIEWED_CANCEL_STORAGE_REVIEW_ORIGINS[relative][0]
-        endpoint = C.REVIEWED_CANCEL_STORAGE_REVIEW_CHANGED[relative]
+        old = C.REVIEWED_CAUSAL_ITEM_ORIGINS[relative][0]
+        endpoint = C.REVIEWED_CAUSAL_ITEM_CHANGED[relative]
     monkeypatch.setattr(C, "ROOT", tmp_path)
     assert C.reviewed_preparation_pair(relative, old, endpoint) is (fault is None)
