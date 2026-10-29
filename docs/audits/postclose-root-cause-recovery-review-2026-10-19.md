@@ -5877,3 +5877,57 @@ suite484 PASS plus2 corrected setup-only assertions; independent profile187
 PASS and operational full-profile43 PASS. Compile/diff/print-only parser PASS.
 Baseline3f6dd4852 and source/test/doc additions/removals are recorded exactly in
 `/home/ubuntu/KORStockScan-storage-archives/postclose-monitor-20261028/phase2-preservation-diff-scope.json`.
+
+### Integrated runtime consumption and original failure closure
+
+Clean repairs8e98cf343 ->3f6dd4852 ->6d9ed3575 were pushed to
+`codex/postclose-monitor-20261028`. Immutable selected runtime is
+`/home/ubuntu/KORStockScan-runtime-releases/postclose-hardening-20261029-6d9ed3575`.
+Requested e44d0ab0e and feddbcabf are ancestors. Final candidate P5
+66047c56925e43eda005656209f7ab01 passed before drain. Native ordered owner then
+closed the predecessor, selected/prepared, and passed final selected P5
+7a2e48d85d3c4778b962b493ba567dcf before start (SHAadc2bf1361c287956ca915e461ef7178fc30dec88f31b7517e1f4cf066819924).
+The native transition is complete/PASS; actual Main PID1537220,
+start_ticks87886204, cwd selected`/src`, attested09:39:28.106465KST.
+Native startup barrier is ready/current_pid_consumption_complete with unchanged
+policyfa20ad8d51a5c4ddfdaf0395b988d2978b3955f58f28ac5eb25f7a2203c79401
+and original PREOPEN manifestcd599ce15c241913f167abf786c5c5f4b535c301ac483bacee2e68ac645f5038.
+Native release-set/PID binding passed. No policy selection or trading safety changed.
+
+Current observer completed09:40:35.690835 before the first health start observed
+at09:40:36.366779. Its generation/release/PID/start identity is current, but
+semantic coverage remains partial; it does not itself prove policy consumption.
+The separate native startup/ordered receipts supply that proof. Observed first
+health09:40:55 had FAIL0 with artifact checks deferred for resource contention,
+late-finalization cutoff warning and protected tmp capacity warning. The daily
+report subsequently advanced; the archived raw health is labelled current,
+not an immutable copy of that first sweep. Do not turn publication/FAIL0 into
+full semantic validation.
+
+Read-only actual selected detector `_main_stop_semantics` returned
+published_policy, source10/28,target10/29,generation7a350211a0da43ae4c13d66782b39e618592db57dcc23ba624347eb78df58e08,
+native_validated/observation_complete/actual_pid_consumed=true,findings[].
+Original committed/policy/report and three10/26gzip hashes all remain identical.
+Only native active/prepared code-handoff receipts and deployment metadata were
+issued; no unchanged whole postclose recalculation or manual source/status fix.
+The initial RFHIC49558 report SHA85d3d9a753ced6d74b8e6a2f779ff2495ee0097a62ae914f44d3e9bb9b66ffbf
+is unchanged: two diagnoses of one missing BUY-generation history remain null/OPEN.
+Recovered execution/Main startup is complete; source/cost/semantic completeness
+and unassisted10/29postclose ->10/30Main acceptance remain separately OPEN under
+the existing DirectFamilyPreopenPolicyHandoff/current source owners.
+
+Evidence: `/home/ubuntu/KORStockScan-storage-archives/postclose-monitor-20261028/phase2-deployment-final/`
+contains native candidate/selected P5 references, full ordered result, actual
+startup/stop/release-set receipts, current observer/health captures and
+`actual-consumer-closure.json`. Earlier failure candidates/attempts and original
+source bytes are preserved. Final source/test/doc additions/removals from
+ce358bce0 are recorded in `phase2-final-diff-scope.json` beside this evidence.
+
+Scheduled full detector09:45:30KST completed with initialization failures0,
+FAIL0. Artifact freshness was evaluated (no resource-deferred placeholder),
+and the original main_stop_committed_binding_invalid warning was absent.
+Remaining warnings are bounded source-quality/partial observer observation,
+late recovered finalization cutoff and protected tmp capacity. Exact original
+scheduled JSON and hash are preserved as `scheduled-health-0945.json` and its
+summary in the evidence directory. This confirms original detector recovery,
+not full observation coverage or historical source repair.
