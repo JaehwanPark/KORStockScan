@@ -267,7 +267,10 @@ def _row_actor(row):
         try:
             receipt = json.loads(receipt)
         except (ValueError, TypeError):
-            receipt = None
+            try:
+                receipt = ast.literal_eval(receipt)
+            except (ValueError, SyntaxError, TypeError, RecursionError):
+                receipt = None
     candidates = [
         row,
         native if isinstance(native, dict) else {},
@@ -2668,6 +2671,7 @@ def source_gap_semantics(
     native_session = session_contract.resolve_market_session(now)
     wait_total = boundary_waits = source_waits = unclassified_waits = 0
     pending_total = pending_verified = pending_unknown = pending_censored = 0
+    probe_actor_unbound = 0
     feature_gap_total = feature_gap_verified = feature_gap_unknown = 0
     history_total = history_verified = history_known = 0
     wait_reasons = Counter()
@@ -2834,6 +2838,8 @@ def source_gap_semantics(
         if identity in seen_probes:
             continue
         seen_probes.add(identity)
+        if _actor and _row_actor(row) != _actor:
+            probe_actor_unbound += 1
         observed["probe_results"] += 1
         if result in {
             "assessed",
@@ -3100,6 +3106,43 @@ def source_gap_semantics(
             and row.get("entry_ai_risk_verdict") == "PASS"
             and row.get("provider_called") is True
         ):
+            # The Main synchronous caller has no async coordinator envelope.
+            # Do not invent a coordinator identity or count its PASS as an
+            # unmapped asynchronous result. Its separate machine/request/trace
+            # lineage is still validated by the native machine consumer.
+            trace_id = row.get("decision_trace_id")
+            attempt_id = row.get("evaluation_attempt_id")
+            machine_hash = row.get("machine_observation_sha256")
+            synchronous = (
+                row.get("schema") == "ai_decision_trace_v1"
+                and row.get("source_event_stage") == "watching_analyze_target"
+                and all(
+                    row.get(key) is None
+                    for key in (
+                        "async_request_id",
+                        "async_producer_pid",
+                        "async_producer_start_ticks",
+                        "async_origin_deadline_epoch",
+                        "async_order_venue",
+                    )
+                )
+                and isinstance(trace_id, str)
+                and 0 < len(trace_id) <= 256
+                and trace_id.strip().lower()
+                not in {"", "-", "none", "null", "unknown", "0"}
+                and row.get("request_id") == trace_id
+                and isinstance(attempt_id, str)
+                and 0 < len(attempt_id) <= 256
+                and attempt_id.strip().lower()
+                not in {"", "-", "none", "null", "unknown", "0"}
+                and isinstance(machine_hash, str)
+                and re.fullmatch("[0-9a-f]{64}", machine_hash) is not None
+                and machine_hash != "0" * 64
+                and isinstance(row.get("stock_code"), str)
+                and re.fullmatch("[0-9]{6}", row["stock_code"]) is not None
+            )
+            if synchronous:
+                continue
             if (
                 not all(
                     str(row.get(key) or "").strip().lower()
@@ -3523,6 +3566,7 @@ def source_gap_semantics(
     elif _actor:
         result["_excluded_health_rows"] = excluded_rows
         result["excluded_pre_actor_birth_count"] = excluded_prebirth
+        result["probe_actor_unbound_count"] = probe_actor_unbound
     return result
 
 
@@ -9081,6 +9125,40 @@ def observation_health_projection(result):
         )
     )
 
+    # A native machine non-entry has a trace but never creates an auxiliary
+    # request. Keep missing journals unobservable and allow only the bounded
+    # warning path when the current actor, roles and every trace are matched.
+    lazy_nonentry_absence = bool(
+        counts_valid
+        and provider_n > 0
+        and role_proof is not None
+        and ledger_valid
+        and len(ledger) == provider_n == lineage.get("trace_attempt_count")
+        and hashes == role_proof["hashes"]
+        and guard_count == provider_invalid
+        and recheck_count >= provider_required
+        and entered == 0
+        and lineage.get("status") == "partial_source_gap"
+        and lineage.get("issues") == {}
+        and lineage.get("source_gaps") == {}
+        and lineage.get("exact_attempt_join_gap_count") == 0
+        and lineage.get("machine_observation_count") == provider_n
+        and all(
+            count(lineage.get(k), maximum=0)
+            for k in (
+                "request_prepared_count",
+                "provider_transmission_attempt_count",
+                "raw_response_observed_count",
+                "auxiliary_response_contract_valid_count",
+                "raw_pass_count",
+                "valid_pass_count",
+                "execution_valid_pass_count",
+                "provider_timeout_count",
+                "enter_without_request_observed",
+            )
+        )
+    )
+
     # With no current attempts, every strict health check must already pass
     # except the lazy pending file. The bounded path still verifies actor birth
     # and all native readers, and retains the missing-source condition.
@@ -9130,6 +9208,55 @@ def observation_health_projection(result):
         )
     )
 
+    # A live premarket source can contain real events even before its first
+    # trace. Account for the exact native probe results instead of treating the
+    # presence of those events as evidence that a trace was already written.
+    # This only describes the bounded report: absent journals and incomplete
+    # observations remain unverified, and unknown or assessed probes fail.
+    pre_entry_probe_only = (
+        quiet_report_valid
+        and observed_event
+        and context is not None
+        and context.entry_allowed_by_clock is False
+        and now.hour < 9
+        and "scanner_population_not_quiet" not in failed
+        and "excluded_fixed_watch_wait_not_proven_boundary" not in failed
+        and "source_window_not_complete:probe" not in failed
+        and "indexed_source_window_proof_invalid:probe" not in failed
+        and counts_valid
+        and n == provider_n == 0
+        and observed_valid
+        and diagnostics_valid
+        and set(observed)
+        <= {
+            "probe_results",
+            "probe_observation_incomplete",
+            "probe_native_no_match",
+        }
+        and count(observed.get("probe_results"), minimum=1)
+        and type(gap.get("probe_actor_unbound_count")) is int
+        and gap["probe_actor_unbound_count"] == 0
+        and observed["probe_results"] == pending_n + no_match_n
+        and (not pending_n or valid_pending)
+        and (not no_match_n or valid_no_match)
+        and set(diagnostics)
+        <= {
+            "machine_probe:native_observation_incomplete",
+            "machine_probe:native_no_matching_pattern",
+        }
+        and not lineage
+        and attempts == []
+        and gap.get("async_pass_projection") == []
+        and gap.get("async_transition_projection") == []
+        and gap.get("async_transition_projection_coverage") == "complete"
+        and count(gap.get("async_pass_unmapped_count"), maximum=0)
+        and count(machine.get("source_invalid_count"), maximum=0)
+        and count(machine.get("required_feature_guard_count"), maximum=0)
+        and machine.get("source_invalid_blockers") == {}
+        and obj(sources.get("trace")).get("reason") == "FileNotFoundError"
+        and obj(sources.get("pending")).get("reason") == "FileNotFoundError"
+    )
+
     # A complete native probe census may contain only verified fixed-watch
     # waits (warmup/source guard), including after the market opens. No trace
     # or outcome journal has been due for these pre-assessment waits. Require
@@ -9148,13 +9275,13 @@ def observation_health_projection(result):
         identity = obj(source.get("source_identity"))
         if (
             source_name in ("pending", "requests")
-            and lazy_auxiliary_absence
+            and (lazy_auxiliary_absence or lazy_nonentry_absence)
             or source_name == "pending"
             and quiet_pending_absence
             or source_name in ("trace", "pending")
             and lazy_wait_trace_absence
             or source_name in ("probe", "trace", "pending")
-            and pre_entry_absence
+            and (pre_entry_absence or pre_entry_probe_only)
         ) and source.get("status") == "unobservable":
             return (
                 set(source)
@@ -9385,7 +9512,7 @@ def observation_health_projection(result):
                     stage.get(k) in (None, "")
                     or stage is machine
                     and k == "source_status"
-                    and pre_entry_absence
+                    and (pre_entry_absence or pre_entry_probe_only)
                     and stage[k] == "unobservable:FileNotFoundError"
                     for k in (
                         "selection_status",
@@ -9451,7 +9578,7 @@ def observation_health_projection(result):
                 for row in selections.values()
             )
             and (
-                pre_entry_absence
+                (pre_entry_absence or pre_entry_probe_only)
                 and machine.get("source_status") == "unobservable:FileNotFoundError"
                 and all(
                     k not in machine
@@ -9726,6 +9853,13 @@ def _incomplete_semantics(semantics):
     sources = semantics.get("sources") or {}
     return (
         semantics.get("status") in statuses
+        or semantics.get("schema") == "machine_auxiliary_intraday_source_semantics_v1"
+        and (
+            semantics.get("async_pass_projection_coverage") != "complete"
+            or semantics.get("async_transition_projection_coverage") != "complete"
+            or type(semantics.get("async_pass_unmapped_count")) is not int
+            or semantics.get("async_pass_unmapped_count") != 0
+        )
         or bool(semantics.get("selection_status") or semantics.get("source_status"))
         or any(
             (value.get("status") if isinstance(value, dict) else value)

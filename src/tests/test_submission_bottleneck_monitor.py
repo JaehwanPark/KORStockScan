@@ -5652,6 +5652,66 @@ def _with_role_partition(*, role="probe_observation", kind="matched"):
 
 
 @pytest.mark.parametrize(
+    "damage",
+    [None, "actor", "role", "request", "trace", "pending_io", "request_io", "gap", "verdict"],
+)
+def test_native_nonentry_with_lazy_journals_remains_unverified(damage):
+    from copy import deepcopy
+
+    result, machine, lineage = _with_role_partition()
+    gap = result["source_gap_semantics"]["current_health_cohort"]["view"]
+    missing = dict(
+        status="unobservable",
+        tail_truncated=False,
+        window_covered=False,
+        recent_count=0,
+        reason="FileNotFoundError",
+    )
+    gap["sources"]["pending"] = deepcopy(missing)
+    gap["async_pass_projection"] = []
+    gap["async_transition_projection"] = []
+    gap["async_pass_unmapped_count"] = 0
+    lineage["source_windows"]["requests"] = deepcopy(missing)
+    lineage["status"] = "partial_source_gap"
+    machine["provider_lineage_source_status"] = "partial_source_gap"
+    for key in (
+        "request_prepared_count", "provider_transmission_attempt_count",
+        "raw_response_observed_count", "auxiliary_response_contract_valid_count",
+        "raw_pass_count", "valid_pass_count", "execution_valid_pass_count",
+    ):
+        lineage[key] = 0
+    lineage["raw_verdict_counts"] = {}
+    for row in lineage["attempt_ledger"]:
+        row.update(
+            machine_action="BLOCK", effective_screen_status="not_requested_machine_nonentry",
+            request_prepared=False, transmission_attempt_observed=False,
+            raw_response_observed=False, raw_verdict=None,
+            auxiliary_response_contract_valid=None, post_response_execution_valid=None,
+            execution_errors=[], timeout=False,
+        )
+    if damage == "actor":
+        lineage["attempt_ledger"][0]["producer_pid"] = "888"
+    elif damage == "role":
+        machine["observation_role_partition"]["provider_eligible_hashes"] = []
+    elif damage == "request":
+        lineage["attempt_ledger"][0]["request_prepared"] = True
+    elif damage == "trace":
+        lineage["source_windows"]["traces"]["window_covered"] = False
+    elif damage == "pending_io":
+        gap["sources"]["pending"]["reason"] = "PermissionError"
+    elif damage == "request_io":
+        lineage["source_windows"]["requests"]["reason"] = "PermissionError"
+    elif damage == "gap":
+        lineage["source_gaps"]["request_unresolved"] = 1
+    elif damage == "verdict":
+        lineage["attempt_ledger"][0]["raw_verdict"] = "PASS"
+    health = monitor.observation_health_projection(result)
+    assert health["status"] == ("warning_pending" if damage is None else "not_eligible")
+    assert health["current_observation_verified"] is False
+    assert health["full_coverage_proven"] is False
+
+
+@pytest.mark.parametrize(
     "role,kind,expected",
     [
         (None, "matched", "warning_pending"),
@@ -11312,3 +11372,322 @@ def test_probe_receipt_rejects_noncanonical_code_without_normalizing(code):
     row["stock_code"] = code
     row["fields"]["native_observation_receipt"]["item"] = str(code) + "_AL"
     assert not monitor._probe_verified_no_match(row)
+
+
+@pytest.mark.parametrize(
+    "mutation, expected_unmapped",
+    [
+        (None, 0),
+        ("async_stage_missing_identity", 1),
+        ("unknown_stage", 1),
+        ("partial_async_identity", 1),
+        ("missing_request_id", 1),
+        ("wrong_request_id", 1),
+        ("missing_machine_hash", 1),
+        ("placeholder_machine_hash", 1),
+        ("missing_trace_schema", 1),
+        ("placeholder_attempt", 1),
+        ("partial_async_venue", 1),
+    ],
+)
+def test_native_sync_pass_is_not_an_unmapped_async_pass(
+    tmp_path, mutation, expected_unmapped
+):
+    """The 10/30 08:11 Main trace has an explicit synchronous caller and no async envelope."""
+    now = monitor.stamp("2026-10-30T08:15:09.917217+09:00")
+    row = _auxiliary_source_row(now - timedelta(seconds=247))
+    row.update(
+        schema="ai_decision_trace_v1",
+        decision_trace_id="analyze_target:053800:1793315459935:6e150457",
+        request_id="analyze_target:053800:1793315459935:6e150457",
+        evaluation_attempt_id="aims-fcf30cf77b1cb49ad37f",
+        stock_code="053800",
+        source_event_stage="watching_analyze_target",
+        decision_evaluation_status="evaluated",
+        entry_ai_screen_status="pass",
+        entry_ai_risk_verdict="PASS",
+        provider_called=True,
+        async_request_id=None,
+        async_producer_pid=None,
+        async_producer_start_ticks=None,
+        async_origin_deadline_epoch=None,
+        machine_observation_sha256="8a930cb35f1ee1c32428b34708c0779295ab40e0f2a69280dab417287ef0da07",
+    )
+    if mutation == "async_stage_missing_identity":
+        row["source_event_stage"] = "watching_analyze_target_async_v1"
+    elif mutation == "unknown_stage":
+        row["source_event_stage"] = "unknown"
+    elif mutation == "partial_async_identity":
+        row["async_producer_pid"] = "3948505"
+    elif mutation == "missing_request_id":
+        row["request_id"] = None
+    elif mutation == "wrong_request_id":
+        row["request_id"] = "another-request"
+    elif mutation == "missing_machine_hash":
+        row["machine_observation_sha256"] = None
+    elif mutation == "placeholder_machine_hash":
+        row["machine_observation_sha256"] = "0" * 64
+    elif mutation == "missing_trace_schema":
+        row["schema"] = None
+    elif mutation == "placeholder_attempt":
+        row["evaluation_attempt_id"] = "unknown"
+    elif mutation == "partial_async_venue":
+        row["async_order_venue"] = "NXT"
+    _source_gap_files(tmp_path, now, traces=[row])
+    semantics = monitor.source_gap_semantics(tmp_path, now)
+    assert semantics["async_pass_unmapped_count"] == expected_unmapped
+    assert semantics["async_pass_projection_coverage"] == (
+        "partial" if expected_unmapped else "complete"
+    )
+    assert semantics["async_pass_projection"] == []
+    assert semantics["observed"]["entry_traces"] == 1
+    assert semantics["runtime_effect"] is False
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "unknown_probe",
+        "invalid_pending",
+        "invalid_no_match",
+        "assessed",
+        "trace_io",
+        "pending_io",
+        "partial_probe",
+        "unmapped_pass",
+        "unknown_wait",
+        "actor_birth",
+        "actor_unbound",
+        "selection",
+        "active_incident",
+        "entry_open",
+    ],
+)
+def test_premarket_native_probe_receipts_preserve_lazy_journal_gaps(
+    tmp_path, monkeypatch, damage
+):
+    """Reproduce the exact 08:05 population: one pending and one native no-match."""
+    from copy import deepcopy
+    from dataclasses import replace
+    from src.trading.market import session_contract
+
+    now = monitor.stamp("2026-10-30T08:05:19.374468+09:00")
+    pending = _native_no_match_probe(now - timedelta(seconds=79), receipt_format="dict")
+    pending["stock_code"] = "053800"
+    pending["fields"].update(
+        zero_base_route="nxt_only",
+        zero_base_probe_result="observation_incomplete",
+        zero_base_probe_reason="confirmation_pending_at_residence_end",
+        physical_probe_lease_id="pending-lease",
+    )
+    pr = pending["fields"]["native_observation_receipt"]
+    pr.update(
+        item="053800_NX",
+        venue="NXT",
+        reason="required_window_incomplete",
+        native_source_current=True,
+        selected_branch_truth={"G1": "UNKNOWN", "G2": "FALSE"},
+        selected_pending_count=2,
+        source_censored_count=0,
+        selected_lifecycle_counts={"G1": {"UNKNOWN": 2056}, "G2": {"FALSE": 3069}},
+    )
+    no_match = _native_no_match_probe(
+        now - timedelta(seconds=19), receipt_format="dict"
+    )
+    no_match["stock_code"] = "019170"
+    no_match["fields"].update(
+        zero_base_route="nxt_only",
+        zero_base_probe_result="pattern_not_matched",
+        zero_base_probe_reason="native_observation_no_matching_pattern",
+        physical_probe_lease_id="no-match-lease",
+    )
+    no_match["fields"]["native_observation_receipt"].update(
+        item="019170_NX",
+        venue="NXT",
+        native_source_current=True,
+        selected_pending_count=0,
+        source_censored_count=0,
+        selected_lifecycle_counts={"G1": {"FALSE": 172}, "G2": {"FALSE": 173}},
+    )
+    _source_gap_files(tmp_path, now, probes=[pending, no_match])
+    day = now.date().isoformat()
+    (tmp_path / "ai_decision_trace" / f"ai_decision_trace_{day}.jsonl").unlink()
+    (tmp_path / "ai_decision_outcomes" / f"ai_decision_outcomes_{day}.jsonl").unlink()
+    actor = ["123", "456"]
+    proof, generation = _health_birth_fixture(now, actor)
+    sources = {
+        tmp_path / "pipeline_events" / f"pipeline_events_{day}.jsonl": "emitted_at",
+        tmp_path / "ai_decision_trace" / f"ai_decision_trace_{day}.jsonl": "decision_ts",
+        tmp_path / "ai_decision_outcomes" / f"ai_decision_outcomes_{day}.jsonl": "decision_ts",
+    }
+    loaded = {
+        str(path): monitor._recent_source_rows(path, now, time_field=field)
+        for path, field in sources.items()
+    }
+    token = monitor._HEALTH_BIRTH.set(proof)
+    try:
+        gap = monitor.source_gap_semantics(tmp_path, now, _loaded=loaded, _actor=actor)
+    finally:
+        monitor._HEALTH_BIRTH.reset(token)
+    gap.pop("_excluded_health_rows")
+    assert gap["observed"] == {
+        "probe_results": 2,
+        "probe_observation_incomplete": 1,
+        "probe_native_no_match": 1,
+    }
+    assert gap["native_pending_observations"]["unknown_count"] == 2056
+    result = _observation_health_fixture()
+    old = monitor.stamp(result["as_of"])
+    delta = now - old
+
+    def shift(value):
+        if isinstance(value, dict):
+            return {k: shift(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [shift(v) for v in value]
+        if (
+            isinstance(value, str)
+            and len(value) > 10
+            and value[10] == "T"
+            and monitor.stamp(value)
+        ):
+            return (monitor.stamp(value) + delta).isoformat()
+        return value
+
+    result = shift(result)
+    result["date"] = day
+    inp = result["input_provenance"]
+    at = monitor.stamp("2026-10-30T08:05:02.955225+09:00")
+    latest = monitor.stamp("2026-10-30T08:05:02.735275+09:00")
+    inp.update(
+        target_date=day,
+        evaluated_at=now.isoformat(),
+        snapshot_as_of=at.isoformat(),
+        latest_event_at=latest.isoformat(),
+        latest_event_status="observed_recent_event",
+        loaded_recent_event_count=191,
+        snapshot_age_seconds=(now - at).total_seconds(),
+        latest_event_age_seconds=(now - latest).total_seconds(),
+        row_count=0,
+        prior_accepted_source_as_of=None,
+        snapshot_order="initial",
+        sentinel_classification=None,
+    )
+    execution = result["entry_execution_tuning_semantics"]
+    execution["entry_split"]["prepared_effective_date"] = day
+    execution["pre_submit_delay"]["effective_from"] = day
+    result["source_gap_semantics"] = gap
+    machine = result["machine_semantics"]
+    machine.update(
+        status="partial_unobservable",
+        source_status="unobservable:FileNotFoundError",
+        observation_count=0,
+    )
+    machine["publication"]["effective_date"] = day
+    for key in (
+        "read_count",
+        "read_limit_bytes",
+        "bytes_read",
+        "source_bytes",
+        "window_coverage",
+    ):
+        machine.pop(key, None)
+    generation.update(
+        status="current",
+        generation_current=True,
+        selector_reported_actual_pid_consumed=True,
+    )
+    result["observer_generation"] = generation
+    for name in ("source_gap_semantics", "machine_semantics"):
+        original = result[name]
+        token = monitor._HEALTH_BIRTH.set(proof)
+        try:
+            original["current_health_cohort"] = monitor._health_cohort(
+                deepcopy(original), actor, now
+            )
+        finally:
+            monitor._HEALTH_BIRTH.reset(token)
+    gap = result["source_gap_semantics"]["current_health_cohort"]["view"]
+    machine = result["machine_semantics"]["current_health_cohort"]["view"]
+    if damage == "unknown_probe":
+        gap["observed"]["probe_results"] += 1
+    elif damage == "invalid_pending":
+        gap["native_pending_observations"]["unclassified_count"] = 1
+    elif damage == "invalid_no_match":
+        gap["probe_route_native_no_match_counts"]["nxt_only"] += 1
+    elif damage == "assessed":
+        gap["observed"]["probe_assessed"] = 1
+    elif damage == "trace_io":
+        gap["sources"]["trace"]["reason"] = "PermissionError"
+    elif damage == "pending_io":
+        gap["sources"]["pending"]["reason"] = "PermissionError"
+    elif damage == "partial_probe":
+        gap["sources"]["probe"].update(status="partial", window_covered=False)
+    elif damage == "unmapped_pass":
+        gap["async_pass_unmapped_count"] = 1
+    elif damage == "unknown_wait":
+        gap["fixed_watch_waits"]["unclassified_or_actionable_wait_count"] = 1
+    elif damage == "actor_birth":
+        proof["boot_epoch"] += 1
+    elif damage == "actor_unbound":
+        gap["probe_actor_unbound_count"] = 1
+    elif damage == "selection":
+        machine["selection"]["representative"]["score_contract_valid"] = False
+    elif damage == "active_incident":
+        result["incidents"]["unexpected"] = dict(
+            status="active", last_seen=now.isoformat(), issues={"unknown": 1}
+        )
+    elif damage == "entry_open":
+        context = session_contract.resolve_market_session(now)
+        monkeypatch.setattr(
+            session_contract,
+            "resolve_market_session",
+            lambda _: replace(context, entry_allowed_by_clock=True),
+        )
+    before = json.dumps(result, sort_keys=True)
+    health = monitor.observation_health_projection(result)
+    assert health["status"] == (
+        "warning_pending" if damage is None else "not_eligible"
+    ), health
+    if damage is None:
+        assert "source_window_not_complete:trace" in health["unmet_conditions"]
+        assert "source_window_not_complete:pending" in health["unmet_conditions"]
+    assert (
+        not health["current_observation_verified"]
+        and not health["full_coverage_proven"]
+    )
+    assert not health["runtime_effect"] and not health["allowed_runtime_apply"]
+    assert json.dumps(result, sort_keys=True) == before
+
+
+@pytest.mark.parametrize(
+    "pass_coverage, transition_coverage, unmapped, expected",
+    [
+        ("complete", "complete", 0, False),
+        ("partial", "complete", 1, True),
+        ("complete", "partial", 0, True),
+        ("complete", "complete", 1, True),
+        ("complete", "complete", None, True),
+    ],
+)
+def test_source_semantics_cannot_validate_with_incomplete_async_projection(
+    pass_coverage, transition_coverage, unmapped, expected
+):
+    source = {
+        "schema": "machine_auxiliary_intraday_source_semantics_v1",
+        "status": "gap_observed",
+        "sources": {"trace": {"status": "complete"}},
+        "async_pass_projection_coverage": pass_coverage,
+        "async_transition_projection_coverage": transition_coverage,
+        "async_pass_unmapped_count": unmapped,
+    }
+    assert monitor._incomplete_semantics(source) is expected
+
+@pytest.mark.parametrize("receipt_format", ["dict", "json", "literal"])
+def test_probe_actor_recognizes_native_receipt_serialization_and_rejects_conflict(receipt_format):
+    now = monitor.stamp("2026-10-30T08:05:00+09:00")
+    row = _native_no_match_probe(now, receipt_format=receipt_format)
+    assert monitor._row_actor(row) == ["123", "456"]
+    row["fields"]["zero_base_producer_start_ticks"] = "999"
+    assert monitor._row_actor(row) is None
