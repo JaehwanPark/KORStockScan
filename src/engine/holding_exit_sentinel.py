@@ -1826,9 +1826,12 @@ def publish_historical_buy_resolution(
                 / "runtime/policy_bootstrap/verified_holding_profit_pid"
                 / collection_date
             )
-            for pid_path in sorted(archive.glob("*.json")):
-                if len(pid_sources) >= 256:
+            pid_paths = []
+            for pid_path in archive.glob("*.json"):
+                if len(pid_paths) >= 256:
                     raise ValueError("holding_collection_pid_inventory_unbounded")
+                pid_paths.append(pid_path)
+            for pid_path in sorted(pid_paths):
                 body, identity = _read(pid_path, 32768)
                 if (
                     body.get("pid")

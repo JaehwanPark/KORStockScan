@@ -3166,3 +3166,13 @@ def test_later_collection_invalid_evidence_and_new_losses_remain_actionable(
         ]
         != "historical_diagnostic"
     )
+
+
+def test_collection_pid_inventory_bounds_unrelated_receipts(tmp_path, monkeypatch):
+    _, _, _, _, _, pid_path, now = _next_day_collection_fixture(tmp_path, monkeypatch)
+    for index in range(256):
+        (pid_path.parent / f"unrelated_{index:03d}.json").write_text('{"pid": 999999}')
+    with pytest.raises(ValueError, match="holding_collection_pid_inventory_unbounded"):
+        sentinel.publish_historical_buy_resolution(
+            "2026-10-09", ["21"], now=now, collection_date="2026-10-10"
+        )
