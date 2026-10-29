@@ -1510,6 +1510,171 @@ def render_crontab(
     return "\n".join(result) + "\n"
 
 
+_DELAY_TAGS = ("THRESHOLD_CYCLE_POSTCLOSE", "POSTCLOSE_DONE_CONTROLLER", "TUNING_MONITORING_POSTCLOSE")
+_DELAY_RESTORE_TAG = "POSTCLOSE_DELAY_RESTORE_ONCE"
+
+
+def _delay_receipt_digest(value: dict) -> str:
+    return hashlib.sha256(json.dumps(
+        {k: v for k, v in value.items() if k != "receipt_sha256"},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+    ).encode()).hexdigest()
+
+
+def _one_day_delay_plan(original: str, workspace: Path, day: str) -> tuple[str, dict]:
+    """Make only the approved three schedule edits and one recovery entry."""
+    if render_crontab(original, workspace, require_snapshot_group=True) != original:
+        raise ValueError("delay_cron_routing_invalid")
+    if _DELAY_RESTORE_TAG in original:
+        raise ValueError("delay_restore_already_present")
+    rows, before, installed = [], {}, {}
+    for line in original.splitlines():
+        tag = line.rsplit("#", 1)[-1].strip() if "#" in line else ""
+        if tag in _DELAY_TAGS and not line.lstrip().startswith("#"):
+            if tag in before or not line.startswith("10 20 * * 1-5 "):
+                raise ValueError("delay_schedule_not_original")
+            before[tag] = line
+            line = "30 20 " + line[len("10 20 "):]
+            installed[tag] = line
+        rows.append(line)
+    if set(before) != set(_DELAY_TAGS):
+        raise ValueError("delay_schedule_missing")
+    restore = (
+        f"*/5 * * * * bash {workspace}/deploy/run_with_owned_log.sh "
+        f"--owner postclose_delay_restore --log {workspace}/logs/postclose_delay_restore.log "
+        f"bash {workspace}/deploy/run_runtime_release.sh --restore-postclose-delay-once {day} "
+        f"# {_DELAY_RESTORE_TAG}"
+    )
+    rows.append(restore)
+    new = "\n".join(rows) + "\n"
+    if render_crontab(new, workspace, require_snapshot_group=True) != new:
+        raise ValueError("delay_new_routing_invalid")
+    return new, dict(original_lines=before, installed_lines=installed, restore_line=restore)
+
+
+def _delay_restored_cron(current: str, workspace: Path, intent: dict) -> str:
+    """Compare exact owned rows and preserve unrelated concurrent cron changes."""
+    if render_crontab(current, workspace, require_snapshot_group=True) != current:
+        raise ValueError("delay_current_routing_invalid")
+    original, installed, restore = intent["original_lines"], intent["installed_lines"], intent["restore_line"]
+    if set(original) != set(_DELAY_TAGS) or set(installed) != set(_DELAY_TAGS):
+        raise ValueError("delay_receipt_rows_invalid")
+    rows, seen, restore_count = [], set(), 0
+    for line in current.splitlines():
+        if line == restore:
+            restore_count += 1
+            continue
+        tag = line.rsplit("#", 1)[-1].strip() if "#" in line else ""
+        if tag in _DELAY_TAGS and not line.lstrip().startswith("#"):
+            if tag in seen or line not in (installed[tag], original[tag]):
+                raise ValueError("delay_owned_schedule_changed")
+            seen.add(tag)
+            line = original[tag]
+        rows.append(line)
+    if seen != set(_DELAY_TAGS) or restore_count != 1:
+        raise ValueError("delay_restore_entry_missing_or_duplicate")
+    result = "\n".join(rows) + "\n"
+    if render_crontab(result, workspace, require_snapshot_group=True) != result:
+        raise ValueError("delay_restored_routing_invalid")
+    return result
+
+
+def _write_exclusive_json(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = (json.dumps(value, sort_keys=True, ensure_ascii=True) + "\n").encode()
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "wb") as out:
+        out.write(data)
+        out.flush()
+        os.fsync(out.fileno())
+
+
+def install_postclose_delay_once(workspace: Path, day: str, *, now: datetime) -> dict:
+    """Publish the explicitly authorized exact-day delay under native cron locks."""
+    if date.fromisoformat(day).isoformat() != day or now.tzinfo is None:
+        raise ValueError("delay_install_scope_invalid")
+    local = now.astimezone(ZoneInfo("Asia/Seoul"))
+    if local.date().isoformat() != day or local.weekday() >= 5 or (local.hour, local.minute) >= (20, 10):
+        raise ValueError("delay_install_window_invalid")
+    audit = workspace / "data/audit/postclose_schedule_delay" / day
+    terminal = workspace / "data/runtime/postclose_schedule_overrides" / (day + ".json")
+    with runtime_release_set_lock(workspace), (workspace / "data/runtime/runtime_release_cron.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        root, commit = selected_release(workspace)
+        own_sha = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+        if hashlib.sha256((root / "src/engine/infrastructure/runtime_release_router.py").read_bytes()).hexdigest() != own_sha:
+            raise ValueError("delay_producer_not_selected")
+        selection_sha = hashlib.sha256((workspace / "data/runtime/runtime_release_selection.json").read_bytes()).hexdigest()
+        old = subprocess.check_output(["crontab", "-l"], text=True)
+        new, lines = _one_day_delay_plan(old, workspace, day)
+        if terminal.exists() or terminal.is_symlink():
+            raise ValueError("delay_terminal_already_exists")
+        audit.mkdir(parents=True, exist_ok=True)
+        before = audit / "before.crontab"
+        with before.open("x") as stream:
+            stream.write(old); stream.flush(); os.fsync(stream.fileno())
+        intent = dict(schema="postclose_schedule_delay_intent_v1", source_date=day,
+                      release_root=str(root), git_commit=commit, producer_sha256=own_sha,
+                      selection_sha256=selection_sha, original_crontab_sha256=hashlib.sha256(old.encode()).hexdigest(),
+                      installed_crontab_sha256=hashlib.sha256(new.encode()).hexdigest(),
+                      original_start=[20, 10], override_start=[20, 30], **lines)
+        intent["receipt_sha256"] = _delay_receipt_digest(intent)
+        _write_exclusive_json(audit / "intent.json", intent)
+        if subprocess.check_output(["crontab", "-l"], text=True) != old:
+            raise ValueError("delay_cron_changed_during_install")
+        subprocess.run(["crontab", "-"], input=new, text=True, check=True)
+        if subprocess.check_output(["crontab", "-l"], text=True) != new:
+            raise ValueError("delay_cron_install_readback_mismatch")
+        receipt = {**intent, "schema": "postclose_schedule_override_v1", "state": "installed",
+                   "owner": "runtime_release_cron", "intent_path": str(audit / "intent.json"),
+                   "intent_sha256": hashlib.sha256((audit / "intent.json").read_bytes()).hexdigest()}
+        receipt["receipt_sha256"] = _delay_receipt_digest(receipt)
+        _write_exclusive_json(terminal, receipt)
+        return receipt
+
+
+def restore_postclose_delay_once(workspace: Path, day: str, *, now: datetime) -> dict:
+    if date.fromisoformat(day).isoformat() != day or now.tzinfo is None:
+        raise ValueError("delay_restore_scope_invalid")
+    local = now.astimezone(ZoneInfo("Asia/Seoul"))
+    if local.date().isoformat() < day:
+        return dict(schema="postclose_schedule_delay_restore_v1", source_date=day, status="not_yet_due")
+    audit = workspace / "data/audit/postclose_schedule_delay" / day
+    terminal = workspace / "data/runtime/postclose_schedule_overrides" / (day + ".json")
+    early = local.date().isoformat() == day and (local.hour, local.minute) < (20, 35)
+    if early and (terminal.exists() or terminal.is_symlink()):
+        return dict(schema="postclose_schedule_delay_restore_v1", source_date=day, status="not_yet_due")
+    intent_path = audit / "intent.json"
+    if intent_path.is_symlink() or not intent_path.is_file() or intent_path.stat().st_size > 32768:
+        raise ValueError("delay_intent_unavailable")
+    intent = json.loads(intent_path.read_bytes())
+    if (intent.get("schema") != "postclose_schedule_delay_intent_v1"
+            or intent.get("source_date") != day
+            or intent.get("receipt_sha256") != _delay_receipt_digest(intent)):
+        raise ValueError("delay_intent_invalid")
+    before = (audit / "before.crontab").read_text()
+    if hashlib.sha256(before.encode()).hexdigest() != intent.get("original_crontab_sha256"):
+        raise ValueError("delay_original_crontab_changed")
+    expected, lines = _one_day_delay_plan(before, workspace, day)
+    if (hashlib.sha256(expected.encode()).hexdigest() != intent.get("installed_crontab_sha256")
+            or any(lines[key] != intent.get(key) for key in lines)):
+        raise ValueError("delay_expected_crontab_changed")
+    with runtime_release_set_lock(workspace), (workspace / "data/runtime/runtime_release_cron.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        current = subprocess.check_output(["crontab", "-l"], text=True)
+        restored = _delay_restored_cron(current, workspace, intent)
+        if subprocess.check_output(["crontab", "-l"], text=True) != current:
+            raise ValueError("delay_cron_changed_during_restore")
+        subprocess.run(["crontab", "-"], input=restored, text=True, check=True)
+        if subprocess.check_output(["crontab", "-l"], text=True) != restored:
+            raise ValueError("delay_restore_readback_mismatch")
+        result = dict(schema="postclose_schedule_delay_restore_v1", source_date=day,
+                      status="restored_incomplete_install" if early else "restored",
+                      restored_crontab_sha256=hashlib.sha256(restored.encode()).hexdigest())
+        _write_exclusive_json(audit / "restored.json", result)
+        return result
+
+
 def _cron_routing_status(crontab: str) -> dict:
     """Describe an already validated cron without conflating observer slots."""
     snapshot_count = sum(
@@ -1653,6 +1818,8 @@ def main() -> int:
     group.add_argument("--check-cron", action="store_true")
     group.add_argument("--install-cron", action="store_true")
     group.add_argument("--check-release-set", action="store_true")
+    group.add_argument("--install-postclose-delay-once", metavar="YYYY-MM-DD")
+    group.add_argument("--restore-postclose-delay-once", metavar="YYYY-MM-DD")
     args = parser.parse_args()
     source_path = Path(__file__).resolve()
     workspace = source_path.parents[3]
@@ -1668,6 +1835,8 @@ def main() -> int:
                 or args.check_cron
                 or args.install_cron
                 or args.check_release_set
+                or args.install_postclose_delay_once
+                or args.restore_postclose_delay_once
             ):
                 raise ValueError("runtime_pid_workspace_record_only")
             requested_workspace = Path(args.workspace)
@@ -1683,6 +1852,15 @@ def main() -> int:
         if scheduled:
             scheduled_fd = leases.enter_context(scheduled_execution_lease(workspace))
         root, commit = selected_release(workspace)
+        if args.install_postclose_delay_once or args.restore_postclose_delay_once:
+            if args.operation or args.target_date or args.print_plan or args.resolve_effective_today:
+                raise ValueError("delay_cron_mode_arguments_invalid")
+            if args.install_postclose_delay_once:
+                receipt = install_postclose_delay_once(workspace, args.install_postclose_delay_once, now=datetime.now(ZoneInfo("Asia/Seoul")))
+            else:
+                receipt = restore_postclose_delay_once(workspace, args.restore_postclose_delay_once, now=datetime.now(ZoneInfo("Asia/Seoul")))
+            print(json.dumps(receipt, sort_keys=True), flush=True)
+            return 0
         if (
             args.workspace is not None
             and source_path
@@ -1800,7 +1978,10 @@ def main() -> int:
                 _record_owned_route_failure(workspace, args.operation, args.target_date, exc)
             except (OSError, ValueError) as evidence_error:
                 print("runtime_route_failure_evidence_unavailable:" + type(evidence_error).__name__, file=sys.stderr)
-        print(f"runtime_release_route_blocked: {exc}", file=sys.stderr)
+        if args.restore_postclose_delay_once:
+            print(f"[ERROR] postclose_delay_restore target_date={args.restore_postclose_delay_once} reason={exc}", file=sys.stderr)
+        else:
+            print(f"runtime_release_route_blocked: {exc}", file=sys.stderr)
         return 2
     finally:
         leases.close()

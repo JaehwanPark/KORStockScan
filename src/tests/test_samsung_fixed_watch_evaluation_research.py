@@ -270,6 +270,20 @@ def test_later_preparation_waits_without_collecting_or_creating_inputs(tmp_path)
         F.prepare_later_input(tmp_path, "2026-10-02", frozen(), output)
 
 
+def test_later_preparation_recognizes_compressed_projection(tmp_path):
+    import gzip
+
+    directory = tmp_path / "data/report/machine_observation_projection"
+    directory.mkdir(parents=True)
+    path = directory / "machine_observation_projection_2026-10-06_0_1.json.gz"
+    path.write_bytes(gzip.compress(b'{"rows":[]}', mtime=0))
+    output = tmp_path / "tmp/later"
+    assert F.prepare_later_input(tmp_path, "2026-10-06", frozen(), output) is None
+    status = F.R.read(output / "preparation-status.json")
+    assert len(status["missing_source_paths"]) == 3
+    assert not any("machine_observation_projection" in p for p in status["missing_source_paths"])
+
+
 def test_source_bad_row_is_identified_without_excluding_good_population():
     good = dict(
         stock_code="005930",

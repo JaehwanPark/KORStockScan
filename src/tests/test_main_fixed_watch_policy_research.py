@@ -1,6 +1,7 @@
 """Offline research contracts do not create native support or policy authority."""
 
 from copy import deepcopy
+import gzip
 import json
 from pathlib import Path
 
@@ -80,6 +81,42 @@ def test_ten_candidates_are_frozen_before_outcomes_and_initial_designation_is_in
     assert result["candidate_policy_sha256"] is None
     assert result["allowed_runtime_apply"] is False
     assert result["actual_completed_net_profit_krw"] is None
+
+
+def test_frozen_projection_accepts_exact_gzip_without_changing_manifest(tmp_path):
+    directory = tmp_path / "machine_observation_projection"
+    directory.mkdir()
+    path = directory / "machine_observation_projection_2026-09-29_0_1.json"
+    original = json.dumps(dict(rows=[])).encode()
+    path.write_bytes(original)
+    frozen = research.freeze(
+        policy(), [path], source_date="2026-10-06", publication_date="2026-10-06",
+        target_date="2026-10-07",
+    )
+    manifest = deepcopy(frozen["source_manifest"])
+    plain_result = research.evaluate(frozen)
+    path.with_suffix(".json.gz").write_bytes(gzip.compress(original, mtime=0))
+    path.unlink()
+    assert research.evaluate(frozen) == plain_result
+    assert frozen["source_manifest"] == manifest
+
+    path.with_suffix(".json.gz").write_bytes(gzip.compress(b'{"rows":[{}]}', mtime=0))
+    with pytest.raises(ValueError, match="fixed_watch_frozen_source_changed"):
+        research.evaluate(frozen)
+
+
+def test_explicit_gzip_manifest_keeps_physical_archive_binding(tmp_path):
+    path = tmp_path / "projection.json.gz"
+    original = b'{"rows":[]}'
+    path.write_bytes(gzip.compress(original, mtime=0))
+    frozen = research.freeze(
+        policy(), [path], source_date="2026-10-06", publication_date="2026-10-06",
+        target_date="2026-10-07",
+    )
+    research.evaluate(frozen)
+    path.write_bytes(gzip.compress(original, mtime=1))
+    with pytest.raises(ValueError, match="fixed_watch_frozen_source_changed"):
+        research.evaluate(frozen)
 
 
 @pytest.mark.parametrize(

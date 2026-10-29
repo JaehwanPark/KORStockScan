@@ -878,7 +878,11 @@ def prepare_later_input(root, day, frozen, output):
         stream_root / "market_stream.manifest.json",
         stream_root / "market_depth_stream.manifest.json",
     ]
-    missing = [str(p) for p in required if not p.exists()]
+    missing = [
+        str(p)
+        for p in required
+        if not p.exists() and not R.P._projection_archive_for_missing_plain(p)
+    ]
     if missing:
         write(
             output / "preparation-status.json",

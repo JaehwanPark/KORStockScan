@@ -186,6 +186,17 @@ boundary after comparing its incumbent bytes.
 
 Eight cron entrypoints use the selection: 07:35 PREOPEN threshold, 07:55 main start, 20:05 EOD, 20:10 postclose/controller/tuning, 20:50 archive and 05:35 next-KRX-session finalization. Main and archive wrappers validate the exact-date EOD terminal before resource-heavy work. The finalizer resolves the immediately prior KRX trading date from the effective date, skips non-trading effective dates, stops predecessor waiting at 06:00 and bounds cleanup/detector completion by 06:50, leaving 30 minutes before the 07:20 PREOPEN scanner. The 21:05 paired replay wrapper is manual compatibility; the main wrapper owns the current auxiliary calculation. The cron check requires all eight installed owners. Existing environment values, log ownership/redirection and wrapper locks are preserved. Existing 07:30/20:10 stop behavior is unchanged; routing is not a redesign of shutdown semantics. Other Main intraday observer/scanner jobs retain their separate owners. Dedicated retired services, timers and IPO auto-order cron are removed.
 
+An explicitly authorized one-day postclose delay uses the existing cron router's
+`--install-postclose-delay-once` and `--restore-postclose-delay-once` modes. The
+owner records the original and installed cron rows and selection identity,
+verifies installation with compare-and-swap, and schedules bounded restoration
+of its own rows while preserving unrelated edits. The cron detector accepts the
+later start only while the issued receipt, producer and installed schedule agree;
+missing or changed evidence is not a successful start and the original completion
+deadlines remain in force. This scheduling facility does not stop Main, run
+pre-postclose cleanup, or establish collector closure. Those require their own
+native transition and verification before any operational sequence is claimed.
+
 After the exact-source controller reaches `done` with a current whole-chain strict receipt, its wrapper prepares the next operating day's bootstrap under `data/runtime/policy_bootstrap/prepared/<target>/`. The 05:35 finalizer repeats this preparation after any controller refresh and successful final detector, so the latest closed generation owns the preparation. This isolated env/manifest/verification is bound to the controller, direct Main machine and compact auxiliary policy receipts, verified incumbent, and selected immutable release. A late recovery after the scheduled 07:35 PREOPEN cutoff prepares the next KRX trading day after the recovery date; it does not require a postclose run on an intentionally skipped bot day. The preparation writes no active env, policy pointer, order, or PID receipt. If preparation fails, the controller/finalizer wrapper reports failure without turning controller `done` into a readiness claim.
 
 At 07:35 the selected release first rechecks the preparation's exact source, policy and release hashes; it then executes existing date-bound publishers and activators and writes the live bootstrap. The 07:55 launcher requires an exact-date `succeeded` PREOPEN status from the same release before sourcing the live env, and it still verifies the live bootstrap and actual PID separately. A changed source, selector, missing preparation, failed PREOPEN, or stale status blocks startup. Preparation success is a preflight result, not proof of target-day activation, broker availability, live orders, or economic improvement.

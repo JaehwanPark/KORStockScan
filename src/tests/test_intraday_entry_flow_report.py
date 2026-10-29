@@ -1,4 +1,7 @@
+import gzip
 import json
+
+import pytest
 
 from src.engine.monitoring.intraday_entry_flow_report import (
     _default_event_cache_path,
@@ -346,6 +349,105 @@ def test_default_event_cache_path_prefers_live_pipeline_events(tmp_path, monkeyp
     sentinel_path.write_text("", encoding="utf-8")
 
     assert _default_event_cache_path("2026-06-29") == pipeline_path
+
+
+def test_report_reads_compressed_default_without_changing_rows(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "src.engine.monitoring.intraday_entry_flow_report.PROJECT_ROOT", tmp_path
+    )
+    plain = tmp_path / "data/pipeline_events/pipeline_events_2026-06-29.jsonl"
+    plain.parent.mkdir(parents=True)
+    rows = [_event("000001", "test", "budget_pass", {"scanner_promotion_id": "p1"})]
+    data = ("\n".join(json.dumps(row) for row in rows) + "\n").encode()
+    plain.write_bytes(data)
+    compressed = plain.with_suffix(".jsonl.gz")
+    compressed.write_bytes(gzip.compress(data, mtime=0))
+    options = dict(target_date="2026-06-29", generated_at="fixed")
+    before = build_report(**options)
+    assert before["source_events"] == str(plain)
+    plain.unlink()
+    after = build_report(**options)
+    assert after["source_events"] == str(compressed)
+    assert {k: v for k, v in before.items() if k != "source_events"} == {
+        k: v for k, v in after.items() if k != "source_events"
+    }
+
+
+def test_report_accepts_explicit_gzip_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "src.engine.monitoring.intraday_entry_flow_report.PROJECT_ROOT", tmp_path
+    )
+    cache = tmp_path / "data/runtime/sentinel_event_cache/buy_funnel_sentinel_events_2026-06-29.jsonl.gz"
+    cache.parent.mkdir(parents=True)
+    row = _event("000001", "test", "budget_pass", {"scanner_promotion_id": "p1"})
+    cache.write_bytes(gzip.compress((json.dumps(row) + "\n").encode(), mtime=0))
+    result = build_report(
+        target_date="2026-06-29", generated_at="fixed", event_cache_path=cache
+    )
+    assert result["source_events"] == str(cache)
+    assert result["summary"]["symbol_count"] == 1
+
+
+def test_report_resolves_explicit_logical_path_to_gzip_and_reports_physical_path(tmp_path):
+    plain = tmp_path / "events.jsonl"
+    archive = plain.with_suffix(".jsonl.gz")
+    row = _event("000001", "test", "budget_pass", {"scanner_promotion_id": "p1"})
+    archive.write_bytes(gzip.compress((json.dumps(row) + "\n").encode(), mtime=0))
+    result = build_report(
+        target_date="2026-06-29", generated_at="fixed", event_cache_path=plain
+    )
+    assert result["source_events"] == str(archive)
+    assert result["summary"]["symbol_count"] == 1
+
+
+def test_default_sentinel_archive_requires_generation_proof(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "src.engine.monitoring.intraday_entry_flow_report.PROJECT_ROOT", tmp_path
+    )
+    archive = tmp_path / "data/runtime/sentinel_event_cache/buy_funnel_sentinel_events_2026-06-29.jsonl.gz"
+    archive.parent.mkdir(parents=True)
+    archive.write_bytes(gzip.compress(b'{}\n', mtime=0))
+    with pytest.raises(ValueError, match="sentinel_archive_generation_unverified"):
+        build_report(target_date="2026-06-29", generated_at="fixed")
+
+
+def test_dangling_explicit_logical_link_never_falls_back_to_gzip(tmp_path):
+    plain = tmp_path / "events.jsonl"
+    plain.symlink_to(tmp_path / "missing")
+    plain.with_suffix(".jsonl.gz").write_bytes(gzip.compress(b'{}\n', mtime=0))
+    with pytest.raises(FileNotFoundError, match="event_source_symlink_broken"):
+        build_report(
+            target_date="2026-06-29", generated_at="fixed", event_cache_path=plain
+        )
+
+
+def test_missing_explicit_source_keeps_existing_empty_result(tmp_path):
+    plain = tmp_path / "events.jsonl"
+    result = build_report(
+        target_date="2026-06-29", generated_at="fixed", event_cache_path=plain
+    )
+    assert result["source_events"] == str(plain)
+    assert result["summary"]["symbol_count"] == 0
+
+
+def test_dangling_gzip_sibling_is_not_reported_as_empty(tmp_path):
+    plain = tmp_path / "events.jsonl"
+    plain.with_suffix(".jsonl.gz").symlink_to(tmp_path / "missing")
+    with pytest.raises(FileNotFoundError, match="event_source_symlink_broken"):
+        build_report(
+            target_date="2026-06-29", generated_at="fixed", event_cache_path=plain
+        )
+
+
+def test_report_rejects_corrupted_compressed_input(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "src.engine.monitoring.intraday_entry_flow_report.PROJECT_ROOT", tmp_path
+    )
+    path = tmp_path / "data/pipeline_events/pipeline_events_2026-06-29.jsonl.gz"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(gzip.compress(b'{}\n', mtime=0)[:-4])
+    with pytest.raises(EOFError):
+        build_report(target_date="2026-06-29", generated_at="fixed")
 
 
 def test_build_report_accepts_offset_aware_since_for_target_date(tmp_path):

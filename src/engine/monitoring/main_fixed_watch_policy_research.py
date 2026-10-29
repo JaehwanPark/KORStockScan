@@ -168,7 +168,7 @@ def evaluate(frozen):
     costs = []
     for item in frozen["source_manifest"]:
         path = Path(item["path"])
-        if file_sha(path) != item["sha256"] or path.stat().st_size != item["bytes"]:
+        if replay.file_sha_size(path) != (item["sha256"], item["bytes"]):
             raise ValueError("fixed_watch_frozen_source_changed")
         for row in replay.stream_array(path):
             if row.get("stock_code") != symbol:
@@ -218,7 +218,7 @@ def evaluate(frozen):
                 ).append(row)
             except (KeyError, TypeError, ValueError) as exc:
                 exclusions[str(exc)] += 1
-        if file_sha(path) != item["sha256"]:
+        if replay.file_sha_size(path) != (item["sha256"], item["bytes"]):
             raise ValueError("fixed_watch_source_changed_during_evaluation")
 
     def earliest(rows):

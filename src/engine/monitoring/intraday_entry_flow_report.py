@@ -8,6 +8,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from src.utils.jsonl_io import existing_or_gzip_path, open_text_auto
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ENTRY_PIPELINE = "ENTRY_PIPELINE"
 KST = timezone(timedelta(hours=9))
@@ -893,9 +895,12 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
+    path = existing_or_gzip_path(Path(path))
+    if path.is_symlink() and not path.exists():
+        raise FileNotFoundError("event_source_symlink_broken:" + str(path))
     if not path.exists():
         return rows
-    with path.open(encoding="utf-8") as handle:
+    with open_text_auto(path, errors="strict") as handle:
         for line in handle:
             line = line.strip()
             if not line:
@@ -1011,7 +1016,22 @@ def build_report(
     until: str | None = None,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
-    event_cache_path = event_cache_path or _default_event_cache_path(target_date)
+    if event_cache_path is None:
+        event_cache_path = _default_event_cache_path(target_date)
+        # This optional cache has no sealed logical-content hash in its native
+        # metadata. An older gzip can be a different generation from the
+        # missing cache, so it cannot be silently selected by name alone.
+        if (
+            event_cache_path.parent.name == "sentinel_event_cache"
+            and not event_cache_path.exists()
+            and not event_cache_path.is_symlink()
+            and Path(str(event_cache_path) + ".gz").exists()
+        ):
+            raise ValueError("sentinel_archive_generation_unverified")
+    else:
+        # Explicit paths use the established sibling fallback. This reports
+        # the physical file read; it is not proof of a prior cache generation.
+        event_cache_path = existing_or_gzip_path(Path(event_cache_path))
     diagnostic_path = diagnostic_path or _default_diagnostic_path(target_date)
     diagnostic = _read_json(diagnostic_path)
     raw_promoted = {

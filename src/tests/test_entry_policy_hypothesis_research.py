@@ -1,4 +1,5 @@
 import gzip
+import hashlib
 import json
 
 import pytest
@@ -37,6 +38,97 @@ def test_stream_retained_array_handles_whitespace_and_gzip(tmp_path):
             indent=2,
         )
     assert list(research.stream_array(path)) == [dict(x=1), dict(x=2)]
+
+
+def test_projection_logical_seal_and_reader_accept_verified_gzip(tmp_path):
+    from src.engine.scalping import samsung_quote_recovery_research as seals
+
+    directory = tmp_path / "machine_observation_projection"
+    directory.mkdir()
+    plain = directory / "machine_observation_projection_2026-09-29_0_1.json"
+    archive = plain.with_suffix(".json.gz")
+    original = b'{"rows":[{"trace":"a"},{"trace":"b"}]}'
+    plain.write_bytes(original)
+    archive.write_bytes(gzip.compress(original, mtime=0))
+    logical_hash = hashlib.sha256(original).hexdigest()
+    assert research.file_sha(plain) == logical_hash
+    assert list(research.stream_array(plain)) == [{"trace": "a"}, {"trace": "b"}]
+
+    plain.unlink()
+    # Existing manifests continue to name the logical original path.
+    seals.verify_hashes({str(plain): logical_hash})
+    assert list(research.stream_array(plain)) == [{"trace": "a"}, {"trace": "b"}]
+    assert research.file_sha(archive) == hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    archive.write_bytes(gzip.compress(b'{"rows":[{"trace":"changed"}]}', mtime=0))
+    with pytest.raises(ValueError, match="sealed_file_changed"):
+        seals.verify_hashes({str(plain): logical_hash})
+
+
+def test_projection_fallback_keeps_plain_precedence_and_missing_contract(tmp_path):
+    directory = tmp_path / "machine_observation_projection"
+    directory.mkdir()
+    plain = directory / "machine_observation_projection_2026-09-29_0_1.json"
+    archive = plain.with_suffix(".json.gz")
+    original = b'{"rows":[{"value":1}]}'
+    plain.write_bytes(original)
+    archive.write_bytes(gzip.compress(b'{"rows":[{"value":2}]}', mtime=0))
+    assert research.file_sha(plain) == hashlib.sha256(original).hexdigest()
+    assert list(research.stream_array(plain)) == [{"value": 1}]
+
+    unrelated = tmp_path / "other.json"
+    unrelated.with_suffix(".json.gz").write_bytes(gzip.compress(original, mtime=0))
+    with pytest.raises(FileNotFoundError):
+        research.file_sha(unrelated)
+    plain.unlink()
+    archive.unlink()
+    with pytest.raises(FileNotFoundError):
+        list(research.stream_array(plain))
+
+
+def test_projection_fallback_rejects_broken_gzip_trailer(tmp_path):
+    directory = tmp_path / "machine_observation_projection"
+    directory.mkdir()
+    plain = directory / "machine_observation_projection_2026-09-29_0_1.json"
+    archive = plain.with_suffix(".json.gz")
+    archive.write_bytes(gzip.compress(b'{"rows":[{"value":1}]}', mtime=0)[:-4])
+    with pytest.raises(EOFError):
+        research.file_sha(plain)
+    with pytest.raises(EOFError):
+        list(research.stream_array(plain))
+
+
+def test_projection_fallback_rejects_symlink_archive(tmp_path):
+    directory = tmp_path / "machine_observation_projection"
+    directory.mkdir()
+    plain = directory / "machine_observation_projection_2026-09-29_0_1.json"
+    real = tmp_path / "payload.gz"
+    real.write_bytes(gzip.compress(b'{"rows":[]}', mtime=0))
+    plain.with_suffix(".json.gz").symlink_to(real)
+    with pytest.raises(ValueError, match="projection_archive_symlink_invalid"):
+        research.file_sha(plain)
+    with pytest.raises(ValueError, match="projection_archive_symlink_invalid"):
+        list(research.stream_array(plain))
+
+
+@pytest.mark.parametrize("change", ["archive_replace", "plain_appears"])
+def test_projection_fallback_rejects_midread_generation_change(tmp_path, change):
+    directory = tmp_path / "machine_observation_projection"
+    directory.mkdir()
+    plain = directory / "machine_observation_projection_2026-09-29_0_1.json"
+    archive = plain.with_suffix(".json.gz")
+    original = b'{"rows":[{"value":1},{"value":2}]}'
+    archive.write_bytes(gzip.compress(original, mtime=0))
+    rows = research.stream_array(plain)
+    assert next(rows) == {"value": 1}
+    if change == "archive_replace":
+        other = tmp_path / "replacement.gz"
+        other.write_bytes(archive.read_bytes())
+        other.replace(archive)
+    else:
+        plain.write_bytes(original)
+    with pytest.raises(ValueError, match="projection_archive_generation_changed"):
+        list(rows)
 
 
 def test_masks_use_training_features_and_sparse_type_falls_back():

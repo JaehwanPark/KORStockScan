@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import datetime as datetime_module
 from collections import deque
 import os
@@ -100,6 +101,100 @@ CRON_INSTALL_MARKERS: dict[str, list[str]] = {
     "system_metric_sampler": ["SYSTEM_METRIC_SAMPLER_"],
     "error_detection_full": ["ERROR_DETECTION_FULL"],
 }
+
+_OVERRIDE_TAGS = {
+    "threshold_cycle_postclose": "THRESHOLD_CYCLE_POSTCLOSE",
+    "postclose_done_controller": "POSTCLOSE_DONE_CONTROLLER",
+    "tuning_monitoring_postclose": "TUNING_MONITORING_POSTCLOSE",
+}
+
+
+def _approved_schedule_start(day: str, crontab: str | None) -> tuple[int, int] | None:
+    """Read one installed, exact-day schedule receipt without changing deadlines."""
+    path = PROJECT_ROOT / "data/runtime/postclose_schedule_overrides" / f"{day}.json"
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 32768:
+            return None
+        raw = path.read_bytes()
+        value = json.loads(raw)
+        if not isinstance(value, dict) or crontab is None:
+            return None
+        supplied = value.get("receipt_sha256")
+        body = {k: v for k, v in value.items() if k != "receipt_sha256"}
+        digest = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()
+        if (
+            supplied != digest
+            or value.get("schema") != "postclose_schedule_override_v1"
+            or value.get("state") != "installed"
+            or value.get("source_date") != day
+            or value.get("owner") != "runtime_release_cron"
+            or value.get("original_start") != [20, 10]
+            or value.get("installed_crontab_sha256") != hashlib.sha256(crontab.encode()).hexdigest()
+        ):
+            return None
+        # Verify the native cron transition's prepared source, selected router,
+        # and immutable original schedule; a self-consistent JSON alone is not
+        # evidence that this was the authorized installed transition.
+        workspace = (PROJECT_ROOT / "data").resolve().parent
+        intent_path = workspace / "data/audit/postclose_schedule_delay" / day / "intent.json"
+        original_path = intent_path.parent / "before.crontab"
+        if (intent_path.is_symlink() or original_path.is_symlink()
+                or value.get("intent_path") != str(intent_path)):
+            return None
+        intent_raw = intent_path.read_bytes()
+        intent = json.loads(intent_raw)
+        if (not isinstance(intent, dict)
+                or hashlib.sha256(intent_raw).hexdigest() != value.get("intent_sha256")
+                or intent.get("schema") != "postclose_schedule_delay_intent_v1"
+                or intent.get("receipt_sha256") != hashlib.sha256(json.dumps(
+                    {k: v for k, v in intent.items() if k != "receipt_sha256"},
+                    sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+                ).encode()).hexdigest()):
+            return None
+        for field in ("source_date", "release_root", "git_commit", "producer_sha256",
+                      "selection_sha256", "original_crontab_sha256", "installed_crontab_sha256",
+                      "original_start", "override_start", "original_lines", "installed_lines", "restore_line"):
+            if value.get(field) != intent.get(field):
+                return None
+        original = original_path.read_text()
+        if hashlib.sha256(original.encode()).hexdigest() != intent.get("original_crontab_sha256"):
+            return None
+        selection_path = workspace / "data/runtime/runtime_release_selection.json"
+        selection_raw = selection_path.read_bytes()
+        selection = json.loads(selection_raw)
+        root = Path(intent["release_root"])
+        if (not isinstance(selection, dict)
+                or hashlib.sha256(selection_raw).hexdigest() != intent.get("selection_sha256")
+                or selection.get("release_root") != str(root)
+                or selection.get("git_commit") != intent.get("git_commit")
+                or hashlib.sha256((root / "src/engine/infrastructure/runtime_release_router.py").read_bytes()).hexdigest() != intent.get("producer_sha256")):
+            return None
+        from src.engine.infrastructure.runtime_release_router import _one_day_delay_plan
+        expected_cron, _ = _one_day_delay_plan(original, workspace, day)
+        if expected_cron != crontab:
+            return None
+        start = value.get("override_start")
+        if (not isinstance(start, list) or len(start) != 2
+                or any(type(x) is not int for x in start)
+                or not (20 * 60 + 10 < start[0] * 60 + start[1] < 21 * 60 + 40)
+                or not (0 <= start[0] < 24 and 0 <= start[1] < 60)):
+            return None
+        expected = value.get("installed_lines")
+        if not isinstance(expected, dict) or set(expected) != set(_OVERRIDE_TAGS.values()):
+            return None
+        for tag in _OVERRIDE_TAGS.values():
+            lines = [line for line in crontab.splitlines()
+                     if line.strip() and not line.lstrip().startswith("#")
+                     and line.rsplit("#", 1)[-1].strip() == tag]
+            if len(lines) != 1 or lines[0] != expected[tag]:
+                return None
+            if lines[0].split()[:5] != [str(start[1]), str(start[0]), "*", "*", "1-5"]:
+                return None
+        if path.read_bytes() != raw:
+            return None
+        return start[0], start[1]
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
 
 
 CRON_JOB_REGISTRY: list[dict[str, Any]] = [
@@ -330,6 +425,8 @@ class CronCompletionDetector(BaseDetector):
         issues: list[str] = []
         warnings: list[str] = []
         installed_crontab = load_installed_crontab()
+        observed_day = _today_kst()
+        approved_start = _approved_schedule_start(observed_day, installed_crontab)
 
         for job in CRON_JOB_REGISTRY:
             log_path = PROJECT_ROOT / job["log"]
@@ -394,6 +491,18 @@ class CronCompletionDetector(BaseDetector):
             we_total = we_h * 60 + we_m
             past_window_start = job_now_total >= ws_total
             past_window_end = job_now_total > we_total
+
+            if (jid in _OVERRIDE_TAGS and today_str == observed_day
+                    and approved_start is not None and past_window_start
+                    and job_now_total < approved_start[0] * 60 + approved_start[1]):
+                artifact_path = PROJECT_ROOT / str(job["status_artifact"]).format(date=today_str)
+                current_markers = self._filter_today_lines(
+                    self._read_once_markers(log_path, today_str), today_str
+                ) if log_path.exists() else ""
+                if not artifact_path.exists() and not current_markers:
+                    details[f"{jid}_status"] = "not_yet_due"
+                    details[f"{jid}_schedule_override"] = "installed_exact_date_verified"
+                    continue
 
             if not past_window_start:
                 details[f"{jid}_status"] = "not_yet_due"

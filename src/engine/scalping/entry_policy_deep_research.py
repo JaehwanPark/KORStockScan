@@ -825,8 +825,8 @@ def extract_full_observations(root, output):
             / "data/report/machine_observation_projection"
             / f"machine_observation_projection_{day}_0_1.json"
         )
-        before = prior.file_sha(path)
-        print("full retained projection", day, path.stat().st_size, flush=True)
+        before, logical_bytes = prior.file_sha_size(path)
+        print("full retained projection", day, logical_bytes, flush=True)
         for raw in prior.stream_array(path):
             if (raw.get("effective_venue"), raw.get("session_bucket")) != (
                 "KRX",
@@ -906,8 +906,11 @@ def extract_full_observations(root, output):
                 )
             ] += 1
             rows.append(r)
-        assert prior.file_sha(path) == before, "full_retained_projection_changed"
-        manifest.append(dict(path=str(path), sha256=before, bytes=path.stat().st_size))
+        assert prior.file_sha_size(path) == (
+            before,
+            logical_bytes,
+        ), "full_retained_projection_changed"
+        manifest.append(dict(path=str(path), sha256=before, bytes=logical_bytes))
     assert census["exact_overlap_with_evaluable_projection"] == len(prior_rows)
     write(
         output / "full-observations.json",

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime
 import gzip
@@ -15,9 +16,11 @@ import hashlib
 import itertools
 import json
 import math
+import os
 from pathlib import Path
 import re
 import resource
+import stat
 import time
 
 from src.engine.scalping import ai_action_outcome_calibration as calibration
@@ -91,19 +94,97 @@ TEMPLATES = {
 }
 
 
-def file_sha(path):
+def _projection_archive_for_missing_plain(path):
+    """Resolve only a missing logical machine projection to its gzip archive.
+
+    Explicit gzip paths keep their existing physical-byte hash semantics.  This
+    fallback is limited to the projection family whose retained research seals
+    name the original JSON bytes, so unrelated missing files remain errors.
+    """
+    path = Path(path)
+    if (
+        path.parent.name == "machine_observation_projection"
+        and re.fullmatch(
+            r"machine_observation_projection_\d{4}-\d{2}-\d{2}_\d+_\d+\.json",
+            path.name,
+        )
+        and not path.exists()
+        and not path.is_symlink()
+    ):
+        archive = Path(str(path) + ".gz")
+        if archive.is_symlink():
+            raise ValueError("projection_archive_symlink_invalid")
+        if archive.is_file():
+            return archive
+    return None
+
+
+@contextmanager
+def _open_projection_archive(logical, archive, mode):
+    """Pin the fallback's regular archive and reject generation changes."""
+    logical, archive = Path(logical), Path(archive)
+    descriptor = os.open(archive, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor, "rb") as raw:
+        before = os.fstat(raw.fileno())
+
+        def signature(value):
+            return (
+                value.st_dev,
+                value.st_ino,
+                value.st_size,
+                value.st_mtime_ns,
+                value.st_ctime_ns,
+            )
+
+        if not stat.S_ISREG(before.st_mode) or signature(archive.lstat()) != signature(
+            before
+        ):
+            raise ValueError("projection_archive_generation_changed")
+        with gzip.open(raw, mode) as stream:
+            yield stream
+        if (
+            signature(os.fstat(raw.fileno())) != signature(before)
+            or signature(archive.lstat()) != signature(before)
+            or logical.exists()
+            or logical.is_symlink()
+        ):
+            raise ValueError("projection_archive_generation_changed")
+
+
+def file_sha_size(path):
+    """Return the sealed byte digest and size under file_sha's path contract."""
     h = hashlib.sha256()
-    with Path(path).open("rb") as stream:
+    size = 0
+    archive = _projection_archive_for_missing_plain(path)
+    source = (
+        _open_projection_archive(path, archive, "rb")
+        if archive
+        else Path(path).open("rb")
+    )
+    with source as stream:
         for chunk in iter(lambda: stream.read(1048576), b""):
             h.update(chunk)
-    return h.hexdigest()
+            size += len(chunk)
+    return h.hexdigest(), size
+
+
+def file_sha(path):
+    return file_sha_size(path)[0]
 
 
 def stream_array(path, key="rows"):
     """One bounded pass through a frozen JSON array, including gzip inputs."""
-    opener = gzip.open if Path(path).suffix == ".gz" else open
+    archive = _projection_archive_for_missing_plain(path)
+    path = Path(path)
+    physical = archive or path
+    opener = gzip.open if physical.suffix == ".gz" else open
     decoder = json.JSONDecoder()
-    with opener(path, "rt") as stream:
+    source = (
+        _open_projection_archive(path, archive, "rt")
+        if archive
+        else opener(path, "rt")
+    )
+    with source as stream:
         buffer = ""
         pattern = re.compile(r'"' + re.escape(key) + r'"\s*:\s*\[')
         while not (match := pattern.search(buffer)):
@@ -115,6 +196,11 @@ def stream_array(path, key="rows"):
         while True:
             buffer = buffer.lstrip(" ,\n\r\t")
             if buffer.startswith("]"):
+                # Reading through EOF validates the gzip trailer and CRC; merely
+                # closing a partially consumed gzip stream does not do so.
+                if physical.suffix == ".gz":
+                    while stream.read(262144):
+                        pass
                 return
             try:
                 row, end = decoder.raw_decode(buffer)

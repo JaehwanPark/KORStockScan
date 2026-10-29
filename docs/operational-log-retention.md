@@ -108,6 +108,14 @@ the 30-minute cooldown. It does not launch Parquet/research compaction. The dail
 lane also keeps three calendar days of system metrics under the sampler's lock;
 malformed rows retain their original bytes.
 
+The `--pre-postclose` interface resumes completed closed-log deletion prefixes
+within a shared bounded budget, without relaxing the existing per-batch budget
+or the reference, pin and open-writer checks. No progress, a failed batch or an
+expired budget is reported as incomplete. Its caller must use a separate
+terminal from the daily receipt and a bounded execution deadline. This interface
+does not stop Main or install a schedule; a reviewed stopped-consumer transition
+and an authorized caller are required before operational use.
+
 Temporary files expire only through an adjacent `*.retention.json` manifest:
 schema `temporary_run_retention_v1`, nonempty `owner`, `closed=true`,
 `pinned=false`, finite epoch `expires_at`, and `files` mapping direct-child

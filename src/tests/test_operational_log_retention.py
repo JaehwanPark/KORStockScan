@@ -645,3 +645,201 @@ def test_archive_existing_identity_and_integrity_guards_remain(
         with pytest.raises((AssertionError, archive.tarfile.TarError, EOFError)):
             archive.verify(packed, rows)
         assert proof.read_bytes() == b"original\r\n"
+
+
+
+def test_document_watch_rearms_after_transient_alias_event(tmp_path, monkeypatch):
+    sub = tmp_path / "outside"
+    sub.mkdir()
+    target = sub / "target"
+    target.write_text("stable")
+    alias = sub / "alias"
+    alias.symlink_to(target)
+    (tmp_path / "docs/audit.md").write_text(f"[target]({alias})")
+    census = R.DocumentReferences(tmp_path)
+    original = R.DocumentReferences._inventory
+    calls = []
+
+    def counted(self):
+        calls.append(None)
+        return original(self)
+
+    monkeypatch.setattr(R.DocumentReferences, "_inventory", counted)
+    with census.watch_changes():
+        alias.unlink()
+        alias.symlink_to(target)
+        census.assert_unchanged()
+        after_revalidation = len(calls)
+        for _ in range(10):
+            census.assert_unchanged()
+        assert len(calls) == after_revalidation
+
+
+def test_document_watch_rearm_catches_change_during_full_census(tmp_path, monkeypatch):
+    sub = tmp_path / "outside"
+    sub.mkdir()
+    target = sub / "target"
+    target.write_text("stable")
+    alias = sub / "alias"
+    alias.symlink_to(target)
+    doc = tmp_path / "docs/audit.md"
+    doc.write_text(f"[target]({alias})")
+    census = R.DocumentReferences(tmp_path)
+    original = census._assert_full_census
+    with pytest.raises(R.DocumentReferenceError):
+        with census.watch_changes():
+            census._watch.changed = True
+
+            def mutate_after_full_census():
+                original()
+                doc.write_text("[new](../new)")
+
+            monkeypatch.setattr(census, "_assert_full_census", mutate_after_full_census)
+            census.assert_unchanged()
+            raise AssertionError("change was not detected before returning")
+
+
+def test_mutable_atomic_alias_replacement_does_not_rescan_documents(tmp_path, monkeypatch):
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    heartbeat = runtime / "heartbeat.json"
+    heartbeat.write_text("old")
+    (tmp_path / "docs/audit.md").write_text(f"[heartbeat]({heartbeat})")
+    census = R.DocumentReferences(tmp_path)
+    original = census._inventory
+    calls = []
+
+    def counted():
+        calls.append(None)
+        return original()
+
+    monkeypatch.setattr(census, "_inventory", counted)
+    with census.watch_changes():
+        before = len(calls)
+        replacement = runtime / "heartbeat.writing"
+        replacement.write_text("new")
+        replacement.replace(heartbeat)
+        census.assert_unchanged()
+        assert len(calls) == before
+
+
+def test_mutable_alias_symlink_redirect_is_rejected(tmp_path):
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    heartbeat = runtime / "heartbeat.json"
+    heartbeat.write_text("old")
+    candidate = tmp_path / "candidate"
+    candidate.write_text("keep")
+    (tmp_path / "docs/audit.md").write_text(f"[heartbeat]({heartbeat})")
+    census = R.DocumentReferences(tmp_path)
+    with pytest.raises(R.DocumentReferenceError):
+        with census.watch_changes():
+            heartbeat.unlink()
+            heartbeat.symlink_to(candidate)
+            census.assert_unchanged()
+    assert candidate.read_text() == "keep"
+
+
+def test_missing_alias_parent_is_watched_after_creation(tmp_path):
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    target = runtime / "new" / "heartbeat.json"
+    candidate = tmp_path / "candidate"
+    candidate.write_text("keep")
+    (tmp_path / "docs/audit.md").write_text(f"[heartbeat]({target})")
+    census = R.DocumentReferences(tmp_path)
+    with pytest.raises(R.DocumentReferenceError):
+        with census.watch_changes():
+            target.parent.mkdir()
+            census.assert_unchanged()
+            target.symlink_to(candidate)
+            census.assert_unchanged()
+    assert candidate.read_text() == "keep"
+
+
+def test_document_reference_batch_matches_original_parent_relations(tmp_path):
+    root = tmp_path / "reports"
+    root.mkdir()
+    (root / "nested").mkdir()
+    original = root / "nested/report.json"
+    original.write_text("evidence")
+    alias = tmp_path / "report-alias"
+    alias.symlink_to(original)
+    (tmp_path / "docs/audit.md").write_text(f"[report]({alias})")
+    census = R.DocumentReferences(tmp_path)
+    candidates = {str(original), str(root), str(root / "nested" / "child"),
+                  str(root / "other"), str(alias), str(tmp_path / "unrelated")}
+    expected = set()
+    for name in candidates:
+        if any(name in text for text in census.texts):
+            expected.add(name)
+        path = census.workspace / Path(name)
+        for identity in (Path(os.path.abspath(path)), path.resolve()):
+            if any(target == identity or identity in target.parents or target in identity.parents
+                   for target in census.targets):
+                expected.add(name)
+    assert census.references(candidates) == expected
+
+
+def test_pre_postclose_resumes_only_progressing_completed_prefix(monkeypatch, tmp_path):
+    rows = iter([
+        dict(status="complete", deleted=2, deleted_bytes=20, errors=[], deferred=[{"reason": "time_budget"}]),
+        dict(status="complete", deleted=1, deleted_bytes=10, errors=[], deferred=[]),
+    ])
+    calls = []
+    def maintain(workspace, *, apply, time_budget):
+        calls.append((apply, time_budget))
+        return next(rows)
+    monkeypatch.setattr(R, "maintain_logs", maintain)
+    result = R.resume_pre_postclose_logs(tmp_path, apply=True)
+    assert result["status"] == "complete"
+    assert (result["deleted"], result["deleted_bytes"], len(calls)) == (3, 30, 2)
+    assert all(apply and 0 < budget <= 20 for apply, budget in calls)
+
+
+@pytest.mark.parametrize("status,deleted,apply", [("complete", 0, True), ("failed", 1, True), ("complete", 1, False)])
+def test_pre_postclose_stops_on_no_progress_failure_or_dry_run(monkeypatch, tmp_path, status, deleted, apply):
+    calls = []
+    def maintain(*args, **kwargs):
+        calls.append(1)
+        return dict(status=status, deleted=deleted, deleted_bytes=deleted, errors=[], deferred=[{"reason": "time_budget"}])
+    monkeypatch.setattr(R, "maintain_logs", maintain)
+    result = R.resume_pre_postclose_logs(tmp_path, apply=apply)
+    assert len(calls) == 1
+    assert result["status"] in {"incomplete", "failed"}
+
+
+def test_pre_postclose_deadline_retains_prior_result(monkeypatch, tmp_path):
+    times = iter([0, 0, 81])
+    monkeypatch.setattr(R.time, "monotonic", lambda: next(times))
+    monkeypatch.setattr(R, "maintain_logs", lambda *args, **kwargs: dict(
+        status="complete", deleted=1, deleted_bytes=10, errors=[], deferred=[{"reason": "time_budget"}]
+    ))
+    result = R.resume_pre_postclose_logs(tmp_path, apply=True)
+    assert result["status"] == "incomplete"
+    assert result["deleted_bytes"] == 10
+    assert result["deferred"][-1]["reason"] == "deadline"
+
+
+def test_pre_postclose_exception_retains_completed_prefix(monkeypatch, tmp_path):
+    calls = []
+    def maintain(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            return dict(status="complete", deleted=1, deleted_bytes=10, errors=[],
+                        deferred=[{"reason": "time_budget"}])
+        raise ValueError("generation_changed")
+    monkeypatch.setattr(R, "maintain_logs", maintain)
+    result = R.resume_pre_postclose_logs(tmp_path, apply=True)
+    assert result["status"] == "failed"
+    assert result["errors"] == ["generation_changed"]
+    assert result["deleted_bytes"] == 10
+
+
+def test_pre_postclose_does_not_start_tmp_after_incomplete_logs(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(R, "resume_pre_postclose_logs", lambda *args, **kwargs: dict(
+        status="incomplete", deleted=0, deleted_bytes=0, errors=[], deferred=[]
+    ))
+    monkeypatch.setattr(R, "maintain_tmp", lambda *args, **kwargs: pytest.fail("tmp must not start"))
+    assert R.main(["--workspace", str(tmp_path), "--apply", "--include-tmp", "--pre-postclose"]) == 1
+    assert json.loads(capsys.readouterr().out)["tmp"]["reason"] == "log_lane_incomplete"

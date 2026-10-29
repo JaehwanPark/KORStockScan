@@ -61,6 +61,8 @@ class _DocumentChangeWatch:
         self.fd = -1
         self.changed = False
         self.rules = {}
+        self.census_rules = {}
+        self.alias_rules = {}
         libc = ctypes.CDLL(None, use_errno=True)
         init = libc.inotify_init1
         init.argtypes, init.restype = [ctypes.c_int], ctypes.c_int
@@ -68,26 +70,36 @@ class _DocumentChangeWatch:
         add.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
         add.restype = ctypes.c_int
         paths = {}
+        census_paths = {}
+        alias_paths = {}
 
-        def parent_chain(path, content=False):
+        def parent_chain(path, content=False, alias=None):
             child = path
             for parent in path.parents:
                 if parent.is_dir():
                     names = paths.setdefault(parent, {})
-                    names[child.name] = names.get(child.name, 0) | (
-                        self.CONTENT if content and child == path else self.STRUCTURAL
-                    )
+                    mask = self.CONTENT if content and child == path else self.STRUCTURAL
+                    names[child.name] = names.get(child.name, 0) | mask
+                    if alias is None:
+                        checks = census_paths.setdefault(parent, {})
+                        checks[child.name] = checks.get(child.name, 0) | mask
+                    else:
+                        event_path = parent / child.name
+                        alias_paths.setdefault(parent, {}).setdefault(child.name, set()).add(
+                            (*alias, event_path, event_path.is_dir())
+                        )
                 child = parent
 
         for path, sig in census.inventory.items():
             if stat.S_ISDIR(sig[-1]):
                 paths.setdefault(path, {})[None] = self.CONTENT
+                census_paths.setdefault(path, {})[None] = self.CONTENT
             parent_chain(path, content=True)
         for path in census.linked_documents:
             parent_chain(path, content=True)
         for target, resolved in census.aliases.items():
-            parent_chain(target)
-            parent_chain(resolved)
+            parent_chain(target, alias=(target, resolved))
+            parent_chain(resolved, alias=(target, resolved))
         self.fd = init(os.O_NONBLOCK | os.O_CLOEXEC)
         if self.fd < 0:
             raise OSError(ctypes.get_errno(), "document_watch_init_failed")
@@ -102,6 +114,12 @@ class _DocumentChangeWatch:
                 shared = self.rules.setdefault(wd, {})
                 for name, mask in rules.items():
                     shared[name] = shared.get(name, 0) | mask
+                census_shared = self.census_rules.setdefault(wd, {})
+                for name, mask in census_paths.get(path, {}).items():
+                    census_shared[name] = census_shared.get(name, 0) | mask
+                alias_shared = self.alias_rules.setdefault(wd, {})
+                for name, aliases in alias_paths.get(path, {}).items():
+                    alias_shared.setdefault(name, set()).update(aliases)
         except BaseException:
             self.close()
             raise
@@ -124,8 +142,22 @@ class _DocumentChangeWatch:
                 if mask & self.INVALID or wd not in self.rules:
                     raise DocumentReferenceError("document_watch_invalidated")
                 rules = self.rules[wd]
-                if mask & (rules.get(None, 0) | rules.get(name, 0)):
+                census = self.census_rules[wd]
+                if mask & (census.get(None, 0) | census.get(name, 0)):
                     self.changed = True
+                elif mask & (rules.get(None, 0) | rules.get(name, 0)):
+                    # A producer may atomically replace a referenced data file
+                    # without changing the logical path. Recheck only aliases
+                    # affected by this event; redirects still force the census.
+                    aliases = self.alias_rules[wd].get(name, ())
+                    if any(
+                        target.resolve() != resolved
+                        or event_path not in (target, resolved)
+                        or was_dir
+                        or event_path.is_dir()
+                        for target, resolved, event_path, was_dir in aliases
+                    ):
+                        self.changed = True
 
     def close(self):
         if self.fd >= 0:
@@ -247,9 +279,29 @@ class DocumentReferences:
         return (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns, s.st_mode)
 
     def assert_unchanged(self):
-        if self._watch is not None and self._watch.clean():
+        watch = self._watch
+        if watch is not None and watch.clean():
             return
-        self._assert_full_census()
+        if watch is None:
+            self._assert_full_census()
+            return
+
+        # Start the successor watch before the full comparison so that changes
+        # during revalidation cannot disappear between the census and rearm.
+        try:
+            successor = _DocumentChangeWatch(self)
+        except (AttributeError, OSError):
+            self._assert_full_census()
+            return
+        try:
+            self._assert_full_census()
+            if not successor.clean():
+                raise DocumentReferenceError("document_references_changed_during_rearm")
+        except BaseException:
+            successor.close()
+            raise
+        self._watch = successor
+        watch.close()
 
     def _assert_full_census(self):
         if self._inventory() != self.inventory:
@@ -270,7 +322,7 @@ class DocumentReferences:
         """Keep per-unlink checks without repeating thousands of unchanged stats.
 
         Unavailable watches retain the full census path. Observed changes force
-        full checks for the rest of this batch; lost events abort the batch.
+        a full check and gap-free rearm; lost events abort the batch.
         """
         if self._watch is not None:
             raise DocumentReferenceError("document_watch_nested")
@@ -285,12 +337,20 @@ class DocumentReferences:
             yield
             self.assert_unchanged()
         finally:
+            active_watch = self._watch
             self._watch = None
+            if active_watch is not None and active_watch is not watch:
+                active_watch.close()
             if watch is not None:
                 watch.close()
 
     def references(self, names):
         referenced = set()
+        # Resolve the same ancestor relation once for the whole batch instead
+        # of rebuilding every target's parents for every deletion candidate.
+        target_ancestors = set()
+        for target in self.targets:
+            target_ancestors.update(target.parents)
         for name in names:
             name = str(name)
             if not name:
@@ -301,11 +361,10 @@ class DocumentReferences:
             if candidate.is_absolute() or len(candidate.parts) > 1:
                 candidate = self.workspace / candidate
                 for identity in (Path(os.path.abspath(candidate)), candidate.resolve()):
-                    if any(
-                        target == identity
-                        or identity in target.parents
-                        or target in identity.parents
-                        for target in self.targets
+                    if (
+                        identity in self.targets
+                        or identity in target_ancestors
+                        or any(parent in self.targets for parent in identity.parents)
                     ):
                         referenced.add(name)
         return referenced
@@ -923,6 +982,38 @@ def prune_metrics(workspace, *, apply=False, now=None):
     return report
 
 
+def resume_pre_postclose_logs(workspace, *, apply, budget_seconds=80):
+    """Resume only completed deletion prefixes within a fixed admission budget."""
+    deadline = time.monotonic() + budget_seconds
+    batches = []
+    deleted = deleted_bytes = 0
+    result = dict(status="incomplete", deferred=[{"reason": "deadline"}], errors=[])
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            result["status"] = "incomplete"
+            result["deferred"].append({"reason": "deadline"})
+            break
+        try:
+            result = maintain_logs(workspace, apply=apply, time_budget=min(20, remaining))
+        except (OSError, ValueError, subprocess.SubprocessError) as exc:
+            result["status"] = "failed"
+            result.setdefault("errors", []).append(str(exc))
+            break
+        batches.append(dict(deleted=result["deleted"], deleted_bytes=result["deleted_bytes"],
+                            status=result["status"], deferred=len(result["deferred"])))
+        deleted += result["deleted"]
+        deleted_bytes += result["deleted_bytes"]
+        pending = any(row.get("reason") == "time_budget" for row in result["deferred"])
+        if result["status"] != "complete" or not pending:
+            break
+        if not apply or result["deleted"] == 0:
+            result["status"] = "incomplete"
+            break
+    result.update(deleted=deleted, deleted_bytes=deleted_bytes, batches=batches)
+    return result
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--workspace", type=Path, required=True)
@@ -931,6 +1022,7 @@ def main(argv=None):
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--include-tmp", action="store_true")
     parser.add_argument("--include-metrics", action="store_true")
+    parser.add_argument("--pre-postclose", action="store_true")
     parser.add_argument("--register-active", type=Path)
     parser.add_argument("--register-closed", type=Path)
     parser.add_argument("--owner")
@@ -947,11 +1039,16 @@ def main(argv=None):
         )
         return 0
     try:
-        result = maintain_logs(args.workspace, apply=args.apply)
-        if args.include_tmp:
+        if args.pre_postclose:
+            result = resume_pre_postclose_logs(args.workspace, apply=args.apply)
+        else:
+            result = maintain_logs(args.workspace, apply=args.apply)
+        if args.include_tmp and (not args.pre_postclose or result["status"] == "complete"):
             result["tmp"] = maintain_tmp(args.workspace, apply=args.apply)
             if result["tmp"]["status"] != "complete":
                 result["status"] = "failed"
+        elif args.include_tmp:
+            result["tmp"] = dict(status="not_run", reason="log_lane_incomplete")
         if args.include_metrics:
             result["metrics"] = prune_metrics(args.workspace, apply=args.apply)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
