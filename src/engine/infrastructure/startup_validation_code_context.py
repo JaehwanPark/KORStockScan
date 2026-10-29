@@ -3438,7 +3438,6 @@ for _name, _current in REVIEWED_TIMEOUT_CHANGED.items():
     )
 
 
-
 # Exact probe provenance and ADD-only scope integration. Issued profiles remain
 # immutable; missing, dirty or mixed complete generations are never successors.
 REVIEWED_PROBE_AVG_CHANGED = {
@@ -3477,7 +3476,74 @@ for _name, _current in REVIEWED_STARTUP_STORAGE_CHANGED.items():
                     if origin != _current)
 
 
+REVIEWED_SCOPED_ENTRY_CHANGED = {
+    "src/engine/ai_engine_openai.py": "630a5519af15150d74b751bd549422d1134c7abf9a4901e0ff9646fa76972dfb",
+    "src/engine/scalping/continuous_reversal_policy_v6.py": "074568bac354413eee81feceb6c4da9fc4960b2827752253c8be9c148a912251",
+    "src/engine/scalping/entry_deadline.py": "d976f683b52d6235b6fa8739f4123c7f667ae12bcb1a2c54d8bb2b6c606ec819",
+    "src/engine/scalping/reversal_extended_intraday.py": "11ab9a7f08b2d595a40ef8efbb72bbda11b54178fa2c74b843589a431039f9fb",
+    "src/engine/scalping/reversal_extended_runtime.py": "d71057c5dec014f5a3dfac40313bcc774d0dc10487f1237b05829767747aba47",
+    "src/engine/scalping/reversal_extended_state.py": "6f9402d54333b03a89dba81f257a6eec9dc6b52d6b6ace6d8e823400b524650b",
+    "src/engine/scalping/reversal_path_runtime.py": "5d1ae6236aeb94cec7f1e9c9728f0deb74539d0308164ca1aebf4bd29c1df4ae",
+}
+REVIEWED_SCOPED_ENTRY_ORIGINS = {
+    "src/engine/ai_engine_openai.py": "19b8e360293f3e8a3542333775b8c7b342f1ec30b6b0f8dfcbe0b8f7f17f994b",
+    "src/engine/scalping/continuous_reversal_policy_v6.py": "78c2e8a00ab0b87df3a42a0f35318598a3960e441bdbac0e090a0cb2e59a1b8b",
+    "src/engine/scalping/entry_deadline.py": "af15f4b414bf0536002e9541fa67935e13de805bd97b4a01369f21a296e19a7c",
+    "src/engine/scalping/reversal_extended_intraday.py": "710661a7957111db81a61daca914d41dd5a1eb6b830d019efa365cb8e809ddb3",
+    "src/engine/scalping/reversal_extended_runtime.py": "e80703262e2013f7164ffbb728d554e437476d2c83be0e6a919868e2934d40d7",
+    "src/engine/scalping/reversal_extended_state.py": "a99704651c9c54cdc7f9131ed07b957fa10f8bf3d9625e408114559cc24ec21e",
+    "src/engine/scalping/reversal_path_runtime.py": "a1ea25c96870f2d478f12f3e5de81bcab64f4eaeb3c02cedcc977e16b697b340",
+}
+REVIEWED_SCOPED_ENTRY_PROFILE = {
+    **REVIEWED_PROBE_AVG_PROFILE,
+    **REVIEWED_SCOPED_ENTRY_CHANGED,
+}
+for _name, _current in REVIEWED_SCOPED_ENTRY_CHANGED.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_SCOPED_ENTRY_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((origin, _current) for origin in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
+    scoped_entry = any(
+        (ROOT / name).is_file()
+        and not (ROOT / name).is_symlink()
+        and _sha(ROOT / name) == expected
+        for name, expected in REVIEWED_SCOPED_ENTRY_CHANGED.items()
+    )
+    if scoped_entry:
+        if any(
+            (ROOT / name).is_symlink()
+            or not (ROOT / name).is_file()
+            or _sha(ROOT / name) != expected
+            for name, expected in REVIEWED_SCOPED_ENTRY_PROFILE.items()
+        ):
+            return False
+        if (
+            relative in REVIEWED_SCOPED_ENTRY_PROFILE
+            and current != REVIEWED_SCOPED_ENTRY_PROFILE[relative]
+        ):
+            return False
+        if REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current) or (
+            old,
+            current,
+        ) in REVIEWED_PREPARATION_HISTORY.get(relative, ()):
+            return True
+        from src.engine.automation.intraday_release_handoff import (
+            reviewed_formatting_predecessor,
+        )
+
+        predecessor = reviewed_formatting_predecessor(relative, current)
+        origin = reviewed_formatting_predecessor(relative, old)
+        if predecessor != current and origin == predecessor:
+            return True
+        return REVIEWED_PREPARATION_SOURCES.get(relative) == (origin, predecessor) or (
+            origin,
+            predecessor,
+        ) in REVIEWED_PREPARATION_HISTORY.get(relative, ())
     startup_storage = any(
         (ROOT / name).is_file() and not (ROOT / name).is_symlink()
         and _sha(ROOT / name) == expected
@@ -3491,16 +3557,15 @@ def reviewed_preparation_pair(relative, old, current):
             return False
         return (current == REVIEWED_STARTUP_STORAGE_PROFILE.get(relative)
                 and (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))
-    probe_avg = (
-        current == REVIEWED_PROBE_AVG_PROFILE.get(relative)
-        and any(
-            (ROOT / name).is_file() and not (ROOT / name).is_symlink()
-            and _sha(ROOT / name) == expected
-            for name, expected in REVIEWED_PROBE_AVG_CHANGED.items()
-        )
+    probe_avg = current == REVIEWED_PROBE_AVG_PROFILE.get(relative) and any(
+        (ROOT / name).is_file()
+        and not (ROOT / name).is_symlink()
+        and _sha(ROOT / name) == expected
+        for name, expected in REVIEWED_PROBE_AVG_CHANGED.items()
     )
     if probe_avg and any(
-        (ROOT / name).is_symlink() or not (ROOT / name).is_file()
+        (ROOT / name).is_symlink()
+        or not (ROOT / name).is_file()
         or _sha(ROOT / name) != expected
         for name, expected in REVIEWED_PROBE_AVG_PROFILE.items()
     ):
@@ -3510,7 +3575,8 @@ def reviewed_preparation_pair(relative, old, current):
         not probe_avg
         and current == REVIEWED_TIMEOUT_TERMINAL_PROFILE.get(relative)
         and any(
-            (ROOT / name).is_file() and not (ROOT / name).is_symlink()
+            (ROOT / name).is_file()
+            and not (ROOT / name).is_symlink()
             and _sha(ROOT / name) == expected
             for name, expected in REVIEWED_TIMEOUT_CHANGED.items()
         )
@@ -3522,7 +3588,8 @@ def reviewed_preparation_pair(relative, old, current):
     ):
         return False
     if timeout_terminal and any(
-        (ROOT / name).is_symlink() or not (ROOT / name).is_file()
+        (ROOT / name).is_symlink()
+        or not (ROOT / name).is_file()
         or _sha(ROOT / name) != expected
         for name, expected in REVIEWED_TIMEOUT_TERMINAL_PROFILE.items()
     ):

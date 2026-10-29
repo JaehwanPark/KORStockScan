@@ -3411,7 +3411,7 @@ def test_submit_fresh_independent_preparation_exact_pairs(relative, fault, proje
         if projected else C.REVIEWED_SUBMIT_FRESH_ORIGINS[relative]
     )
     current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
-    assert current == H.REVIEWED_HOLDING_HISTORY_PROFILE[relative]
+    assert current == H.REVIEWED_SCOPED_ENTRY_PROFILE[relative]
     if fault == "origin": old = "0" * 64
     if fault == "successor": current = "0" * 64
     if fault == "path": relative = "src/engine/unknown_submit_owner.py"
@@ -3760,11 +3760,85 @@ def test_preclaim_market_independent_exact_sources(relative, fault):
 def test_entry_lifetime_independent_preparation_checks_each_actual_source(relative, fault):
     old = C.REVIEWED_ENTRY_LIFETIME_ORIGINS[relative]
     current = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
-    assert current == H.REVIEWED_HOLDING_HISTORY_PROFILE[relative]
+    assert current == H.REVIEWED_SCOPED_ENTRY_PROFILE[relative]
     if fault == "origin": old = "0" * 64
     if fault == "successor": current = "0" * 64
     if fault == "path": relative = "src/engine/scalping/unreviewed_lifetime.py"
     assert C.reviewed_preparation_pair(relative, old, current) is (fault is None)
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "mixed", "origin", "unregistered"])
+def test_scoped_entry_preparation_requires_complete_reviewed_generation(
+    tmp_path, monkeypatch, fault
+):
+    first, second = "src/engine/scalping/first.py", "src/engine/scalping/second.py"
+    for relative, contents in ((first, b"first current"), (second, b"second current")):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(contents)
+    current = hashlib.sha256(b"first current").hexdigest()
+    other = hashlib.sha256(b"second current").hexdigest()
+    old = hashlib.sha256(b"first origin").hexdigest()
+    monkeypatch.setattr(C, "ROOT", tmp_path)
+    monkeypatch.setattr(C, "REVIEWED_SCOPED_ENTRY_CHANGED", {first: current})
+    monkeypatch.setattr(
+        C, "REVIEWED_SCOPED_ENTRY_PROFILE", {first: current, second: other}
+    )
+    monkeypatch.setattr(C, "REVIEWED_PREPARATION_HISTORY", {first: {(old, current)}})
+    monkeypatch.setattr(C, "REVIEWED_PREPARATION_SOURCES", {})
+    if fault == "missing":
+        (tmp_path / second).unlink()
+    elif fault == "mixed":
+        (tmp_path / second).write_bytes(b"unreviewed generation")
+    elif fault == "origin":
+        old = "0" * 64
+    elif fault == "unregistered":
+        first = "src/engine/scalping/unreviewed.py"
+    assert C.reviewed_preparation_pair(first, old, current) is (fault is None)
+
+
+def test_scoped_entry_keeps_original_reviewed_formatting_predecessor(
+    tmp_path, monkeypatch
+):
+    relative = "src/engine/scalping/first.py"
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"reviewed current")
+    current = hashlib.sha256(path.read_bytes()).hexdigest()
+    old = hashlib.sha256(b"reviewed original").hexdigest()
+    projected = hashlib.sha256(b"reviewed common projection").hexdigest()
+    monkeypatch.setattr(C, "ROOT", tmp_path)
+    monkeypatch.setattr(C, "REVIEWED_SCOPED_ENTRY_CHANGED", {relative: current})
+    monkeypatch.setattr(C, "REVIEWED_SCOPED_ENTRY_PROFILE", {relative: current})
+    monkeypatch.setattr(C, "REVIEWED_PREPARATION_HISTORY", {})
+    monkeypatch.setattr(C, "REVIEWED_PREPARATION_SOURCES", {})
+    monkeypatch.setattr(
+        H,
+        "reviewed_formatting_predecessor",
+        lambda name, sha: (
+            projected if name == relative and sha in {old, current} else sha
+        ),
+    )
+    assert C.reviewed_preparation_pair(relative, old, current)
+
+
+def test_scoped_entry_profiles_cover_every_changed_native_contract_member():
+    import subprocess
+    from src.engine.scalping import continuous_reversal_policy_v6 as native
+
+    baseline = "8fadd634d89d3e617680f5deabd1080cf89d6caf"
+    paths = {Path(m.__file__).resolve().relative_to(ROOT).as_posix() for m in native.contract_modules()}
+    paths.add("src/engine/ai_engine_openai.py")
+    changed = set()
+    for relative in paths:
+        old = subprocess.check_output(["git", "show", f"{baseline}:{relative}"], cwd=ROOT)
+        if hashlib.sha256(old).hexdigest() != hashlib.sha256((ROOT / relative).read_bytes()).hexdigest():
+            changed.add(relative)
+    assert changed == set(C.REVIEWED_SCOPED_ENTRY_CHANGED)
+    preparation = "src/engine/infrastructure/startup_validation_code_context.py"
+    assert changed | {preparation} == set(H.REVIEWED_SCOPED_ENTRY_CHANGED)
+    for relative in changed | {preparation}:
+        assert hashlib.sha256((ROOT / relative).read_bytes()).hexdigest() == H.REVIEWED_SCOPED_ENTRY_CHANGED[relative]
 
 
 def test_issued_entry_member_is_bound_without_rewriting_old_policy_inventory(monkeypatch):

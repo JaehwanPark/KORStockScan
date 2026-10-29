@@ -13465,6 +13465,39 @@ for _name, _current in REVIEWED_STARTUP_STORAGE_CHANGED.items():
         (origin, _current) for origin in _origins if origin != _current
     )
 
+# Complete scoped-lifetime successor. Its independent preparation reader and
+# every changed policy/claim owner form one generation; partial mixtures fail.
+REVIEWED_SCOPED_ENTRY_CHANGED = {
+    "src/engine/ai_engine_openai.py": "630a5519af15150d74b751bd549422d1134c7abf9a4901e0ff9646fa76972dfb",
+    "src/engine/scalping/continuous_reversal_policy_v6.py": "074568bac354413eee81feceb6c4da9fc4960b2827752253c8be9c148a912251",
+    "src/engine/scalping/entry_deadline.py": "d976f683b52d6235b6fa8739f4123c7f667ae12bcb1a2c54d8bb2b6c606ec819",
+    "src/engine/scalping/reversal_extended_intraday.py": "11ab9a7f08b2d595a40ef8efbb72bbda11b54178fa2c74b843589a431039f9fb",
+    "src/engine/scalping/reversal_extended_runtime.py": "d71057c5dec014f5a3dfac40313bcc774d0dc10487f1237b05829767747aba47",
+    "src/engine/scalping/reversal_extended_state.py": "6f9402d54333b03a89dba81f257a6eec9dc6b52d6b6ace6d8e823400b524650b",
+    "src/engine/scalping/reversal_path_runtime.py": "5d1ae6236aeb94cec7f1e9c9728f0deb74539d0308164ca1aebf4bd29c1df4ae",
+    "src/engine/infrastructure/startup_validation_code_context.py": "bbc111fbc03b2fa832bae86e19be0758e74b50df5814444411a437695981cf2d",
+}
+REVIEWED_SCOPED_ENTRY_ORIGINS = {
+    "src/engine/ai_engine_openai.py": "19b8e360293f3e8a3542333775b8c7b342f1ec30b6b0f8dfcbe0b8f7f17f994b",
+    "src/engine/scalping/continuous_reversal_policy_v6.py": "78c2e8a00ab0b87df3a42a0f35318598a3960e441bdbac0e090a0cb2e59a1b8b",
+    "src/engine/scalping/entry_deadline.py": "af15f4b414bf0536002e9541fa67935e13de805bd97b4a01369f21a296e19a7c",
+    "src/engine/scalping/reversal_extended_intraday.py": "710661a7957111db81a61daca914d41dd5a1eb6b830d019efa365cb8e809ddb3",
+    "src/engine/scalping/reversal_extended_runtime.py": "e80703262e2013f7164ffbb728d554e437476d2c83be0e6a919868e2934d40d7",
+    "src/engine/scalping/reversal_extended_state.py": "a99704651c9c54cdc7f9131ed07b957fa10f8bf3d9625e408114559cc24ec21e",
+    "src/engine/scalping/reversal_path_runtime.py": "a1ea25c96870f2d478f12f3e5de81bcab64f4eaeb3c02cedcc977e16b697b340",
+    "src/engine/infrastructure/startup_validation_code_context.py": "6a70400e4f1a3c09fcc2dcfd27cfeb9841c5ed8db0a6e382a7248d8a35e8f0a5",
+}
+REVIEWED_SCOPED_ENTRY_HASHES = {**REVIEWED_PROBE_AVG_HASHES, **REVIEWED_SCOPED_ENTRY_CHANGED}
+REVIEWED_SCOPED_ENTRY_PROFILE = {**REVIEWED_PROBE_AVG_PROFILE, **REVIEWED_SCOPED_ENTRY_CHANGED}
+REVIEWED_SCOPED_ENTRY_VARIANTS = _holding_history_variants(REVIEWED_SCOPED_ENTRY_HASHES)
+for _name, _current in REVIEWED_SCOPED_ENTRY_CHANGED.items():
+    _pairs = REVIEWED_ENTRY_COST_PAIRS.get(_name, ())
+    _origins = {value for pair in _pairs for value in pair}
+    _origins.add(REVIEWED_SCOPED_ENTRY_ORIGINS[_name])
+    if _name in REVIEWED_PROBE_AVG_PROFILE:
+        _origins.add(REVIEWED_PROBE_AVG_PROFILE[_name])
+    REVIEWED_ENTRY_COST_PAIRS[_name] = _pairs + tuple((origin, _current) for origin in _origins)
+
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
@@ -14506,6 +14539,13 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_STARTUP_STORAGE_PROFILE
         prepared_variants = REVIEWED_STARTUP_STORAGE_VARIANTS
+    if any(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == sha
+        for name, sha in REVIEWED_SCOPED_ENTRY_CHANGED.items()
+    ):
+        prepared_hashes = REVIEWED_SCOPED_ENTRY_PROFILE
+        prepared_variants = REVIEWED_SCOPED_ENTRY_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present
