@@ -1040,3 +1040,12 @@ plain-to-gzip transition seal that its original publisher never issued. Only
 verified carried policies without selected cells may partition complete later
 observations. Changed originals, unknown provenance, missing indexes, partial
 or historical tails and full research/selected policy validation remain strict.
+
+Both operational preparation and Main's isolated original/current reader own
+independent exact code inventories. Before a candidate is committed, reconcile
+the complete changed-source generation against both readers, including shell
+launchers and strict/controller writers. A profile-presence check in one reader
+is insufficient. Regression must exercise the independent native pair reader
+and reject a missing, changed, aliased or mixed sibling; retain issued profiles
+and all policy/source validation. Authenticate the isolated reader's own bytes
+through the operational profile as well.

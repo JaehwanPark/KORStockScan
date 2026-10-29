@@ -3225,7 +3225,6 @@ for _name, _sha in REVIEWED_BUY_LINEAGE_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
-
 # Partial-exit diagnostic identity only; original source gaps and guards remain.
 REVIEWED_PARTIAL_GAP_SOURCES = {'src/engine/scalping/holding_profit_exit_semantics.py': '34e654bf8cfc979783b3966b96b952f900cdd67fc21a98ae107c87b2f91b0542'}
 REVIEWED_PARTIAL_GAP_ORIGINS = {'src/engine/scalping/holding_profit_exit_semantics.py': '9c6fb04e8cfe5a776b245a2957deaaa764991bf0da1313b6eaae381b65998bd7'}
@@ -3277,7 +3276,6 @@ for _name, _sha in {**REVIEWED_HOLDING_PROJECTION_SOURCES, **REVIEWED_OBSERVER_I
     _history.update((_old, _sha) for _old in _origins)
 
 
-
 # P5 consumes the full DigestSession diagnostic schema across a process boundary.
 REVIEWED_P5_DIAGNOSTIC_SOURCES = {'src/engine/automation/main_startup_validation.py': 'bfc7e9a9c425f7a0a13ede4f5333046e73f02589ab4f03a5e95065185561f929'}
 REVIEWED_P5_DIAGNOSTIC_ORIGINS = {'src/engine/automation/main_startup_validation.py': 'ffc3433a9b8ef4a79f46562cecb4de59ed8a8b2a09ace5bb50027bb99f545c8f'}
@@ -3314,7 +3312,6 @@ for _name, _sha in REVIEWED_DELIVERY_INTEGRATED_SOURCES.items():
     if _name in REVIEWED_PREPARATION_SOURCES:
         _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
     _history.update((_old, _sha) for _old in _origins)
-
 
 
 # Exact lifetime/response/delivery source successor. Original profiles remain addressable.
@@ -3356,7 +3353,39 @@ for _name, _sha in REVIEWED_POSTCLOSE_INTEGRATED_SOURCES.items():
     _history.update((_old, _sha) for _old in _origins)
 
 
+# Complete reviewed orchestration/source-custody successor, independently
+# pinned here as well as in the operational handoff. Mixed generations fail.
+REVIEWED_PREOPEN_VALIDATION_SOURCES = {
+    "src/engine/automation/main_stop_postclose.py": "866997e7d0a376f6cb2b8cdcba0d8324ce9ffd5af19eafa080335364f9ecbf0d",
+    "src/engine/automation/next_preopen_readiness.py": "c89c5869690c7a17c2f3b631a5a6cb2ca0319b11e4a04b426b09e4a5bd128895",
+    "src/engine/automation/postclose_done_controller.py": "58df8d4a53c042b20bce02fe0408ca40a0429ee350389f1c9507f0c3947fef18",
+    "src/engine/scalping/continuous_reversal_policy_v6.py": "78c2e8a00ab0b87df3a42a0f35318598a3960e441bdbac0e090a0cb2e59a1b8b",
+    "src/engine/verify_threshold_cycle_postclose_chain.py": "1a03cda3865c6c9fc3ed43a28827da848c480c0d47bd23d2677fcde1ce54aab2",
+    "src/run_bot.sh": "0c1f6378db03d3cc71bd65f9d8c884ee02479ef1af0326d2b061bde3c1c381a6",
+}
+REVIEWED_PREOPEN_VALIDATION_ORIGINS = {
+    "src/engine/automation/main_stop_postclose.py": "a2ea988c1bc93962f021d3f23dab2adbc67521e5fa0bfe41dc6fd1a5e9c5946e",
+    "src/engine/automation/next_preopen_readiness.py": "ba72842e94099ffbf36fe7b04f41ffb823bf6690d047a6364858d5ac7a308bcc",
+    "src/engine/automation/postclose_done_controller.py": "659a031cb296e8e23c614f4fb1f496a25500ff2fc05aacf74c9348885be059d1",
+    "src/engine/scalping/continuous_reversal_policy_v6.py": "dba3674350cb2a0b3b563236da605c79076d1fc0f3679ce1d9792144d4eb7499",
+    "src/engine/verify_threshold_cycle_postclose_chain.py": "da729cdbbd5cc34c7ce48910055788c6886c77dc37ee15d4e6aa3b1323f78c1f",
+    "src/run_bot.sh": "e32584ab0ceea9b0a7a08428204d437f5abd022014c091d1771e6ee3f6d63d5e",
+}
+for _name, _sha in REVIEWED_PREOPEN_VALIDATION_SOURCES.items():
+    _history = REVIEWED_PREPARATION_HISTORY.setdefault(_name, set())
+    _origins = {value for pair in _history for value in pair}
+    _origins.add(REVIEWED_PREOPEN_VALIDATION_ORIGINS[_name])
+    if _name in REVIEWED_PREPARATION_SOURCES:
+        _origins.update(REVIEWED_PREPARATION_SOURCES[_name])
+    _history.update((_old, _sha) for _old in _origins)
+
+
 def reviewed_preparation_pair(relative, old, current):
+    if current == REVIEWED_PREOPEN_VALIDATION_SOURCES.get(relative):
+        for name, expected in REVIEWED_PREOPEN_VALIDATION_SOURCES.items():
+            path = ROOT / name
+            if path.is_symlink() or not path.is_file() or _sha(path) != expected:
+                return False
     if current == REVIEWED_POSTCLOSE_INTEGRATED_SOURCES.get(relative) and (
         current != REVIEWED_HELD_SELL_SOURCES.get(relative)
         or any(

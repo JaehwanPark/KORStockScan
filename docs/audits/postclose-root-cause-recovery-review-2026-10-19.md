@@ -5799,3 +5799,46 @@ preserves every issued predecessor; report capabilities use the existing full
 source-review/independent-fixture owner before runtime selection.
 
 Scope baseline`ce358bce0`: non-test source+466/-279, tests+489/-8, docs+170/-0 before this count note. Source growth is bounded waiting/original preservation/seal interpretation and its exact successor profile; the controller body is only indented under its owned invocation. No policy decision owner or execution worker is added. Old direct preservation code is consolidated; original readers and public controller/preparation interfaces remain required consumers. No removal is deferred. Self-review and re-review found no remaining in-scope code defect; deployment and natural acceptance are still separate.
+
+### Independent Main preparation review correction
+
+The first phase2 immutable candidate8e98cf343 failed isolated P5 before any
+startup hold/drain/selector change: run4e2710af1d1a403cb8c2351ba10041b9 returned
+`startup_main_code_pair_unreviewed:src/engine/scalping/continuous_reversal_policy_v6.py`.
+The native source/policy intake itself passed. This was our missing independent
+Main preparation inventory, not damaged policy/source data. Preserve the failed
+receipt and immutable candidate; incumbentce/PID1366991 remains unchanged.
+
+Repair the existing independent reader with the exact complete six-owner
+profile, require all siblings, and bind the independent reader's own bytes in
+the operational profile. The two inventories are literal and independently
+verified; the regression reconciles both and executes native `_pairs`, including
+unknown old/current, missing, changed and symlink siblings. Existing issued
+profiles remain addressable. No accepted-error expansion or validation bypass.
+The 37 new focused cases passed; broader affected-reader checks follow.
+
+The auxiliary source review also correctly rejected the incumbent-to-successor
+pair because the preserved report originated ina39168dc1. Its original fixture
+identified that immutable origin. Review of the entire original-to-successor
+delta additionally covered existing approved pending-scoring custody and held
+SELL-state capture; no recipe, policy or guard change. Native independent
+fixtures then passed auxiliary193 and holding_vote145 with network calls0,
+orders0 and protected source/report/selector/bootstrap unchanged. These attest
+code capability only; historical49558/null and semantic incompleteness remain.
+
+Affected independent-reader/Main suites completed1423 PASS plus14 obsolete
+current-byte assertions against the preceding profile. Preserve that original
+log; current-byte assertions now select the complete new profile, while the
+native historical-pair loops and all old inventories stay intact. Corrected
+focused independent-reader cases136 PASS after scoped formatting. This is not
+a full-repository test claim. No policy/runtime authority was broadened.
+The independent pair reader is retained for the real isolated child, and the
+operational profile is retained for native transition preparation; neither can
+replace the other. No entrypoint/worker or deferred removal was added.
+
+Final operational full-profile/issued-predecessor38 PASS(88.50s); independent
+reader136 PASS(3.96s), compile/diff/link and print-only parser PASS. One current
+parsed DirectFamilyPreopenPolicyHandoff owner remains Due10/30. Supplemental
+scope from8e98cf343: non-test source+34/-3, tests+91/-41, docs+49/-0 including
+this note. Growth binds both independent owners and retains negative coverage;
+no new validator/module, execution owner or broader authority was introduced.
