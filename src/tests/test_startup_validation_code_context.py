@@ -1452,8 +1452,8 @@ def test_nested_native_inventories_keep_distinct_git_origins(
     # This test reviews one private fixture edit, not a production successor.
     # Keep the complete fixture inventory while substituting that exact Git
     # endpoint; real missing/dirty/mixed profile tests use the unchanged table.
-    monkeypatch.setattr(C, "REVIEWED_ACTIVE_REPORT_CLOSURE_PROFILE", {
-        **C.REVIEWED_ACTIVE_REPORT_CLOSURE_PROFILE, owner: new,
+    monkeypatch.setattr(C, "REVIEWED_STARTUP_SUBMISSION_SOURCE_PROFILE", {
+        **C.REVIEWED_STARTUP_SUBMISSION_SOURCE_PROFILE, owner: new,
     })
     parent = fixture["bundle"]
     bundle = dict(
@@ -3880,7 +3880,7 @@ def test_scoped_entry_profiles_cover_every_changed_native_contract_member():
         old = subprocess.check_output(["git", "show", f"{baseline}:{relative}"], cwd=ROOT)
         if hashlib.sha256(old).hexdigest() != hashlib.sha256((ROOT / relative).read_bytes()).hexdigest():
             changed.add(relative)
-    assert changed <= set(C.REVIEWED_ACTIVE_REPORT_CLOSURE_CHANGED)
+    assert changed <= set(C.REVIEWED_STARTUP_SUBMISSION_SOURCE_CHANGED)
     preparation = "src/engine/infrastructure/startup_validation_code_context.py"
     report_paths = {str((ROOT / "src/engine" / name).resolve().relative_to(ROOT)) for names in report.COMPONENTS.values() for name in (*names, *report.COMMON_CODE_COMPONENTS)}
     report_changed = set()
@@ -3896,9 +3896,9 @@ def test_scoped_entry_profiles_cover_every_changed_native_contract_member():
                    and not n.startswith("src/tests/")
                    and not n.endswith(("intraday_release_handoff.py", "startup_validation_code_context.py"))}
     assert expected <= all_changed | {preparation}
-    assert all_changed | {preparation} == set(H.REVIEWED_ACTIVE_REPORT_CLOSURE_CHANGED)
+    assert all_changed | {preparation} == set(H.REVIEWED_STARTUP_SUBMISSION_SOURCE_CHANGED)
     for relative in expected:
-        assert hashlib.sha256((ROOT / relative).read_bytes()).hexdigest() == H.REVIEWED_ACTIVE_REPORT_CLOSURE_CHANGED[relative]
+        assert hashlib.sha256((ROOT / relative).read_bytes()).hexdigest() == H.REVIEWED_STARTUP_SUBMISSION_SOURCE_CHANGED[relative]
 
 
 def test_issued_entry_member_is_bound_without_rewriting_old_policy_inventory(monkeypatch):

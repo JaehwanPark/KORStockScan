@@ -1108,10 +1108,15 @@ its current pointer through the last preparation reader. Keep the ordinary
 small-source bound and original validation deadlines unchanged.
 
 The ordered transition prepares the existing sentinel source window and
-incremental summary under its sentinel lock, then invokes the candidate's native
-BUY report producer before Main starts. This populates exact-code/exact-input
-calculation memoization; it supplies no new-PID or semantic-coverage verdict.
-Record optional report preparation failure without making report-only work a
-new policy admission gate. After start, the actual PID must still run the native
-source producer and observer within the original process-start deadline and
-complete its first health sweep. Changed inputs or code cannot reuse the memo.
+incremental summary under its sentinel lock. First-health startup invokes the
+existing BUY producer with `--submission-monitor-source`: read the complete
+current-day population and publish the identical native submission snapshot
+through the existing atomic bounded-source writer. Do not perform prior-day
+comparison, whole-funnel classification or scope/economic diagnostics for that
+consumer, and do not replace the full report or Markdown. Ordinary scheduled
+BUY reporting retains its complete work. Source, clock, lineage and missing-input
+validation stay unchanged; the actual PID must still run the source producer
+and observer within the original process-start deadline and finish first health.
+The summary owner permits only the reviewed prior parser/owner pair; preserve
+original manifests and raw offsets, and append incrementally without rebuilding
+historical raw data. No old report or cache becomes current-PID success.

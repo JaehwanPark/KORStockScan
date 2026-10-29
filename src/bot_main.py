@@ -339,6 +339,7 @@ def _refresh_startup_observer(identity, *, monotonic=None, wait=None, heartbeat=
                     day,
                     "--use-cache",
                     "--use-summary",
+                    "--submission-monitor-source",
                 ],
                 max(0.0, deadline - monotonic() - 30),
             )

@@ -6174,6 +6174,32 @@ def _submission_monitor_report_snapshot(events, as_of):
     return result
 
 
+def build_submission_monitor_source_report(
+    target_date: str,
+    *,
+    as_of: datetime | None = None,
+    dry_run: bool = False,
+    use_cache: bool = False,
+    use_summary: bool = False,
+) -> dict[str, Any]:
+    """Publish the same native submission projection without diagnostic work.
+
+    Read the complete current-day event population through the existing cache
+    owner. Baseline comparison, scope reports and economic summaries do not
+    belong to this consumer. Snapshot identity, clocks and coverage stay native.
+    """
+    events, _, _ = _load_event_sources(
+        target_date, use_cache=use_cache, use_summary=use_summary
+    )
+    if as_of is None:
+        as_of = events[-1].emitted_at if dry_run and events else datetime.now()
+    return dict(
+        target_date=target_date,
+        dry_run=bool(dry_run),
+        submission_monitor=_submission_monitor_report_snapshot(events, as_of),
+    )
+
+
 def build_buy_funnel_sentinel_report(
     target_date: str,
     *,
@@ -6582,15 +6608,18 @@ def _write_report_text_atomic(path: Path, text: str) -> None:
         Path(name).unlink(missing_ok=True)
 
 
-def save_report_artifacts(report: dict[str, Any]) -> dict[str, str]:
+def save_report_artifacts(
+    report: dict[str, Any], *, submission_monitor_only: bool = False
+) -> dict[str, str]:
     target_date = report["target_date"]
     report_dir = _report_dir()
     report_dir.mkdir(parents=True, exist_ok=True)
     json_path = report_dir / f"buy_funnel_sentinel_{target_date}.json"
     md_path = report_dir / f"buy_funnel_sentinel_{target_date}.md"
     # Validate all projections before replacing any published predecessor.
-    json_text = json.dumps(report, ensure_ascii=False, indent=2)
-    markdown = build_markdown(report)
+    if not submission_monitor_only:
+        json_text = json.dumps(report, ensure_ascii=False, indent=2)
+        markdown = build_markdown(report)
     # The notification consumer must never reload the large diagnostic report.
     monitor_path = report_dir / f"submission_bottleneck_source_{target_date}.json"
     monitor_text = json.dumps(
@@ -6598,11 +6627,14 @@ def save_report_artifacts(report: dict[str, Any]) -> dict[str, str]:
         ensure_ascii=False,
         indent=2,
     )
-    _write_report_text_atomic(json_path, json_text)
-    _write_report_text_atomic(md_path, markdown)
+    if not submission_monitor_only:
+        _write_report_text_atomic(json_path, json_text)
+        _write_report_text_atomic(md_path, markdown)
     # The bounded consumer projection is the last publication, not a success
     # receipt for a partially written diagnostic artifact.
     _write_report_text_atomic(monitor_path, monitor_text)
+    if submission_monitor_only:
+        return {"submission_monitor": str(monitor_path)}
     return {
         "json": str(json_path),
         "markdown": str(md_path),
@@ -6642,12 +6674,28 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--print-json", action="store_true", help="Print final result JSON."
     )
+    parser.add_argument(
+        "--submission-monitor-source", action="store_true",
+        help="Publish the native submission snapshot without full funnel diagnostics.",
+    )
     return parser
 
 
 def main() -> int:
-    args = build_parser().parse_args()
+    parser = build_parser()
+    args = parser.parse_args()
     as_of = _parse_as_of(args.target_date, args.as_of) if args.as_of else None
+    if args.submission_monitor_source:
+        if args.window_min:
+            parser.error("--window-min belongs to the full diagnostic report")
+        report = build_submission_monitor_source_report(
+            args.target_date, as_of=as_of, dry_run=bool(args.dry_run),
+            use_cache=bool(args.use_cache), use_summary=bool(args.use_summary),
+        )
+        artifacts = save_report_artifacts(report, submission_monitor_only=True)
+        print(json.dumps(dict(status="success", target_date=args.target_date,
+                              report_scope="submission_monitor_source", artifacts=artifacts)))
+        return 0
     windows = tuple(args.window_min) if args.window_min else DEFAULT_WINDOWS
     report = build_buy_funnel_sentinel_report(
         args.target_date,

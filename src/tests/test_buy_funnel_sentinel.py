@@ -5747,3 +5747,81 @@ def test_finished_fixed_watch_call_keeps_native_terminal_and_rejects_later_gate(
             if native_schema == "call_local_terminal_v1"
             else "submit_call_finished_without_terminal_evidence"
         )
+
+
+@pytest.mark.parametrize('with_events', [False, True])
+def test_submission_source_matches_full_projection_without_baseline(monkeypatch, with_events):
+    from datetime import datetime
+
+    now = datetime(2026, 10, 29, 10, 0)
+    events = []
+    if with_events:
+        events.append(sentinel.PipelineEvent(
+            now, 'ENTRY_PIPELINE', 'entry_async_disposition', 'fixture', '005930', '1',
+            dict(evaluation_attempt_id='attempt-source', market_data_route='SOR',
+                 effective_venue='KRX', market_session_regime='REGULAR',
+                 reason='fixture_guard', allowed_runtime_apply='False')))
+    calls = []
+    def load(day, **kwargs):
+        calls.append(day)
+        assert day == '2026-10-29'
+        return events, [], {'status': 'ok'}
+    monkeypatch.setattr(sentinel, '_load_event_sources', load)
+    monkeypatch.setattr(sentinel, 'previous_trading_day_with_events', lambda day: None)
+    full = sentinel.build_buy_funnel_sentinel_report('2026-10-29', as_of=now, use_cache=True, use_summary=True)
+    calls.clear()
+    monkeypatch.setattr(sentinel, 'previous_trading_day_with_events', lambda day: pytest.fail('baseline read'))
+    source = sentinel.build_submission_monitor_source_report('2026-10-29', as_of=now, use_cache=True, use_summary=True)
+    assert calls == ['2026-10-29']
+    assert source == {k: full[k] for k in ('target_date', 'dry_run', 'submission_monitor')}
+
+
+def test_submission_source_publication_preserves_full_report_and_atomic_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(sentinel, '_report_dir', lambda: tmp_path)
+    full = tmp_path / 'buy_funnel_sentinel_2026-10-29.json'
+    markdown = full.with_suffix('.md')
+    source_path = tmp_path / 'submission_bottleneck_source_2026-10-29.json'
+    for p in (full, markdown, source_path):
+        p.write_bytes(b'original')
+    report = dict(target_date='2026-10-29', dry_run=False, submission_monitor={'bound': True})
+    monkeypatch.setattr(sentinel, 'build_markdown', lambda value: pytest.fail('full report rendering'))
+    result = sentinel.save_report_artifacts(report, submission_monitor_only=True)
+    assert result == {'submission_monitor': str(source_path)}
+    assert full.read_bytes() == markdown.read_bytes() == b'original'
+    assert json.loads(source_path.read_bytes()) == report
+    before = source_path.read_bytes()
+    report['submission_monitor'] = {'invalid': object()}
+    with pytest.raises(TypeError):
+        sentinel.save_report_artifacts(report, submission_monitor_only=True)
+    assert source_path.read_bytes() == before
+
+
+@pytest.mark.parametrize('invalid_window', [False, True])
+def test_submission_source_cli_keeps_native_publication_and_option_boundary(tmp_path, monkeypatch, capsys, invalid_window):
+    import sys
+    monkeypatch.setattr(sentinel, '_report_dir', lambda: tmp_path)
+    calls = []
+    def load(day, **kwargs):
+        calls.append((day, kwargs))
+        return [], [], {'status': 'ok'}
+    monkeypatch.setattr(sentinel, '_load_event_sources', load)
+    args = ['buy_funnel_sentinel', '--date', '2026-10-29', '--as-of', '10:00',
+            '--use-cache', '--use-summary', '--submission-monitor-source']
+    if invalid_window:
+        args += ['--window-min', '5']
+    monkeypatch.setattr(sys, 'argv', args)
+    if invalid_window:
+        with pytest.raises(SystemExit) as stopped:
+            sentinel.main()
+        assert stopped.value.code == 2 and calls == []
+        assert not list(tmp_path.iterdir())
+    else:
+        assert sentinel.main() == 0
+        result = json.loads(capsys.readouterr().out)
+        assert result['status'] == 'success'
+        assert result['report_scope'] == 'submission_monitor_source'
+        assert calls == [('2026-10-29', dict(use_cache=True, use_summary=True))]
+        assert sorted(p.name for p in tmp_path.iterdir()) == ['submission_bottleneck_source_2026-10-29.json']
+        source = json.loads(Path(result['artifacts']['submission_monitor']).read_bytes())
+        assert source['target_date'] == '2026-10-29' and source['dry_run'] is False
+        assert source['submission_monitor']['schema']

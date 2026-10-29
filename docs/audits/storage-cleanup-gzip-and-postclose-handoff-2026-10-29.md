@@ -338,3 +338,47 @@ fixture/profile failures and supplemental repairs remain in the same evidence
 folder. Exact candidate admission and selected-generation consumption are the
 next closure checks. Large source files, historical loss/nulls and the halted
 weakness-research state remain protected.
+
+### Actual first-observer intake repair - 2026-10-29
+
+The clean6de53a46d candidate passed candidate P5
+72e58f1d85444a36bef2531b04334785 and selected P5
+f3714a9f288547b885649912ccacea17. EOD finished21:01:02 with warnings and2870
+same-date quote rows; its original metadata gaps and execution receipt remain
+separate. Ordered deployment completed21:09:42. Main3354142/start92023684/cwd
+6de53a46d/src consumed its native prepared policy/code generation. Its engine
+then followed the native market-close terminal boundary; no natural order,
+active-session signal or economic acceptance is claimed.
+
+The actual first producer still timed out: native consumption wait81.687s,
+remaining57.768s, producer27.834s/exit75, observer1.503s/exit0. The original first
+health and source publication are preserved in the6de evidence directory. Other
+first-health artifact failures include the current postclose summary/controller
+not yet produced under the explicit operator hold; they are not hidden or called
+completed. New postclose work stays held until successor verification.
+
+An exact full report profile completed47.73s: current/prior-day intake32.14s,
+including28.85s in the compact-row reader, scope partition8.41s; aggregation memo
+was already hitting. Thus full-report cache warming alone did not repair intake.
+Its optional preparation call and special CLI return-shape adapter are removed
+from the ordered owner; the prior policy/summary/window preparation is retained.
+
+The existing BUY CLI now has a submission-monitor-source dispatch. It reads the
+same complete current-day population and calls the identical native snapshot
+function, publishes the same three-field bounded document atomically, and leaves
+full report/Markdown unchanged. Ordinary scheduled whole-funnel reporting remains.
+The existing startup caller uses this dispatch. No new module/registry, guard,
+observation floor, authority, report semantic, timeout or input-size bound is added.
+The existing summary contract carries only the exact unchanged parser/callback
+and reviewed72ed2bf1 owner pair into the new physical owner; original summary
+bytes/offsets remain under native incremental migration, never raw rebuilding.
+
+Production-shape comparison read113675 current-day events in4.143s and finished
+in4.864s with an exactly equal native projection and no baseline read or report
+publication. The first comparison incorrectly used the top-level second-truncated
+report clock; it is preserved and corrected to the snapshot's original precise
+clock. The profiler setup failure from a temporary filename shadowing stdlib
+profile is also preserved. Neither diagnostic failure changed operating evidence.
+366 BUY/summary/startup regressions passed;44 independent issuer/preparation
+checks passed. Final immutable candidate, native source/owner migration preflight,
+P5 and actual new-PID first producer/observer remain required acceptance.

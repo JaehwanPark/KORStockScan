@@ -505,6 +505,7 @@ def test_startup_observer_uses_existing_owners_and_no_notification(
     )
     assert result["status"] == "attempted" and result["producer_exit"] == producer
     assert "src.engine.buy_funnel_sentinel" in calls[0][0]
+    assert "--submission-monitor-source" in calls[0][0]
     assert "src.engine.monitoring.submission_bottleneck_monitor" in calls[1][0]
     assert ("--source-only" in calls[1][0]) == bool(producer)
     assert all(
