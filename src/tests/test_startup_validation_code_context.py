@@ -3835,7 +3835,7 @@ def test_scoped_entry_profiles_cover_every_changed_native_contract_member():
         old = subprocess.check_output(["git", "show", f"{baseline}:{relative}"], cwd=ROOT)
         if hashlib.sha256(old).hexdigest() != hashlib.sha256((ROOT / relative).read_bytes()).hexdigest():
             changed.add(relative)
-    assert changed <= set(C.REVIEWED_LIFETIME_SOURCE_PHASE_CHANGED)
+    assert changed <= set(C.REVIEWED_DATED_REPORT_PARENT_CHANGED)
     preparation = "src/engine/infrastructure/startup_validation_code_context.py"
     report_paths = {str((ROOT / "src/engine" / name).resolve().relative_to(ROOT)) for names in report.COMPONENTS.values() for name in (*names, *report.COMMON_CODE_COMPONENTS)}
     report_changed = set()
@@ -3851,9 +3851,9 @@ def test_scoped_entry_profiles_cover_every_changed_native_contract_member():
                    and not n.startswith("src/tests/")
                    and not n.endswith(("intraday_release_handoff.py", "startup_validation_code_context.py"))}
     assert expected <= all_changed | {preparation}
-    assert all_changed | {preparation} == set(H.REVIEWED_LIFETIME_SOURCE_PHASE_CHANGED)
+    assert all_changed | {preparation} == set(H.REVIEWED_DATED_REPORT_PARENT_CHANGED)
     for relative in expected:
-        assert hashlib.sha256((ROOT / relative).read_bytes()).hexdigest() == H.REVIEWED_LIFETIME_SOURCE_PHASE_CHANGED[relative]
+        assert hashlib.sha256((ROOT / relative).read_bytes()).hexdigest() == H.REVIEWED_DATED_REPORT_PARENT_CHANGED[relative]
 
 
 def test_issued_entry_member_is_bound_without_rewriting_old_policy_inventory(monkeypatch):
@@ -4183,7 +4183,7 @@ def test_startup_storage_independent_reader_keeps_exact_complete_generation(tmp_
     assert C.reviewed_preparation_pair(relative, old, C.REVIEWED_STARTUP_STORAGE_CHANGED[relative]) is (fault is None)
 
 
-@pytest.mark.parametrize("profile,commit", [("STARTUP_SCOPED", "fda0b109c"), ("STARTUP_SCOPED_AUX", "4b69dfc05"), ("LIFETIME_SOURCE_PHASE", None)])
+@pytest.mark.parametrize("profile,commit", [("STARTUP_SCOPED", "fda0b109c"), ("STARTUP_SCOPED_AUX", "4b69dfc05"), ("LIFETIME_SOURCE_PHASE", "c6d3f010b"), ("DATED_REPORT_PARENT", None)])
 @pytest.mark.parametrize("fault", [None, "missing", "mixed", "origin", "unknown"])
 def test_combined_startup_scoped_independent_exact_generation(tmp_path, monkeypatch, fault, profile, commit):
     hashes = getattr(C, "REVIEWED_" + profile + "_PROFILE")

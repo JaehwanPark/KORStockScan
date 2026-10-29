@@ -213,3 +213,52 @@ altered parent origin regressions passed (207 tests); complete independent
 current/historical profile intake and changed-generation negatives are checked
 separately. Native live activation, actual PID consumption, first health,
 tonight's stop/cleanup and natural route acceptance remain separate states.
+
+
+### Live deployment and dated-report phase follow-up - 2026-10-29
+
+c6d3f010b was selected through the native ordered transition; candidate P5
+fed2296a20bc41a89db82dcd3893e93e and selected P5
+20e38aba430a4357a74e93966b5e7a4a passed. Main3154465/start91450640 consumed
+that release. Native lifetime activation issued f449e77d9874d2ef64028b1e4cef6ba54be63c84c3e37e59e1d86d0568eaaf20
+and preserved all128 auxiliary bindings. That exact PID's performance snapshot
+records11 successful new-policy loads. Original source and economics gaps stay
+null/OPEN. FIRST_UPTICK optional input remains unselected.
+
+FIRST startup observation is not accepted: consumption was ready after44.47s;
+80.136s remained at source admission, and the producer exhausted50.2s with
+exit75. The observer completed in1.002s using source-only. The first health FAIL
+and exact initial publication were preserved before later overwrites. The
+19:35 native scheduled producer then completed normally at19:36:17, using a
+valid incremental summary (252new events/17summary rows; no raw rebuild).
+Recovered observation does not close unassisted startup acceptance. Next work
+under DirectFamilyPreopenPolicyHandoff is a bounded source/memo cost profile
+and actual next startup within the unchanged150s deadline; no increased budget
+or silent grace is authorized by this report.
+
+After lifetime activation, the dated report reader tried to validate immutable
+fa20ad8d parent against the current f449e77d pointer, causing two report-only
+active_policy_code_handoff_invalid warnings. The exact original reports and
+policy were reproduced read-only; the repaired report reader obtained both
+native validated comparison results without changing any protected bytes.
+The existing dated-handoff owner now accepts only the immediate parent of a
+fully native-validated lifetime child, pins current/dated identities within
+the call, and preserves the ordinary pointer-bound runtime loader. Arbitrary
+ancestry, unknown transitions, changed pointers, changed children, changed
+dated inputs, invalid IDs and invalid original parent sources remain rejected.
+The detector consumes that same dated-report reader rather than reapplying
+the active-pointer loader. No policy, order or execution guard is changed.
+
+The report repair replaces the two mismatched dated-load calls; existing
+runtime loaders are retained for their current execution consumers.719 targeted
+report/kernel regressions passed;8 focused final negatives passed. An earlier
+719-test invocation was rejected before tests because its temporary root was
+inside the shared workspace; it was corrected to a private /tmp root. No valid
+operational data was edited. The source package and next selected-generation
+validation remain separate from the already successful c6d3 deployment.
+
+Native exact-day override is installed:20:10 stop-only after EOD, then20:30
+postclose/controller/tuning. Original crontab bytes, source SHA and restoration
+intent are sealed by runtime_release_cron.10/30 PREOPEN07:35/Main07:55 remains
+unchanged. No data deletion occurred in this deployment. Sentinel plaintext
+remains protected until original/historical/rollback reader transfer succeeds.

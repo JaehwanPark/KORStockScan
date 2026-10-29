@@ -2568,9 +2568,7 @@ def _continuous_reversal_result_semantics(root, source_date, component, *, now=N
         if bound != report:
             raise ValueError("continuous_reversal_stage_report_mismatch")
         handoff = policy.direct_handoff(root / "data", source_date)
-        bundle = native.load(
-            data_root=root / "data", target_date=handoff["effective_date"]
-        )
+        bundle = policy.load_report_bundle(root / "data", handoff["effective_date"])
         from src.engine.scalping.reversal_policy_status import (
             report_state,
             current_view,

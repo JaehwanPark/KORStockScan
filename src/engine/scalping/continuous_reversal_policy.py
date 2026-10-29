@@ -698,12 +698,57 @@ def compose(response, policy):
     )
 
 
+def load_report_bundle(data_root, effective_date):
+    """Read a dated report's immediate, natively verified lifetime parent.
+
+    The current-policy loader retains its pointer-bound execution contract.
+    This report reader cannot activate a parent or change its immutable bytes.
+    """
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+
+    data_root = Path(data_root)
+    dated_path = native.preparation_path(data_root, effective_date)
+    pointer = native.root(data_root) / "current.json"
+    if not dated_path.is_file() or not pointer.is_file():
+        return native.load(data_root=data_root, target_date=effective_date)
+    dated_identity = native._signature(dated_path)
+    pointer_identity = native._signature(pointer)
+    dated = native._read(dated_path)
+    native.validate(dated, target_date=effective_date)
+    observed = native._read(pointer)
+    generation = observed.get("bundle_sha256")
+    if (not isinstance(generation, str) or len(generation) != 64
+            or any(c not in "0123456789abcdef" for c in generation)):
+        raise ValueError("report_current_generation_invalid")
+    if generation == dated["bundle_sha256"]:
+        return native.load(data_root=data_root, target_date=effective_date)
+    current_path = native.root(data_root) / "generations" / (str(generation) + ".json")
+    current = native._read(current_path)
+    activation = (current.get("continuous_reversal") or {}).get("registration_activation") or {}
+    if (activation.get("schema") != "main_intraday_entry_lifetime_transition_v1"
+            or activation.get("parent_bundle_sha256") != dated["bundle_sha256"]):
+        return native.load(data_root=data_root, target_date=effective_date)
+    # Full native current validation includes the parent's original code reader
+    # and immutable source semantics. Reuse that verified immediate ancestry,
+    # never the active-pointer handoff intended for the historical parent.
+    checked = native.load_effective(data_root=data_root, target_date=effective_date)
+    if (not checked or checked["bundle_sha256"] != generation
+            or native._read(pointer) != observed
+            or native._signature(pointer) != pointer_identity
+            or native._signature(dated_path) != dated_identity):
+        raise ValueError("report_lifetime_parent_generation_changed")
+    from src.engine.scalping.reversal_extended_intraday import validate_lifetime_parent
+
+    validate_lifetime_parent(checked["continuous_reversal"], dated)
+    return dated
+
+
 def direct_handoff(data_root, day, *, effective_date=None, publication_date=None):
     """Revalidate producer -> dated loader -> consumer without an EV gate."""
     from src.engine.scalping import mechanistic_entry_runtime_policy as native
 
     effective = effective_date or native.next_target(publication_date or day)
-    bundle = native.load(data_root=Path(data_root), target_date=effective)
+    bundle = load_report_bundle(data_root, effective)
     if not bundle or not bundle.get("continuous_reversal"):
         raise ValueError("continuous_reversal_dated_policy_missing")
     family = bundle["continuous_reversal"]

@@ -8478,3 +8478,43 @@ def test_rising_policy_owner_transfer_requires_current_open_preopen_owner():
         assert alert["historical_owner"] == original
         assert alert["reason"] == "policy_generation_unverified"
         assert alert["owner_status"] == ("current_open" if owners else "unresolved")
+
+
+@pytest.mark.parametrize("fault", [None, "changed_pointer", "changed_child", "changed_dated", "invalid_generation", "invalid_parent", "different_transition"])
+def test_dated_report_reader_uses_verified_immediate_lifetime_parent(tmp_path, monkeypatch, fault):
+    from src.engine.scalping import continuous_reversal_policy as policy
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+    from src.engine.scalping import reversal_extended_intraday as lifetime
+    parent = {"bundle_sha256": "a" * 64, "target_date": "2026-10-29"}
+    child = {"bundle_sha256": "b" * 64, "continuous_reversal": {
+        "registration_activation": {"schema": "main_intraday_entry_lifetime_transition_v1",
+                                     "parent_bundle_sha256": parent["bundle_sha256"]}}}
+    dated = tmp_path / "dated.json"; dated.write_text("{}")
+    root = tmp_path / "policy"; root.mkdir(); pointer = root / "current.json"; pointer.write_text("{}")
+    observed = {"bundle_sha256": "../outside" if fault == "invalid_generation" else child["bundle_sha256"]}; reads = []
+    if fault == "different_transition":
+        child["continuous_reversal"]["registration_activation"]["schema"] = "unknown"
+    def read(path):
+        if path == dated:return parent
+        if path == pointer:
+            reads.append(path)
+            return {"bundle_sha256": "c" * 64} if fault == "changed_pointer" and len(reads)>1 else observed
+        return child
+    monkeypatch.setattr(native, "preparation_path", lambda *a: dated)
+    monkeypatch.setattr(native, "root", lambda *a: root)
+    monkeypatch.setattr(native, "_read", read)
+    monkeypatch.setattr(native, "validate", lambda *a, **k: None)
+    monkeypatch.setattr(native, "load", lambda **k: (_ for _ in ()).throw(ValueError("original_pointer_contract_rejected")))
+    def current(**kwargs):
+        if fault == "changed_dated":dated.write_text("changed")
+        return {**child, "bundle_sha256": "c"*64} if fault == "changed_child" else child
+    monkeypatch.setattr(native, "load_effective", current)
+    def validate(family, original):
+        assert family is child["continuous_reversal"] and original is parent
+        if fault == "invalid_parent":raise ValueError("parent_original_source_invalid")
+    monkeypatch.setattr(lifetime, "validate_lifetime_parent", validate)
+    if fault:
+        with pytest.raises(ValueError, match="generation_changed|generation_invalid|source_invalid|pointer_contract_rejected"):
+            policy.load_report_bundle(tmp_path, "2026-10-29")
+    else:
+        assert policy.load_report_bundle(tmp_path, "2026-10-29") is parent
