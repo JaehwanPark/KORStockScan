@@ -119,6 +119,144 @@ def test_momentum_unknown_does_not_trigger_then_known_cross(monkeypatch):
     assert not feed(s, row(63, 100.3))
 
 
+@pytest.mark.parametrize(
+    "alias,symbol", [("SA", "005930"), ("DA", "034020"), ("JA", "036930")]
+)
+def test_extended_lifetime_momentum_does_not_revive_after_root_break(
+    monkeypatch, alias, symbol
+):
+    bid = C.ALIASES[alias]
+    monkeypatch.setattr(C, "matches", lambda *args: True)
+    policy = dict(
+        schema="entry_signal_lifetime_policy_v2",
+        version="fixture",
+        default_max_signal_age_sec=5.0,
+        branch_max_signal_age_sec={bid: 9.0},
+    )
+    s = R.State(
+        branch_ids=[bid], offline=True, session_anchor=row(0), lifetime_policy=policy
+    )
+
+    def send(tick):
+        tick[9] = symbol + "_AL"
+        return s.observe(tick, symbol=symbol, venue="SOR", session="SOR_REGULAR")
+
+    for i in range(61):
+        send(row(i, 100))
+    ready = send(row(61, 100.2))
+    assert ready
+    signal_id = ready[0]["event"]["signal_id"]
+    send(row(62, 100.0))
+    assert all(r["event"]["signal_id"] != signal_id for r in s.ready)
+    send(row(63, 100.2))
+    assert all(r["event"]["signal_id"] != signal_id for r in s.ready)
+
+
+def test_extended_claim_filters_invalidated_branch_when_another_branch_survives():
+    import time
+    from types import SimpleNamespace
+    from src.engine.scalping import reversal_extended_runtime as runtime
+    from src.engine.scalping import entry_deadline as deadline
+
+    event = dict(
+        epoch=time.time(),
+        signal_id="original",
+        registry_generation="generation",
+        native_epoch=1,
+        branch_signals={
+            "momentum": dict(decision_phase="MOMENTUM_CROSS"),
+            "other": dict(decision_phase="MOMENTUM_CROSS"),
+        },
+        anchor_lineage={"momentum": ["original"], "other": ["original"]},
+    )
+    policy = dict(
+        schema="entry_signal_lifetime_policy_v2",
+        version="fixture",
+        default_max_signal_age_sec=5.0,
+        branch_max_signal_age_sec={"momentum": 9.0, "other": 7.0},
+    )
+    deadline.bind_signal_lifetime(event, policy, live_clock=True)
+    source = dict(branch_inputs={"momentum": {}, "other": {}})
+    state = SimpleNamespace(
+        generation="generation",
+        ready=[dict(event=dict(signal_id="original", branch_signals={"other": {}}))],
+        legacy=SimpleNamespace(turn=None, last=row(0)),
+    )
+    claim = dict(token="fixture", generation="generation", snapshot=(event, source))
+    original_claims, original_states = runtime._CLAIMS, runtime._STATES
+    try:
+        runtime._CLAIMS = {
+            "fixture": dict(
+                scope="scope",
+                generation="generation",
+                snapshot=copy.deepcopy(claim["snapshot"]),
+            )
+        }
+        runtime._STATES = {"scope": state}
+        filtered, filtered_source = runtime.validate_claim(
+            claim, "generation", now=time.time()
+        )
+    finally:
+        runtime._CLAIMS, runtime._STATES = original_claims, original_states
+    assert set(filtered["branch_signals"]) == {"other"}
+    assert set(filtered_source["branch_inputs"]) == {"other"}
+    assert deadline.signal_deadline_epoch(filtered) == event["epoch"] + 7.0
+
+
+@pytest.mark.parametrize(
+    "alias,prices,breach",
+    [("HB", [100] * 61 + [101], 99.9), ("SB", [102, 100, 101, 100, 102], 101)],
+)
+def test_extended_breakout_and_reclaim_keep_original_threshold(
+    monkeypatch, alias, prices, breach
+):
+    bid = C.ALIASES[alias]
+    monkeypatch.setattr(C, "matches", lambda *args: True)
+    policy = dict(
+        schema="entry_signal_lifetime_policy_v2",
+        version="fixture",
+        default_max_signal_age_sec=5.0,
+        branch_max_signal_age_sec={bid: 9.0},
+    )
+    s = R.State(
+        branch_ids=[bid],
+        offline=True,
+        session_anchor=row(0, prices[0]),
+        lifetime_policy=policy,
+    )
+    found = []
+    for i, price in enumerate(prices):
+        found.extend(feed(s, row(i, price)))
+    assert found
+    old = found[-1]["event"]["signal_id"]
+    feed(s, row(len(prices), breach))
+    assert all(r["event"]["signal_id"] != old for r in s.ready)
+
+
+@pytest.mark.parametrize(
+    "phase,proof,price,ret,expected",
+    [
+        ("MOMENTUM_CROSS", {"threshold": 0.1}, 100, 0.1, True),
+        ("MOMENTUM_CROSS", {"threshold": 0.1}, 100, 0.09, False),
+        ("HIGH_BREAKOUT", {"prior_high": 100}, 100, 0.2, False),
+        ("HIGH_BREAKOUT", {"prior_high": 100}, 101, 0.2, True),
+        ("RETEST_RECLAIM_FIRST", {"reclaim": 100}, 100, 0.2, True),
+        ("RETEST_RECLAIM_PEAK", {"reclaim": 100}, 99, 0.2, False),
+        ("PEAK_RECLAIM", {"reclaim": 100}, 99, 0.2, False),
+        ("MOMENTUM_CROSS", {"threshold": 0.1}, 100, None, False),
+        ("HIGH_BREAKOUT", {}, 101, 0.2, False),
+    ],
+)
+@pytest.mark.parametrize("refined", [False, True])
+def test_extended_root_uses_native_original_threshold(
+    phase, proof, price, ret, expected, refined
+):
+    if refined:
+        proof = {"original_confirmation": {"signal_proof": proof}}
+    signal = dict(decision_phase=phase, signal_proof=proof)
+    assert R._extended_root_intact(signal, row(0, price), {"ret": ret}) is expected
+
+
 def test_hold_first_tick_at_one_second_and_breach(monkeypatch):
     bid, s = state("GA", monkeypatch)
     for i in range(62):

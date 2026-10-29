@@ -181,6 +181,7 @@ def detector_manifest(parent, *, effective_date, changes=None):
 
 
 def scope_hash(ids, auxiliary, backend, code, lifetime_policy=None):
+    ids = tuple(ids)
     value = dict(
         branches=[C.branch(b) for b in sorted(ids)],
         auxiliary=auxiliary,
@@ -189,9 +190,33 @@ def scope_hash(ids, auxiliary, backend, code, lifetime_policy=None):
         label_contract=C.LABEL,
     )
     if lifetime_policy is not None:
-        from src.engine.scalping.entry_deadline import validate_lifetime_policy
+        from src.engine.scalping.entry_deadline import (
+            LEGACY_SIGNAL_MAX_AGE_SEC,
+            validate_lifetime_policy,
+        )
 
-        value["signal_lifetime_policy"] = validate_lifetime_policy(lifetime_policy)
+        policy = validate_lifetime_policy(lifetime_policy)
+        if policy["schema"] == "entry_signal_lifetime_policy_v2" and not set(
+            policy["branch_max_signal_age_sec"]
+        ).issubset(ids):
+            raise ValueError("v6_lifetime_branch_scope_invalid")
+        if policy["schema"] == "entry_signal_lifetime_policy_v2":
+            for bid, limit in policy["branch_max_signal_age_sec"].items():
+                if limit > LEGACY_SIGNAL_MAX_AGE_SEC and C.branch(bid).get(
+                    "decision_phase"
+                ) not in {
+                    "FIRST_UPTICK",
+                    "FIRST_PRICE_HOLD",
+                    "MOMENTUM_CROSS",
+                    "MOMENTUM_HOLD",
+                    "HIGH_BREAKOUT",
+                    "RETEST_RECLAIM_FIRST",
+                    "RETEST_RECLAIM_PEAK",
+                    "PEAK_RECLAIM",
+                    "RISING_STRUCTURE_HOLD",
+                }:
+                    raise ValueError("v6_lifetime_branch_invalidation_unsupported")
+        value["signal_lifetime_policy"] = policy
     return digest(value)
 
 
@@ -236,9 +261,17 @@ def validate_family(f):
         if f["publication_date"] >= f["effective_date"]:
             raise ValueError("v6_next_session_date_invalid")
     else:
-        from src.engine.scalping.reversal_extended_intraday import validate_activation
+        from src.engine.scalping.reversal_extended_intraday import (
+            validate_activation,
+            validate_lifetime_activation,
+        )
 
-        validate_activation(f)
+        if (f.get("registration_activation") or {}).get(
+            "schema"
+        ) == "main_intraday_entry_lifetime_transition_v1":
+            validate_lifetime_activation(f)
+        else:
+            validate_activation(f)
     m = f["operating_manifest"]
     if (
         m.get("schema") != "main_operating_detector_manifest_v1"
@@ -260,7 +293,15 @@ def validate_family(f):
         receipt = m["cumulative_selection_receipt"]
         if (
             f.get("selection_metric") != Q.SCOPED_METRIC
-            or receipt["parent_bundle_sha256"] != f.get("parent_bundle_sha256")
+            or receipt["parent_bundle_sha256"]
+            != (
+                (f.get("registration_activation") or {}).get(
+                    "selection_parent_bundle_sha256"
+                )
+                if (f.get("registration_activation") or {}).get("schema")
+                == "main_intraday_entry_lifetime_transition_v1"
+                else f.get("parent_bundle_sha256")
+            )
             or receipt["source_manifest_sha256"] != f.get("source_manifest_sha256")
         ):
             raise ValueError("v6_cumulative_scoring_metric_or_source_changed")
@@ -515,6 +556,21 @@ def _validate_sources(bundle, data_root, *, code_root=None):
             env={**os.environ, "PYTHONPATH": str(origin)},
         )
         return bundle
+    activation = f.get("registration_activation") or {}
+    if activation.get("schema") == "main_intraday_entry_lifetime_transition_v1":
+        from src.engine.scalping.reversal_extended_intraday import (
+            validate_lifetime_parent,
+        )
+
+        parent_path = (
+            N.root(Path(data_root))
+            / "generations"
+            / (activation["parent_bundle_sha256"] + ".json")
+        )
+        parent = N._read(parent_path)
+        N.validate(parent, target_date=f["effective_date"])
+        validate_sources(parent, data_root)
+        validate_lifetime_parent(f, parent)
     N.validate(
         f["native_parent_bundle"], target_date=f["native_parent_bundle"]["target_date"]
     )
@@ -1191,6 +1247,15 @@ def stage(
     root.mkdir(parents=True, exist_ok=True)
     with (root / "publisher.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        if (
+            effective_mode == "intraday"
+            and (registration_activation or {}).get("schema")
+            == "main_intraday_entry_lifetime_transition_v1"
+            and (
+                root / "intraday_candidates" / ("policy_" + target_date + ".json")
+            ).exists()
+        ):
+            raise ValueError("lifetime_intraday_candidate_exists")
         closed_recovery = False
         try:
             parent = N.load_effective(
@@ -1383,7 +1448,15 @@ def stage(
         return bundle
 
 
-def activate(data_root, target_date, *, now=None, intraday_evidence=None):
+def activate(
+    data_root,
+    target_date,
+    *,
+    now=None,
+    intraday_evidence=None,
+    expected_intraday_bundle_sha256=None,
+    expected_intraday_authority=None,
+):
     from src.engine.scalping import mechanistic_entry_runtime_policy as N
     from src.engine.infrastructure.runtime_release_router import selected_release
 
@@ -1398,6 +1471,18 @@ def activate(data_root, target_date, *, now=None, intraday_evidence=None):
             / ("intraday_candidates" if intraday_evidence is not None else "candidates")
             / ("policy_" + target_date + ".json")
         )
+        activation = (bundle.get("continuous_reversal") or {}).get(
+            "registration_activation"
+        ) or {}
+        if activation.get(
+            "schema"
+        ) == "main_intraday_entry_lifetime_transition_v1" and (
+            not expected_intraday_bundle_sha256
+            or bundle.get("bundle_sha256") != expected_intraday_bundle_sha256
+            or not expected_intraday_authority
+            or activation.get("authority") != expected_intraday_authority
+        ):
+            raise ValueError("lifetime_intraday_activation_cas_failed")
         N.validate(bundle, target_date=target_date)
         validate_sources(bundle, data_root)
         selected, commit = selected_release(Path(data_root).resolve().parent)

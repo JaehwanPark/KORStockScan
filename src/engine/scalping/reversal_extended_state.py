@@ -6,9 +6,11 @@ New roots neither reset those branches nor change their feature dictionaries.
 
 from __future__ import annotations
 import copy
+import math
 from datetime import datetime
 from types import MappingProxyType
 from src.engine.scalping.entry_deadline import (
+    LEGACY_SIGNAL_MAX_AGE_SEC,
     signal_deadline_epoch,
     bind_signal_lifetime,
 )
@@ -123,7 +125,7 @@ class State(OLD.State):
             source["facts"][key] = original[key]
         return source
 
-    def _remember_hold_invalidation(self, signal, row, previous):
+    def _remember_hold_invalidation(self, signal, row, previous, *, issued_event=None):
         """Keep the first native breach, never revive a removed ready signal.
 
         Same state/ingestion lock and original issued lifetime. Capacity
@@ -140,7 +142,13 @@ class State(OLD.State):
             ):
                 self.first_invalidations.pop(key)
         signal = dict(signal)
-        bind_signal_lifetime(signal, self.lifetime_policy)
+        if issued_event is None:
+            bind_signal_lifetime(signal, self.lifetime_policy)
+            original_deadline = signal_deadline_epoch(signal)
+        else:
+            if signal.get("signal_id") != issued_event.get("signal_id"):
+                raise ValueError("first_invalidation_signal_changed")
+            original_deadline = signal_deadline_epoch(issued_event)
         identity = signal["signal_id"]
         proof = self.first_invalidations.setdefault(
             identity,
@@ -161,7 +169,7 @@ class State(OLD.State):
                         "registry_generation",
                     )
                 },
-                original_deadline=signal_deadline_epoch(signal),
+                original_deadline=original_deadline,
                 **process_identity_fields(),
                 runtime_effect=False,
                 allowed_runtime_apply=False,
@@ -215,9 +223,20 @@ class State(OLD.State):
                     hold_breached,
                 )
 
+                policy = (ready["event"].get("entry_signal_lifetime") or {}).get(
+                    "policy"
+                ) or {}
+                extended_momentum_hold = (
+                    policy.get("schema") == "entry_signal_lifetime_policy_v2"
+                    and policy["branch_max_signal_age_sec"].get(
+                        bid, LEGACY_SIGNAL_MAX_AGE_SEC
+                    )
+                    > LEGACY_SIGNAL_MAX_AGE_SEC
+                    and signal.get("decision_phase") == "MOMENTUM_HOLD"
+                )
                 floor = (
                     hold_floor(signal)
-                    if bid in C.CUMULATIVE_DEFINITIONS
+                    if bid in C.CUMULATIVE_DEFINITIONS or extended_momentum_hold
                     else (
                         signal["signal_proof"]["price"]
                         if signal["decision_phase"] == "FIRST_PRICE_HOLD"
@@ -226,11 +245,15 @@ class State(OLD.State):
                 )
                 if (
                     (bid in C.CUMULATIVE_DEFINITIONS and hold_breached(signal, row))
+                    or extended_momentum_hold
+                    and (type(floor) not in (int, float) or not math.isfinite(floor))
                     or floor is not None
                     and row[3] < floor
                 ):
                     try:
-                        self._remember_hold_invalidation(signal, row, previous)
+                        self._remember_hold_invalidation(
+                            signal, row, previous, issued_event=ready["event"]
+                        )
                     except (KeyError, TypeError, ValueError, OverflowError):
                         # Observation loss cannot retain an invalid signal.
                         self.first_invalidations.pop(signal.get("signal_id"), None)
@@ -471,6 +494,25 @@ class State(OLD.State):
             from src.engine.scalping.reversal_cumulative_runtime import prefix_features
 
             cf = prefix_features(self, row, f)
+            for ready in tuple(self.ready):
+                event = ready["event"]
+                policy = (event.get("entry_signal_lifetime") or {}).get("policy") or {}
+                if policy.get("schema") != "entry_signal_lifetime_policy_v2":
+                    continue
+                for bid, signal in tuple(event["branch_signals"].items()):
+                    if (
+                        signal.get("decision_phase") == "RISING_STRUCTURE_HOLD"
+                        and policy["branch_max_signal_age_sec"].get(
+                            bid, LEGACY_SIGNAL_MAX_AGE_SEC
+                        )
+                        > LEGACY_SIGNAL_MAX_AGE_SEC
+                        and cf.get("structure") != "RISING"
+                    ):
+                        event["branch_signals"].pop(bid)
+                        ready.get("path_inputs", {}).pop(bid, None)
+                        self.counts["extended_structure_invalidated"] += 1
+                if not event["branch_signals"]:
+                    self.ready.remove(ready)
             new = self.cumulative.observe(
                 self, row, cf, prior60, symbol=symbol, venue=venue, session=session
             )

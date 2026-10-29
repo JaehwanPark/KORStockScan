@@ -353,6 +353,111 @@ def test_v6_stage_keeps_old_versions_and_adds_exact_thirteen(
     monkeypatch.setattr(N, "load_effective", original_loader)
     V.validate_sources(new, root)
     N.validate(new, target_date="2026-10-12")
+    if not midnight:
+        from datetime import datetime
+        from src.engine.scalping import reversal_extended_intraday as intraday
+
+        sid = "samsung|PRE|ALL|NXT"
+        ids = new["continuous_reversal"]["operating_manifest"]["scopes"][sid]
+        bid = next(b for b in ids if C.branch(b)["decision_phase"] == "FIRST_UPTICK")
+        selected = {
+            sid: dict(
+                schema="entry_signal_lifetime_policy_v2",
+                version="fixture",
+                default_max_signal_age_sec=5.0,
+                branch_max_signal_age_sec={bid: 9.0},
+            )
+        }
+        monkeypatch.setattr(N, "load_effective", lambda **kw: new)
+        with pytest.raises(ValueError, match="parent_cas_failed"):
+            intraday.stage_lifetime(
+                root,
+                "2026-10-12",
+                confirm=intraday.LIFETIME_AUTHORITY,
+                release_commit="a" * 40,
+                expected_parent_bundle_sha256="0" * 64,
+                scope_lifetimes=selected,
+                now=datetime(2026, 10, 12, 12, tzinfo=V.K.KST),
+            )
+        issued_lifetime = intraday.stage_lifetime(
+            root,
+            "2026-10-12",
+            confirm=intraday.LIFETIME_AUTHORITY,
+            release_commit="a" * 40,
+            expected_parent_bundle_sha256=new["bundle_sha256"],
+            scope_lifetimes=selected,
+            now=datetime(2026, 10, 12, 12, tzinfo=V.K.KST),
+        )
+        N.validate(issued_lifetime, target_date="2026-10-12")
+        V.validate_sources(issued_lifetime, root)
+        intraday.validate_lifetime_parent(issued_lifetime["continuous_reversal"], new)
+        for expected, authority in [
+            (None, intraday.LIFETIME_AUTHORITY),
+            ("0" * 64, intraday.LIFETIME_AUTHORITY),
+            (issued_lifetime["bundle_sha256"], intraday.AUTHORITY),
+        ]:
+            with pytest.raises(ValueError, match="activation_cas_failed"):
+                V.activate(
+                    root,
+                    "2026-10-12",
+                    now=datetime(2026, 10, 12, 12, tzinfo=V.K.KST),
+                    intraday_evidence={},
+                    expected_intraday_bundle_sha256=expected,
+                    expected_intraday_authority=authority,
+                )
+        again = intraday.stage_lifetime(
+            root,
+            "2026-10-12",
+            confirm=intraday.LIFETIME_AUTHORITY,
+            release_commit="a" * 40,
+            expected_parent_bundle_sha256=new["bundle_sha256"],
+            scope_lifetimes=selected,
+            now=datetime(2026, 10, 12, 12, tzinfo=V.K.KST),
+        )
+        assert again["bundle_sha256"] == issued_lifetime["bundle_sha256"]
+        altered = copy.deepcopy(selected)
+        altered[sid]["branch_max_signal_age_sec"][bid] = 9.5
+        with pytest.raises(ValueError, match="candidate_exists"):
+            intraday.stage_lifetime(
+                root,
+                "2026-10-12",
+                confirm=intraday.LIFETIME_AUTHORITY,
+                release_commit="a" * 40,
+                expected_parent_bundle_sha256=new["bundle_sha256"],
+                scope_lifetimes=altered,
+                now=datetime(2026, 10, 12, 12, tzinfo=V.K.KST),
+            )
+        altered[sid]["branch_max_signal_age_sec"][bid] = 9.7
+        with pytest.raises(ValueError, match="operator_bound_invalid"):
+            intraday.stage_lifetime(
+                root,
+                "2026-10-12",
+                confirm=intraday.LIFETIME_AUTHORITY,
+                release_commit="a" * 40,
+                expected_parent_bundle_sha256=new["bundle_sha256"],
+                scope_lifetimes=altered,
+                now=datetime(2026, 10, 12, 12, tzinfo=V.K.KST),
+            )
+        tampered = copy.deepcopy(issued_lifetime["continuous_reversal"])
+        tampered["machine_cells"]["samsung|PRE|ALL"]["routes"]["SOR"]["payload"] = {}
+        with pytest.raises(ValueError, match="machine_behavior_changed"):
+            intraday.validate_lifetime_parent(tampered, new)
+        tampered = copy.deepcopy(issued_lifetime["continuous_reversal"])
+        tampered["auxiliary_cells"]["samsung|PRE|ALL"]["routes"]["SOR"]["payload"] = {}
+        with pytest.raises(ValueError, match="parent_behavior_changed"):
+            intraday.validate_lifetime_parent(tampered, new)
+        generation = N.root(root) / "generations" / (new["bundle_sha256"] + ".json")
+        original_bytes = generation.read_bytes()
+        damaged = json.loads(original_bytes)
+        damaged["target_date"] = "2026-10-13"
+        generation.write_text(json.dumps(damaged))
+        try:
+            with pytest.raises(ValueError):
+                V.validate_sources(issued_lifetime, root)
+        finally:
+            generation.write_bytes(original_bytes)
+        V.validate_sources(issued_lifetime, root)
+        monkeypatch.setattr(N, "load_effective", original_loader)
     assert P.digest(old) == before
     V5.validate_sources(old, root)
     assert ER.pending(root, new, "2026-10-13") is None
@@ -676,3 +781,33 @@ def test_lifetime_policy_survives_cumulative_cell_builder_and_changes_execution_
     assert V._behavioral_family(parent["continuous_reversal"]) != V._behavioral_family(changed)
     with pytest.raises(ValueError, match="explicit_transition"):
         V.carry_signal_lifetime(parent,key,route,dict(backend="registered_v4"))
+
+
+def test_branch_lifetime_cannot_reference_a_branch_outside_the_policy_scope():
+    policy = dict(
+        schema="entry_signal_lifetime_policy_v2",
+        version="test",
+        default_max_signal_age_sec=5.0,
+        branch_max_signal_age_sec={"outside": 8.0},
+    )
+    bid = next(iter(C.DEFINITIONS))
+    with pytest.raises(ValueError, match="lifetime_branch_scope_invalid"):
+        V.scope_hash([bid], {}, "union_v6", "code", policy)
+
+
+def test_lifetime_extension_rejects_unimplemented_branch_invalidation():
+    bid = next(
+        b
+        for b in C.DEFINITIONS
+        if C.branch(b).get("decision_phase") == "VWAP_RECLAIM_HOLD"
+    )
+    policy = dict(
+        schema="entry_signal_lifetime_policy_v2",
+        version="test",
+        default_max_signal_age_sec=5.0,
+        branch_max_signal_age_sec={bid: 9.0},
+    )
+    with pytest.raises(ValueError, match="lifetime_branch_invalidation_unsupported"):
+        V.scope_hash([bid], {}, "union_v6", "code", policy)
+    policy["branch_max_signal_age_sec"][bid] = 5.0
+    V.scope_hash([bid], {}, "union_v6", "code", policy)

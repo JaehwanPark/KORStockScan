@@ -925,3 +925,64 @@ def test_captured_expiry_ages_through_real_order_adapter_keep_independent_guards
         _, result = send(case)
         assert len(posts) == 1 and result["return_code"] == "0"
         assert result["entry_send_guard_receipts"][0]["original_deadline_epoch"] == 100.0 + cap
+
+
+@pytest.mark.parametrize(
+    "fault", [None, "price", "stale", "ai_expiry", "native_invalid"]
+)
+def test_branch_lifetime_reaches_existing_physical_guard_without_bypassing_it(
+    case, monkeypatch, fault
+):
+    from src.engine.scalping.entry_deadline import EntryDeadline, bind_signal_lifetime
+
+    event = dict(
+        epoch=100.0,
+        signal_id="confirmed",
+        registry_generation="scope",
+        branch_signals={"momentum": {}},
+        anchor_lineage={"momentum": ["confirmed"]},
+    )
+    bind_signal_lifetime(
+        event,
+        dict(
+            schema="entry_signal_lifetime_policy_v2",
+            version="offline",
+            default_max_signal_age_sec=5.0,
+            branch_max_signal_age_sec={"momentum": 8.0},
+        ),
+    )
+    budget = EntryDeadline.create({"snapshot": [event]})
+    case.clock.epoch, case.clock.perf = 106.0, 16.0
+    case.context = replace(
+        case.context,
+        original_deadline_epoch=budget.epoch,
+        original_deadline_perf=budget.perf,
+    )
+    case.state["snapshot"] = snapshot(case.clock.epoch - 0.1)
+    if fault == "price":
+        case.state["snapshot"]["curr"] = 99
+    elif fault == "stale":
+        case.state["snapshot"] = snapshot(case.clock.epoch - 1)
+    elif fault == "ai_expiry":
+        case.context = replace(
+            case.context,
+            ai_authority_expires_epoch=case.clock.epoch - 0.01,
+            ai_authority_expires_perf=case.clock.perf - 0.01,
+        )
+    elif fault == "native_invalid":
+
+        def invalid():
+            raise ValueError("reversal_first_signal_invalidated")
+
+        case.context = replace(case.context, binding_reader=invalid)
+    posts = transport(case, monkeypatch, [{"return_code": "0", "ord_no": "offline"}])
+    if fault:
+        with pytest.raises(guard.EntrySendGuardBlocked):
+            send(case)
+        assert posts == []
+    else:
+        _, result = send(case)
+        assert len(posts) == 1 and result["return_code"] == "0"
+        assert (
+            result["entry_send_guard_receipts"][0]["original_deadline_epoch"] == 108.0
+        )

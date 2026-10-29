@@ -201,7 +201,72 @@ def test_same_tick_two_hold_branches_are_one_canonical_opportunity():
     assert set(first[hits[0]["event"]["signal_id"]]["branches"]) == {one, three}
     observe(state, [rebound])
     assert state.first_invalidations == first
+
+
+def test_branch_lifetime_on_actual_union_producer_preserves_first_breach():
+    from src.engine.scalping.entry_deadline import claim_deadline_epoch
+
+    one = bid_for("other_non_fixed", "FIRST_HOLD1")
+    three = bid_for("other_non_fixed", "FIRST_HOLD3")
+    values = hold_rows()[:-3] + [row(125, 99.5001)]
+    values[-1][2] = values[-2][2] + 1
+    policy = dict(
+        schema="entry_signal_lifetime_policy_v2",
+        version="test",
+        default_max_signal_age_sec=5.0,
+        branch_max_signal_age_sec={one: 8.0, three: 6.0},
+    )
+    state = R.State(
+        branch_ids=[one, three],
+        session_anchor=values[0],
+        generation="a" * 64,
+        lifetime_policy=policy,
+        offline=True,
+    )
+    hits = observe(state, values)
+    assert len(hits) == 1
+    event = hits[0]["event"]
+    assert set(event["branch_signals"]) == {one, three}
+    assert claim_deadline_epoch({"snapshot": [event]}) == event["epoch"] + 6.0
+    breach, rebound = row(126, 99.49), row(127, 99.5001)
+    breach[2], rebound[2] = values[-1][2] + 1, values[-1][2] + 2
+    observe(state, [breach, rebound])
+    assert all(x["event"]["signal_id"] != event["signal_id"] for x in state.ready)
+    assert set(state.first_invalidations[event["signal_id"]]["branches"]) == {
+        one,
+        three,
+    }
+    assert (
+        state.first_invalidations[event["signal_id"]]["original_deadline"]
+        == event["epoch"] + 6.0
+    )
     assert not state.ready
+
+
+def test_extended_nonfixed_momentum_hold_expires_on_price_floor_breach(monkeypatch):
+    from src.engine.scalping import reversal_path_catalog as path
+
+    bid = path.ALIASES["GA"]
+    monkeypatch.setattr(path, "matches", lambda *args: True)
+    values = [row(i, 100) for i in range(62)] + [row(62, 100.1), row(63, 100.1)]
+    policy = dict(
+        schema="entry_signal_lifetime_policy_v2",
+        version="fixture",
+        default_max_signal_age_sec=5.0,
+        branch_max_signal_age_sec={bid: 9.0},
+    )
+    state = R.State(
+        branch_ids=[bid],
+        session_anchor=values[0],
+        generation="a" * 64,
+        lifetime_policy=policy,
+        offline=True,
+    )
+    hits = observe(state, values, venue="SOR", session="SOR_REGULAR")
+    assert hits
+    signal_id = hits[-1]["event"]["signal_id"]
+    observe(state, [row(64, 100.0), row(65, 100.1)], venue="SOR", session="SOR_REGULAR")
+    assert all(r["event"]["signal_id"] != signal_id for r in state.ready)
 
 
 def test_breakout_requires_known_false_transition_and_structural_prefix():

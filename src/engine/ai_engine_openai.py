@@ -10771,7 +10771,8 @@ class GPTSniperEngine:
                             machine_exact["native_observation_receipt"] = observation
                             if snapshot:
                                 entry_budget = EntryDeadline.create(
-                                    caller_epoch=snapshot[0]["epoch"] + 5,
+                                    {"snapshot": snapshot},
+                                    caller_epoch=entry_input_deadline_epoch,
                                     caller_perf=entry_input_deadline_perf,
                                 )
                                 entry_input_deadline_epoch = entry_budget.epoch

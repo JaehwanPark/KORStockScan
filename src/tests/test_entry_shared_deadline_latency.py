@@ -1595,6 +1595,121 @@ def test_issued_lifetime_drives_budget_without_resetting_confirmation(monkeypatc
 
 
 @pytest.mark.parametrize(
+    "branches,expected",
+    [
+        (["momentum"], 8.0),
+        (["hold"], 6.0),
+        (["unknown"], 5.0),
+        (["momentum", "hold"], 6.0),
+        (["momentum", "unknown"], 5.0),
+    ],
+)
+def test_branch_scoped_lifetime_uses_shortest_original_branch(branches, expected):
+    from src.engine.scalping import entry_deadline as D
+
+    policy = dict(
+        schema="entry_signal_lifetime_policy_v2",
+        version="test",
+        default_max_signal_age_sec=5.0,
+        branch_max_signal_age_sec={"momentum": 8.0, "hold": 6.0},
+    )
+    event = dict(
+        epoch=100.0,
+        signal_id="s",
+        registry_generation="scope",
+        branch_signals={b: {} for b in branches},
+        anchor_lineage={b: ["s"] for b in branches},
+    )
+    D.bind_signal_lifetime(event, policy)
+    assert D.signal_deadline_epoch(event) == 100.0 + expected
+    assert not D.signal_is_current(event, 100.0 + expected)
+    if len(branches) > 1:
+        # Filtering the shorter branch cannot reissue a longer opportunity.
+        event["branch_signals"].pop(branches[-1])
+        assert D.signal_deadline_epoch(event) == 100.0 + expected
+    policy["branch_max_signal_age_sec"][branches[0]] = 1000.0
+    assert D.signal_deadline_epoch(event) == 100.0 + expected
+
+
+@pytest.mark.parametrize(
+    "damage", ["lineage", "new_branch", "issued_branches", "policy"]
+)
+def test_branch_lifetime_rejects_changed_identity_and_policy(damage):
+    from src.engine.scalping import entry_deadline as D
+
+    policy = dict(
+        schema="entry_signal_lifetime_policy_v2",
+        version="test",
+        default_max_signal_age_sec=5.0,
+        branch_max_signal_age_sec={"momentum": 8.0},
+    )
+    event = dict(
+        epoch=100.0,
+        signal_id="s",
+        registry_generation="scope",
+        branch_signals={"momentum": {}},
+        anchor_lineage={"momentum": ["s"]},
+    )
+    D.bind_signal_lifetime(event, policy)
+    if damage == "lineage":
+        event["anchor_lineage"]["unknown"] = ["s"]
+    elif damage == "new_branch":
+        event["branch_signals"]["unknown"] = {}
+    elif damage == "issued_branches":
+        event["entry_signal_lifetime"]["branch_ids"] = ["unknown"]
+    else:
+        event["entry_signal_lifetime"]["policy"]["branch_max_signal_age_sec"][
+            "momentum"
+        ] = 10.0
+    assert D.claim_deadline_epoch({"snapshot": [event]}) == 0.0
+    with pytest.raises(ValueError):
+        D.signal_deadline_epoch(event)
+
+
+def test_branch_lifetime_unidentified_signal_keeps_original_five_seconds():
+    from src.engine.scalping import entry_deadline as D
+
+    policy = dict(
+        schema="entry_signal_lifetime_policy_v2",
+        version="test",
+        default_max_signal_age_sec=5.0,
+        branch_max_signal_age_sec={"momentum": 8.0},
+    )
+    event = dict(epoch=100.0, signal_id="s", registry_generation="scope")
+    D.bind_signal_lifetime(event, policy)
+    assert D.signal_deadline_epoch(event) == 105.0
+
+
+def test_observed_slowest_hold_preparation_leaves_full_existing_transport_budget(
+    monkeypatch,
+):
+    from src.engine.scalping import entry_deadline as D
+
+    monkeypatch.setattr(D.time, "time", lambda: 104.349)
+    monkeypatch.setattr(D.time, "perf_counter", lambda: 204.349)
+    event = dict(
+        epoch=100.0,
+        signal_id="hold",
+        registry_generation="scope",
+        branch_signals={"hold": {}},
+        anchor_lineage={"hold": ["hold"]},
+    )
+    legacy = D.EntryDeadline.create({"snapshot": [copy.deepcopy(event)]})
+    D.bind_signal_lifetime(
+        event,
+        dict(
+            schema="entry_signal_lifetime_policy_v2",
+            version="fixture",
+            default_max_signal_age_sec=5.0,
+            branch_max_signal_age_sec={"hold": 9.6},
+        ),
+    )
+    extended = D.EntryDeadline.create({"snapshot": [event]})
+    assert 0 < legacy.transport_ms(5000, reserve_sec=0.25) < 500
+    assert extended.transport_ms(5000, reserve_sec=0.25) == 5000
+
+
+@pytest.mark.parametrize(
     "damage",
     [
         "deadline_epoch",

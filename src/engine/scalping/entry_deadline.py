@@ -15,17 +15,49 @@ def validate_lifetime_policy(policy):
     """A family-owned finite lifetime; never a queue/load-derived timeout."""
     if (
         not isinstance(policy, Mapping)
-        or set(policy) != {"schema", "version", "max_signal_age_sec"}
-        or policy["schema"] != "entry_signal_lifetime_policy_v1"
-        or not isinstance(policy["version"], str)
+        or not isinstance(policy.get("version"), str)
         or not policy["version"].isascii()
         or not 0 < len(policy["version"]) <= 128
-        or type(policy["max_signal_age_sec"]) not in (int, float)
-        or not math.isfinite(policy["max_signal_age_sec"])
-        or policy["max_signal_age_sec"] <= 0
     ):
         raise ValueError("entry_signal_lifetime_policy_invalid")
-    return dict(policy)
+    schema = policy.get("schema")
+    if schema == "entry_signal_lifetime_policy_v1":
+        if set(policy) != {"schema", "version", "max_signal_age_sec"}:
+            raise ValueError("entry_signal_lifetime_policy_invalid")
+        ages = [policy["max_signal_age_sec"]]
+    elif schema == "entry_signal_lifetime_policy_v2":
+        if set(policy) != {
+            "schema",
+            "version",
+            "default_max_signal_age_sec",
+            "branch_max_signal_age_sec",
+        }:
+            raise ValueError("entry_signal_lifetime_policy_invalid")
+        branches = policy["branch_max_signal_age_sec"]
+        if (
+            not isinstance(branches, Mapping)
+            or not branches
+            or len(branches) > 128
+            or any(
+                not isinstance(k, str) or not k.isascii() or not k or len(k) > 256
+                for k in branches
+            )
+            or policy["default_max_signal_age_sec"] != LEGACY_SIGNAL_MAX_AGE_SEC
+            or type(policy["default_max_signal_age_sec"]) not in (int, float)
+        ):
+            raise ValueError("entry_signal_lifetime_policy_invalid")
+        ages = [policy["default_max_signal_age_sec"], *branches.values()]
+    else:
+        raise ValueError("entry_signal_lifetime_policy_invalid")
+    if any(
+        type(age) not in (int, float) or not math.isfinite(age) or age <= 0
+        for age in ages
+    ):
+        raise ValueError("entry_signal_lifetime_policy_invalid")
+    validated = dict(policy)
+    if schema == "entry_signal_lifetime_policy_v2":
+        validated["branch_max_signal_age_sec"] = dict(branches)
+    return validated
 
 
 def _policy_hash(policy):
@@ -34,6 +66,42 @@ def _policy_hash(policy):
             policy, sort_keys=True, separators=(",", ":"), ensure_ascii=False
         ).encode()
     ).hexdigest()
+
+
+def _event_branch_ids(event):
+    """Use the immutable original lineage even if live checks filter a branch."""
+    lineage = event.get("anchor_lineage")
+    signals = event.get("branch_signals")
+    if lineage is not None:
+        if not isinstance(lineage, Mapping) or not lineage:
+            raise ValueError("entry_signal_lifetime_branches_invalid")
+        ids = list(lineage)
+        if (
+            not isinstance(signals, Mapping)
+            or not signals
+            or not set(signals).issubset(ids)
+        ):
+            raise ValueError("entry_signal_lifetime_branches_invalid")
+    elif signals is not None:
+        if not isinstance(signals, Mapping) or not signals:
+            raise ValueError("entry_signal_lifetime_branches_invalid")
+        ids = list(signals)
+    else:
+        branch = event.get("extended_definition_id") or event.get("branch_id")
+        ids = [branch] if branch is not None else []
+    if any(not isinstance(b, str) or not b.isascii() or not b for b in ids):
+        raise ValueError("entry_signal_lifetime_branches_invalid")
+    return sorted(ids)
+
+
+def _event_lifetime(policy, event):
+    if policy["schema"] == "entry_signal_lifetime_policy_v1":
+        return policy["max_signal_age_sec"], None
+    ids = _event_branch_ids(event)
+    values = policy["branch_max_signal_age_sec"]
+    default = policy["default_max_signal_age_sec"]
+    # Every branch present at confirmation must permit the longer budget.
+    return min((values.get(b, default) for b in ids), default=default), ids
 
 
 def bind_signal_lifetime(event, policy, *, live_clock=False):
@@ -49,15 +117,22 @@ def bind_signal_lifetime(event, policy, *, live_clock=False):
     epoch = event.get("epoch")
     if type(epoch) not in (int, float) or not math.isfinite(epoch):
         raise ValueError("entry_signal_confirmation_invalid")
+    max_age, branch_ids = _event_lifetime(policy, event)
     event["entry_signal_lifetime"] = dict(
-        schema="entry_signal_lifetime_v1",
+        schema=(
+            "entry_signal_lifetime_v2"
+            if branch_ids is not None
+            else "entry_signal_lifetime_v1"
+        ),
         policy=policy,
         policy_sha256=_policy_hash(policy),
         signal_id=event["signal_id"],
         generation=event["registry_generation"],
         confirmed_epoch=epoch,
-        deadline_epoch=epoch + policy["max_signal_age_sec"],
+        deadline_epoch=epoch + max_age,
     )
+    if branch_ids is not None:
+        event["entry_signal_lifetime"]["branch_ids"] = branch_ids
     if live_clock:
         # Bind before claim/admission. Wall-clock rollback must not renew the
         # original confirmation's remaining real processing time.
@@ -66,7 +141,7 @@ def bind_signal_lifetime(event, policy, *, live_clock=False):
             pid=os.getpid(),
             issued_epoch=stamp,
             issued_perf=perf,
-            deadline_perf=perf + (epoch + policy["max_signal_age_sec"] - stamp),
+            deadline_perf=perf + (epoch + max_age - stamp),
         )
     signal_deadline_epoch(event)
 
@@ -82,9 +157,16 @@ def signal_deadline_epoch(event):
     if not isinstance(issued, Mapping):
         raise ValueError("entry_signal_lifetime_invalid")
     policy = validate_lifetime_policy(issued.get("policy"))
-    expected = epoch + policy["max_signal_age_sec"]
+    max_age, branch_ids = _event_lifetime(policy, event)
+    expected = epoch + max_age
     if (
-        issued.get("schema") != "entry_signal_lifetime_v1"
+        issued.get("schema")
+        != (
+            "entry_signal_lifetime_v2"
+            if branch_ids is not None
+            else "entry_signal_lifetime_v1"
+        )
+        or (branch_ids is not None and issued.get("branch_ids") != branch_ids)
         or issued.get("signal_id") != event.get("signal_id")
         or issued.get("generation") != event.get("registry_generation")
         or issued.get("confirmed_epoch") != epoch

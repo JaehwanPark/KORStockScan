@@ -9627,6 +9627,7 @@ def test_received_reversal_validator_exception_preserves_raw_response_and_waits_
         "pre_adjudication_capture_io_failure",
         "pre_exact_rejection",
         "probe_pre_adjudication_rejection",
+        "probe_extended_deadline",
         "post_capture_rejection",
         "local_deadline",
         "unsent_deadline",
@@ -9664,6 +9665,18 @@ def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution
     registry.register(tmp_path, definition)
     inp, prompt, schema = registry.production_request(snapshot, definition)
     snapshot[0]["epoch"] = time.time()
+    if failure_stage == "probe_extended_deadline":
+        from src.engine.scalping.entry_deadline import bind_signal_lifetime
+
+        bind_signal_lifetime(
+            snapshot[0],
+            dict(
+                schema="entry_signal_lifetime_policy_v1",
+                version="fixture",
+                max_signal_age_sec=9.0,
+            ),
+            live_clock=True,
+        )
     refs = [signal["ref"] for signal in inp["signals"]]
     assessment = dict(
         action="ENTER_NOW",
@@ -9738,10 +9751,29 @@ def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution
     engine = _build_engine()
     pre_rejected = failure_stage.startswith(("pre_", "probe_pre_"))
     probe_rejected = failure_stage == "probe_pre_adjudication_rejection"
-    if probe_rejected:
+    probe_success = failure_stage == "probe_extended_deadline"
+    if probe_rejected or probe_success:
         from src.engine.scalping.entry_setup_scalping_rollout import SHA_ENV
 
         monkeypatch.setenv(SHA_ENV, "b" * 64)
+    observed_budgets = []
+    if probe_success:
+        from src.engine.scalping.entry_deadline import EntryDeadline
+
+        original_create = EntryDeadline.create.__func__
+
+        def capture_create(cls, *args, **kwargs):
+            budget = original_create(cls, *args, **kwargs)
+            if budget is not None:
+                observed_budgets.append(budget)
+            return budget
+
+        monkeypatch.setattr(EntryDeadline, "create", classmethod(capture_create))
+        monkeypatch.setattr(
+            diagnostics,
+            "observe_snapshot",
+            lambda *a, **kw: (snapshot, {"reason": "ready"}),
+        )
     rejected_receipt = {
         "schema": "continuous_reversal_source_receipt_v4",
         "error": "reversal_signal_path_changed",
@@ -9927,8 +9959,12 @@ def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution
         strategy="SCALPING",
         prompt_profile="watching",
         candle_context=_allowed_entry_candle_context(),
-        machine_only=probe_rejected,
-        reversal_signal_claim={"snapshot": snapshot, "token": "controlled-native-test"},
+        machine_only=probe_rejected or probe_success,
+        reversal_signal_claim=(
+            None
+            if probe_success
+            else {"snapshot": snapshot, "token": "controlled-native-test"}
+        ),
         metadata_extra=dict(
             evaluation_attempt_id="controlled-evaluation",
             scanner_promotion_id="controlled-promotion",
@@ -9941,11 +9977,19 @@ def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution
             .read_text()
             .rsplit(")", 1)[1]
             .split()[19],
-            async_origin_deadline_epoch=snapshot[0]["epoch"] + 5,
+            async_origin_deadline_epoch=snapshot[0]["epoch"]
+            + (9 if probe_success else 5),
             async_order_venue="SOR",
             scanner_generation_id="controlled-generation",
         ),
     )
+    if probe_success:
+        assert calls == [] and result["provider_called"] is False
+        assert (
+            observed_budgets
+            and observed_budgets[-1].epoch == snapshot[0]["epoch"] + 9.0
+        )
+        return
     if deadline_failure:
         from datetime import datetime
         from src.engine.monitoring import submission_bottleneck_monitor as monitor

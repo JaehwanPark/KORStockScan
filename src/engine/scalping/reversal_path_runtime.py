@@ -10,6 +10,7 @@ from pathlib import Path
 from collections import deque
 from datetime import datetime
 from src.engine.scalping.entry_deadline import (
+    LEGACY_SIGNAL_MAX_AGE_SEC,
     signal_deadline_epoch,
     signal_is_current,
     bind_signal_lifetime,
@@ -19,6 +20,45 @@ from src.engine.scalping import continuous_reversal_branches as B
 from src.engine.scalping import reversal_registered_runtime as OLD
 from src.engine.scalping import reversal_path_catalog as C
 from src.engine.scalping.continuous_reversal_postclose import digest
+
+
+def _extended_root_intact(signal, row, features):
+    """Keep the original trigger threshold; an unknown threshold fails closed."""
+    phase = signal.get("decision_phase")
+    if phase not in {
+        "MOMENTUM_CROSS",
+        "HIGH_BREAKOUT",
+        "RETEST_RECLAIM_FIRST",
+        "RETEST_RECLAIM_PEAK",
+        "PEAK_RECLAIM",
+    }:
+        return True
+    proof = signal.get("signal_proof") or {}
+    for _ in range(8):
+        original = (
+            proof.get("original_confirmation") if isinstance(proof, dict) else None
+        )
+        if not isinstance(original, dict):
+            break
+        proof = original.get("signal_proof") or {}
+    if not isinstance(proof, dict):
+        return False
+    if phase == "MOMENTUM_CROSS":
+        threshold, current = proof.get("threshold"), features.get("ret")
+    elif phase == "HIGH_BREAKOUT":
+        threshold, current = proof.get("prior_high"), row[3]
+    else:
+        threshold, current = proof.get("reclaim"), row[3]
+        if threshold is None and str(proof.get("root_confirmation", "")).startswith(
+            "RETEST"
+        ):
+            threshold = proof.get("price")
+    if any(
+        type(x) not in (int, float) or not math.isfinite(x)
+        for x in (threshold, current)
+    ):
+        return False
+    return current > threshold if phase == "HIGH_BREAKOUT" else current >= threshold
 
 
 class State(OLD.State):
@@ -374,6 +414,25 @@ class State(OLD.State):
                 else None
             ),
         )
+        # A later cross or reclaim creates a new signal; it cannot resurrect
+        # the old claim after that claim's original threshold has broken.
+        for ready in tuple(self.ready):
+            event = ready["event"]
+            issued = event.get("entry_signal_lifetime") or {}
+            policy = issued.get("policy") or {}
+            if policy.get("schema") != "entry_signal_lifetime_policy_v2":
+                continue
+            limits = policy["branch_max_signal_age_sec"]
+            for bid, signal in tuple(event["branch_signals"].items()):
+                if limits.get(
+                    bid, LEGACY_SIGNAL_MAX_AGE_SEC
+                ) <= LEGACY_SIGNAL_MAX_AGE_SEC or _extended_root_intact(signal, row, f):
+                    continue
+                event["branch_signals"].pop(bid)
+                ready.get("path_inputs", {}).pop(bid, None)
+                self.counts["extended_root_invalidated"] += 1
+            if not event["branch_signals"]:
+                self.ready.remove(ready)
         self.q30.add(row)
         candidates = []
         ids = [bid for bid in self.selected_ids if bid in C.NEW_DEFINITIONS]

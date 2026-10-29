@@ -9,7 +9,11 @@ import copy
 import math
 import threading
 from datetime import datetime
-from src.engine.scalping.entry_deadline import signal_deadline_epoch, signal_is_current
+from src.engine.scalping.entry_deadline import (
+    LEGACY_SIGNAL_MAX_AGE_SEC,
+    signal_deadline_epoch,
+    signal_is_current,
+)
 from src.engine.scalping import continuous_reversal as K
 from src.engine.scalping import continuous_reversal_branches as B
 from src.engine.scalping import reversal_extended_catalog as C
@@ -406,7 +410,22 @@ def _filter_first(event, source, state):
     from src.engine.scalping.reversal_cumulative_runtime import hold_floor
 
     for bid, signal in list(event["branch_signals"].items()):
-        if signal["decision_phase"] == B.FIRST and (
+        lifetime = (event.get("entry_signal_lifetime") or {}).get("policy") or {}
+        extended = (
+            lifetime.get("schema") == "entry_signal_lifetime_policy_v2"
+            and lifetime["branch_max_signal_age_sec"].get(
+                bid, LEGACY_SIGNAL_MAX_AGE_SEC
+            )
+            > LEGACY_SIGNAL_MAX_AGE_SEC
+        )
+        if extended and not any(
+            ready["event"]["signal_id"] == event["signal_id"]
+            and bid in ready["event"]["branch_signals"]
+            for ready in state.ready
+        ):
+            event["branch_signals"].pop(bid)
+            source["branch_inputs"].pop(bid)
+        elif signal["decision_phase"] == B.FIRST and (
             not state.legacy.turn or state.legacy.turn["event_id"] != signal["event_id"]
         ):
             event["branch_signals"].pop(bid)

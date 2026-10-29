@@ -134,6 +134,42 @@ def test_structure_signal_is_independent_of_first_reversal():
         A.validate_signal(event)
 
 
+def test_extended_structure_signal_expires_when_native_structure_becomes_unknown(
+    monkeypatch,
+):
+    from src.engine.scalping import reversal_cumulative_runtime as runtime
+
+    bid = Q.GROUPS[SCOPE]["additions"]["A14"]
+    source = rows([3000] * 125 + [3000 + i for i in range(1, 100)])
+    policy = dict(
+        schema="entry_signal_lifetime_policy_v2",
+        version="fixture",
+        default_max_signal_age_sec=5.0,
+        branch_max_signal_age_sec={bid: 9.0},
+    )
+    state = State(
+        branch_ids=[bid], session_anchor=source[0], offline=True, lifetime_policy=policy
+    )
+    for index, tick in enumerate(source):
+        found = state.observe(
+            tick, symbol="000001", venue="NXT", session="NXT_PREMARKET"
+        )
+        if found:
+            break
+    assert found and index + 1 < len(source)
+    old = found[0]["event"]["signal_id"]
+    original = runtime.prefix_features
+
+    def unknown(*args, **kwargs):
+        return dict(original(*args, **kwargs), structure=None)
+
+    monkeypatch.setattr(runtime, "prefix_features", unknown)
+    state.observe(
+        source[index + 1], symbol="000001", venue="NXT", session="NXT_PREMARKET"
+    )
+    assert all(item["event"]["signal_id"] != old for item in state.ready)
+
+
 def test_first_hold_confirmation_is_not_shifted_by_filter():
     bid = Q.GROUPS[SCOPE]["additions"]["A10"]
     source = rows([3000] * 180 + [2999, 3000, 3000, 3000])
