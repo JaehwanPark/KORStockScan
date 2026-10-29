@@ -236,3 +236,92 @@ Premarket `_NX`/nxt_only/NXT, Regular `_AL`/integrated/SOR/cohort KRX, Aftermark
 의존성 disposition은 원 사건/raw·10/27 봉인 입력·원 연구 보고서 **reuse/read-only revalidate**, 새 가설 결과만 **regenerate**다. 원 입력/보고서/selector/bootstrap을 덮어쓰지 않았다. 수동 연구 호출과 테스트가 새 진단 tree의 소비자이며 자동 장후 dispatch나 정책 선택에 연결했다고 주장하지 않는다.
 
 후속은 같은 `HoldingProfitExitSourceContractRepair`에서 승인된 배포 이후 첫 자연 초기 진입의 plan→v3 link→quote/terminal→장후 assembler 수용을 확인한다. 검토 창은10/28 잔여 REG/16:00~20:00 통합 세션과, 미배포·미관측이면10/29 08:00~08:50 NXT PRE 및09:00~15:30 REG다. 배포가 이루어지지 않으면 해당 창은 수용 완료가 아니다. next postclose에서 v3 수용·GAP 보존·해시/epoch/시퀀스·진입 context 원천 결속과 CPU/queue lag/bytes를 검사하며 자연 주문을 만들지 않는다. 실제 비용과 독립 시간 분할 검증, 슬리피지 후 우위가 갖춰진 뒤 기존 정책 연구·선택 owner에서 승격을 별도 판단한다. 이번 코드 리뷰 종료와 미관측 자연 수용·경제성은 분리한다.
+
+## 9. 2026-10-29 엠씨넥스 진입·보유 원천 수리와 순실행 손절 연구
+
+판정: record49580의 기존 원문을 보존하고 **입력/응답 계약의 구현과 제한된 관측 연구**를 수행했다. 완료 분봉 입력의 운영 활성화, 정책 선정, 배포/PID 소비, 자연 응답·청산 및 실제 비용 대사는 별도 OPEN이다. 실행 owner는 현행 체크리스트의 `HoldingProfitExitSourceContractRepair` 하나를 유지한다. 기존 -3%/60초, hard/protect/emergency, AI VETO 정족수, 주문·수량·수동 custody, 신선도 및 provider/model을 변경하지 않았다.
+
+### 사건과 재현 원천
+
+- 원 사건: 2026-10-29 PREMARKET, Main `ce358bce0f0bbea932f0a3591ec4b40fd60b2cda`, PID1366991/start87314610, 엠씨넥스097520/record49580. 세션 PREMARKET, 정책 PREMARKET_KRX_LIKE, 원천097520_NX/nxt_only, 요청·유효 주문 NXT, broker 확인 BUY/SELL NXT를 구분했다. 원 실적11주/평균20,759.0909→20,100, 설정비용 반영-3.397854%를 실제 비용 대사 완료로 승격하지 않는다.
+- 원 분석: [진입·보유 검토](../../tmp/mcnex-entry-holding-review-20261029-49580/review.md), [원문 투영 및 native receipts](../../tmp/mcnex-entry-holding-review-20261029-49580/evidence.json). 별도 RFHIC49558 역사 BUY-null을 신규 사건의 원인으로 사용하지 않는다.
+- 08:04 완료 봉 O20,800/H21,100/L20,650/C20,650/V31,602가 수집됐지만 실제 compact AI fact ledger에는 전달되지 않았다. 이번 재현은 이 원 OHLCV와 native 시각·원천 item을 사용한다. 긴 윗꼬리·종가 하락·거래량 증가는 관측 사실이며 자동 진입 금지나 사후 손실 라벨이 아니다.
+- native holding payload46건의 원 bytes SHA와 native source-index generation을 검증했다. 그중 전량 실행 비용·신선 호가·입력 계약을 갖춘42건을 공통 분모로 사용했고, 실행 PnL 결손4건을 제외했다. 원 유효/부족 투표 슬롯69건과 provider 요청46건은 서로 다른 분모다.
+- 초기 결손 입력에는 보유11주/최우선 bid9주가 관측됐다. 전체 visible depth 및 설정비용 증거가 없으면 순손익은 null이다. 최우선 호가에 전량 체결됐다고 가정하거나 missing cost=0으로 만들지 않는다.
+- 원 trailing 전이8,071건의 QUOTE5,418/source_gap2,653 중 결손 분류를 원 raw row SHA로 재조회했다. 기존 사유는 `bid_clock_missing`2,474건/`coverage_exhausted`179건이었다. 후자의 관측 소진 flag는 False여서 fallback 사유가 잘못됐다. 이 값을 기준으로 오래된256건 cap이 재발했다고 판단하지 않는다. 원천의 실제 결손은 유지한다. 추가 재조회 중 live index가 `InputPending:trailing_index_coverage_incomplete`를 반환한 시도는 진행 중 writer의 미완성 범위로 남기고 강제 재색인·coverage 승격을 하지 않았다. 앞서 검증한 세대/원본은 보존한다.
+
+### 구현과 생산자 → 소비자
+
+| 변경 | 생산자와 소비자 | 경계/잔여 수용 |
+| --- | --- | --- |
+| 완료 분봉·추세 위험 전달 | 기존 `entry_candle_context` → `ai_engine_openai.analyze_target` → `reversal_auxiliary_intraday.apply_request` → registry/production_input → compact wire/schema → 응답 decode | 별도 `auxiliary_completed_candle_risk_production_v2` opt-in. 기존 v1은 입력/판정 동등성을 유지한다. 원천 item·날짜·완료 시각·OHLCV·quality를 검사하고 최대5개 완료 봉에서 윗꼬리/종가 변화/거래량비를 만든다. 정상 forming suffix는 제외하고 완료 선행 봉을 보존한다. 새 고정 veto/추가 확인 조건은 없다. |
+| 진입 입력의 연구 전달 | 동일 registry `request(..., entry_context=...)` → 기존 offline request/wire/hash | 기존 machine capture의 동일 시점 분봉을 명시 전달한다. 과거 normalized tick snapshot만으로 분봉을 복원하거나 최신 REST로 과거를 채우지 않는다. 자동 장후 모집단 확장·새 registry 발행은 이번 실행 범위에 포함하지 않았다. 원천 없는 행은 unavailable이며 해당 정보 효과를 검증한 표본으로 셀 수 없다. |
+| 보유 응답 형식 | `path_vote_response_schema` → 실제 `_call_openai_safe(response_schema_override=...)` → 기존 `normalize_path_vote_bundle` | 요청 snapshot/path별 enum·사유 prefix·5~64자·1~6개를 요청에서도 강제한다. 잘못된 응답은 계속 INSUFFICIENT. 미래 거절에는 `response_contract_errors`로 필드/사유 수/길이/prefix/문자 위반을 남긴다. 과거 invalid_path_vote9건의 원 raw 응답이 현 ledger에 없어 각 원 위반을 소급 확정하지 않는다. |
+| 비용·호가 원천 결손 설명 | 기존 `_observed_exit_costs` → `execution_pnl.cost_estimate_status` → model payload → `path_vote_gap_source.execution_pnl_source` | frozen cost 부재/위반, stale quote, 비정상 bid level, 전량 depth 부족을 구별한다. API/구독/비용률/수량을 바꾸지 않고 available partial book을 완전한 fill로 승격하지 않는다. |
+| 재생 원천 사유 일치 | `_main_stop_quote_context`의 동일 predicate 목록 → complete와 source_gap_reasons → 기존 trailing 전이 사유 | 서로 다른 중첩 판정식을 통합했다. 부적격은 그대로이며 stale/future bid·가격 불가 등이 실제 용량 소진으로 기록되지 않는다. 기존 source_gap 원문은 수정하지 않는다. |
+| 기준선·임계치·유예 공동 관측 | native holding payload → `main_stop_replay.compare_soft_stop_basis` → 독립 연구 JSON | 4096개 관측/최대8×8 조합, 원 request·BUY identity·cost source 및 원문 해시를 유지한다. 비교 결과는 report_only이고 native policy selector 입력이 아니다. |
+
+외부 원천 계약: 필요한 완료 분봉, 현재 native bid/depth, 원 체결 BUY identity, 설정 비용은 기존 소유자가 이미 수집/동결하는 값이다. 추가 키움 요청·parser·subscription·route 변경은 없다. 미래 호가, 미관측 깊이, 과거 queue fill, 대사되지 않은 실제 broker 비용은 확보된 것으로 간주하지 않는다. 문자열 변수명은 위 실제 생산 필드 그대로 사용하며 mark profit, bid gross, modeled net, 실제 비용 대사를 구분한다.
+
+### 연구 실행 결과와 후속 절차
+
+원 정책 `56457d97a9395b3ccc5832a936936e1e1ff8a4d248f2105e735adedd881d0985`의 SCANNER/PREMARKET 값을 읽었다. soft 임계치 `[-3.5,-3.25,-3.0,-2.75,-2.5]`와 유예 `[0,15,30,45,60]`의25조합을 동일42개 적격 관측에 비교했다. 원 임계치·안전 기준 및 source date는 결과에 봉인했다.
+
+| soft 임계치 | 현재가 순손익 위반 관측 | 전량 visible bid 순손익 위반 관측 |
+| --- | ---: | ---: |
+| -3.50% | 0 | 0 |
+| -3.25% | 0 | 0 |
+| -3.00% | 0 | 2 |
+| -2.75% | 5 | 6 |
+| -2.50% | 7 | 7 |
+
+비용은 동일 frozen 모델로 한 번만 반영하고, bid/VWAP에 들어간 spread를 다시 차감하지 않았다. 위 수치는 독립 거래 수/승률/실현 이익이 아니다. 유예는 각 관측이 최초 touch일 경우의 conditional deadline까지만 계산했다. 드문 AI 평가 사이의 연속 유지·회복, 실제 최초 touch, 체결 가능성 및 지연 효과를 보간하지 않아 `paired_ev_krw=null`, `continuous_coverage_proven=false`다. -3%의2건 차이는 실행 기준 연구의 필요성을 뒷받침하지만, 새 최적값 또는60초의 실제 손실 기여를 입증하지 않는다.
+
+다음 연구도 같은 owner에서 진행한다.
+
+1. **동일 원천 실험 고정:** 기존 native `main_stop_experiment`의 parent/code/operator lock/원천 window·BUY generation·시장 cohort·학습/holdout/embargo·후보 grid를 고정한다. 기준선 원본, 순실행 기준만 바꾼 대조, 임계치·유예 결합 후보를 분리한다. 이번 탐색 결과를 이미 사전등록된 독립 holdout으로 부르지 않는다.
+2. **입력 완결성:** 모든 등록 포지션/기회 분모에서 eligible/excluded/unknown을 보존한다. 실제 손절한 거래만 모을 필요는 없다. 완전한 연속 원천을 가진 정상 보유·청산·미청산/censored 경로도 기존 native schema로 비교한다. 새 입력 v2는 실제 capture의 완료 봉을 명시적으로 연결해 학습·재생·provider wire가 동일해야 한다. 원천 없는 normalized tick 표본을 v2 관측 표본으로 조용히 대체하지 않는다.
+3. **실행 기준·임계치·유예:** 기존 `main_stop_replay`의 actual evaluation lane, quantity, manual custody, normal exit/terminal, bid depth·가격·시각, 비용과 `holding_vote_exit_models`를 그대로 사용한다. 현재가/전량 bid VWAP의 설정비용 순손익을 비교하되 hard/protect/emergency의 우선순위와 기존 가격·route 검증은 독립 유지한다. 유예의 최초 touch/회복 reset/ADD 이후 즉시 경로/강제 종료를 재생한다. 소프트 임계치와 유예가 서로의 영향을 숨기지 않도록 단일 축 결과와 결합 결과를 함께 낸다.
+4. **선정:** 기존 family의 clean boundary와 더 좁은 refresh window, 실제 parent/lock, paired net KRW EV·tail loss·missed upside·censoring·날짜별 holdout 및 비용 grade를 적용한다. 기계 진입 전용 win-rate 예외를 손절 선정에 전용하지 않는다. 실제 비용 누락과 visible depth censor는 null/제외 사유로 보존한다. 누적 시간이나 표본 수만으로 자동 해소됐다고 판단하지 않는다.
+5. **마지막 소비:** qualified 후보가 있을 때 기존 publisher→loader/PREOPEN→실제 PID receipt와 원 request/policy/code hash를 대사한다. 이번에는 registry/정책 발행, 운영값 변경, 배포·재기동·주문을 하지 않았다. source2026-10-29 장후/다음 적격 세션의 자연 수용은 기존 체크리스트의 창을 따르되 새 버전이 실제로 배포·선택된 이후 표본만 새 코드의 자연 수용으로 센다.
+
+### 리뷰·검증·성능·제거 대사
+
+- 기준 Git `1756de1d9d7943739d539d5207cc55484185bff5`와 작업 시작 당시 파일 SHA를 기록했다. 다른 세션의 변경이 있는 `sniper_state_handlers.py` 및 observation test는 작업 직전 bytes를 별도로 보존하고 그 이후 본 변경만 patch에 포함했다. 다른 dirty 파일·원 정책·원 실적을 덮어쓰지 않았다.
+- 1차 구현 후 source→registry→wire→decode와 보유 consumer를 리뷰했다. forming 봉이 존재하면 완료 봉까지 전부 사라지는 구조를 고쳤다. 중복 완료 봉 파싱을 한 번으로 줄였다. 기존 compatibility reader의 세대 길이 차이를 처리하되 original/new transform 혼합은 거부하고, 새 v2는 v1의 역사 hash 호환 권한을 받지 않게 했다.
+- 회귀 검사에서 발견한 limit-up fixture 실패는 보존한 수정 전 predicate에서도 동일하게 재현됐다. 실제 depth ask가 빠진 fixture를 native ask와 일치시키고, 운영의 bid/ask 동일성 guard는 유지했다. 잘못된 호가·sink 실패 negative는 계속 거부한다. 실패 원 로그를 보존했다.
+- 영향11 suites **806 PASS** 후 forming suffix/중복 파싱 보완에 대해 entry producer/wire suites를 재검증했다. entry 최종98 PASS이며 비용 결손의 component 상태 보완 후 holding 영향 suites도 다시 통과했다. 최종 결과는 [검증 로그](../../tmp/mcnex-source-repair-20261029/entry-final-tests.log)에 보존한다. compile 및 `git diff --check`, 문서 print-only parser를 함께 확인한다. 실제 provider 호출 및 운영 P5는 미실행이다.
+- 격리100회, 원 v1 대비 v2의 동기 request+wire p50 **2.133→2.484ms**, p95 **2.178→2.530ms**, wire **3,599→5,448bytes**였다. 새로운 분봉/호가 조회0회, 최대5봉·기존 요청1회 안에서 처리한다. 운영 end-to-end/provider latency 개선으로 주장하지 않으며, 배포 후 동일 route/call의 p95·timeout·writer lag·큐 실패를 비교한다. 실제 음성/누락 표본을 재시도 폭증으로 보충하지 않는다.
+- 제거/대체: 중복 source completeness/결손 사유 조건은 동일 predicate owner로 **consolidated**, 이전 fallback `coverage_exhausted` 오분류 분기는 **removed**. v1 입력은 현재 정책·역사 reader가 소비하므로 **retained**; v2는 explicit native 등록 전 운영 미선택이다. 기존 hard/protect/emergency·vote·quote producer 및 publisher는 **retained**. 새 Python module/worker/CLI/스케줄·병렬 청산 owner는 추가하지 않았다.
+- 소스9파일 +552/-107, 테스트6파일 +371/-2, 문서 추가는 이 기존 audit 섹션 하나다. 증가분은 bounded source projection/요청 schema/실패 증거/관측 비교이며, 기존 필수 guards 및 역사 reader를 삭제하지 않는다. 배포본은 아니며 [범위 patch](../../tmp/mcnex-source-repair-20261029/source-repair.patch), [파일별 전후 SHA·규모](../../tmp/mcnex-source-repair-20261029/change-manifest.json), [25조합 연구](../../tmp/mcnex-source-repair-20261029/holding-basis-research.json), [원천 결손 분류](../../tmp/mcnex-source-repair-20261029/coverage-diagnosis.json), [성능 측정](../../tmp/mcnex-source-repair-20261029/performance.json)에 보존했다.
+
+완료 상태: 코드 수정·자체 리뷰·보완·재리뷰·격리 검증과 사건 관측 연구까지. 실제 운용 적정성 개선, 자동 장후 v2 모집단 연결/정책 선정, 새 PID 소비, 정상 응답률 및 전량 청산·비용 경제성은 OPEN이다. 원 과거 응답/호가 결손을 소급 정상화하거나 선택되지 않은 입력을 이미 운영 중이라고 표시하지 않는다.
+
+Project/Calendar 외부 동기화는 실행하지 않았다. 필요 시 사용자 실행 명령은 아래 하나다.
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
+```
+
+## 10. 2026-10-29 자동 장후 완료 분봉 연결과 배포 인계
+
+요청 범위는 원천 수리·자동 모집단 연결·선정 경로 검증·배포본 인계다. 이 세션의 live 설정/정책 변경, provider 호출, 주문 및 재기동은0이다. 실제 새 정책의 비교·채택은 원천 부족으로 OPEN이며 코드 검증과 구분한다.
+
+- 원천 owner는 `completed_history.publish/read`다. 새 수집기나 Kiwoom 호출/응답 parser를 추가하지 않고 기존 불변 REST revision에서 동일 item·native session·확인 시각 이전 prefix를 읽는다. outcome용 장후 최종 분봉은 설명 변수로 쓰지 않는다. auth scope는 내부 조회에만 쓰며 출력하지 않는다. 상충 scope, 미래 revision, 전일/진행 분봉, 오래된 suffix는 적격 원천이 아니다.
+- `reversal_auxiliary_research_population.attach_completed_contexts`가 원래 outcome-blind 표본 선정 후에 원천을 동결하고, cumulative/changed-scope 연구와 `reversal_auxiliary_tuning.prepare`가 함께 소비한다. `registry.production_request`가 동결 문맥을 실제 wire/응답 검증으로 전달한다. 없는 원천은 두 비교군에서 함께 제외하고 provider 예산을 소모하지 않는다. v1의 입력/결정 권한은 유지한다.
+- 날짜별 metadata 조회와 scope index, revision별 호출 내 cache를 사용한다. 한 번에 최대4096개를 읽되 누적 모집단은 분할 처리하므로4097번째 표본부터 영구 생성 불가가 되는 제한을 만들지 않는다. 장중 소비는 순수 투영이며 DB 조회가 없다. 정기 스케줄·예산·timeout을 늘리지 않는다.
+- 현재 자동 설정은 REGULAR48scope의 기존 후보이며 변경하지 않았다. PRE/REGULAR/AFTER128scope에 대한 v2 후보 및 기존 seed/max_pairs를 보존한 **설정안**을 별도 배포 자료에 넣었다. 이 설정을 live에 native 등록·승계하지 않으면 새 후보의 자동 비교는 시작되지 않는다. 단순 코드 배포를 정책 채택으로 보고하면 안 된다.
+
+실제 연구는 source2026-10-28의 원래 native campaign85개 표본을 동일하게 사용했다. 원천 적격0/85이며 저장소 부재58, 당시 revision 부재24, suffix/품질 미충족3이다. Native `Store`/`tuning.evaluate`에 같은85개 제외 사유를 전달했고 새 후보의 `comparison_complete=false`를 보존했다. 결론은 `incumbent_preserved_source_gap`이며 no-edge/비용EV0/선정 성공으로 바꾸지 않는다. 엠씨넥스10/29 확인 시각08:05:28.575357에 대해 최초 REST revision 수신08:05:28.679는0.103643초 뒤이므로 확인시점 재생에 소급 삽입하지 않는다. 앞 절의25개 순실행 손절/유예 진단 셀도 연속 보유경로·prospective holdout·실제 비용 증거가 아니므로 runtime 손절 임계치를 바꾸는 선정 근거로 승격하지 않는다. 단일축·operator lock·hard/protect/emergency는 유지한다.
+
+검증과 보완:
+
+- 원 작업본 회귀543PASS. 통합본은 현재 선택 `6d9ed3575cfe28225b187f3251a314cb9fe73a86` 기준으로 별도 index/source tree에 구성했다. 이 과정의534PASS/1FAIL은 compatibility의 기존4세대 고정 테스트였으며, 실제5세대와 원 identifier successor를 함께 보존하도록 보완한 후 production/population83PASS. 누적4097개 배치 회귀를 추가한 population 최종22PASS도 별도 보존한다. 실패 원 로그는 삭제하지 않는다.
+- 성공 원천의 publisher→as-of reader→동결 snapshot→native prepare→wire→mock transport→native evaluate가 연결되며, 동일 판단은 개선 없음으로 남는다. 없는 원천은 양쪽 요청0·호출0으로 끝난다. 미래 수정·상충 인증 scope·stale·최소1분봉·다음 세대 및 원본 frozen 계약의 혼합 거부를 검증했다. Mock 응답은 테스트이며 실제 연구 응답이 아니다.
+- 자체 리뷰에서 누적 모집단의 단일4096 상한을 수리했다. 배포본에 기존 시장별 source inventory 및 identifier repair를 보존했다. 원 작업본의 다른 변경을 commit에 섞거나 되돌리지 않았다. Native active-parent/독립 준비 reader 검증과 후보/선택 P5는 메인 배포 세션의 통합 후 단계다.
+
+대체/제거: 기존 `production_request`의 문맥 미전달과 `prepare`의 원천 없는 후보 요청 생성을 같은 함수 안에서 보완했다(`consolidated`). 기존 complete predicate의 중복은 앞 절에서 제거했다(`removed`). v1 reader, 실제 비용/손절 selector, operator lock과 안전 경로는 현재 소비가 있어 `retained`다. 배포 기준의 단일 identifier-successor 비교표는 동일 원본 hash를 누적 reviewed-generation 비교로 합쳤으며, 별도 wrapper/worker/스케줄은0이다. 새 소스 파일은0, 기존 소스 함수2개와 호출 연결을 추가했다. 기존 장후 단일축 selector를 공동 민감도 진단으로 대체하지 않았다.
+
+기존 `HoldingProfitExitSourceContractRepair`가 다음을 계속 소유한다: 메인 세션에서 코드 통합·정책 인계·P5·실제 PID 소비, 승인된 장후 후보 설정의 native 승계, source2026-10-29 정규 장후20:10 이후 새 적격 분봉/paired 응답과 target2026-10-30 PREOPEN07:35/Main07:55~08:05 소비. 원천가용성이 확인되지 않은 표본은 다음 날로 미뤄 정상 처리하지 않고 원 날짜의 제외 상태를 유지한다. RFHIC49558의 기존 BUY 결손과 이번 역사 분봉 결손, 신규 생산자 결함은 서로 다른 분모로 기록한다. 아직 후보별 실제 경제성 개선이나 자연 수용을 주장하지 않는다.
+
+[배포 인계 지시문 및 검증 자료](../../data/audit/holding_source_repair/2026-10-29/HANDOFF.md). 원본과 연구 실패 시도는 `tmp/mcnex-source-repair-20261029` 및 `tmp/mcnex-postclose-completion-20261029`에 보존한다. 외부 Project/Calendar 동기화는 실행하지 않았으며 기존 표준 사용자 명령을 유지한다.

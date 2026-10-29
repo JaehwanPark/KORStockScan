@@ -10935,6 +10935,7 @@ class GPTSniperEngine:
                                 reversal_prompt,
                                 reversal_schema,
                             ),
+                            entry_context=machine_exact.get("entry_candle_context"),
                         )
                     if quote_recovery_receipt is not None:
                         from src.engine.scalping.entry_machine_source_recovery import (
@@ -14354,6 +14355,8 @@ class GPTSniperEngine:
         path_policy_hashes=None,
     ):
         """One provider call returns one prospective vote for each requested path."""
+        from src.engine.ai.holding_exit_vote import path_vote_response_schema
+
         paths = tuple(requested_paths)
         if not paths or len(set(paths)) != len(paths) or set(paths) - PATH_IDS:
             raise ValueError("invalid_holding_vote_paths")
@@ -14427,6 +14430,9 @@ class GPTSniperEngine:
                     context_name=f"HOLDING_PATH_VOTE:{stock_name}",
                     model_override=model,
                     schema_name=PATH_PROMPT_VERSION,
+                    response_schema_override=path_vote_response_schema(
+                        paths, snapshot_id
+                    ),
                     endpoint_name="holding_path_vote",
                     symbol=stock_code,
                     metadata_extra={

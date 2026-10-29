@@ -494,12 +494,13 @@ def test_identifier_successor_keeps_frozen_contracts_without_mixing_generations(
     # Exercise the actual physical readers, including the current frozen source.
     prod = C._source_generations(I.__file__)
     wire = C._source_generations(W.__file__)
-    assert len(prod) == 4 and len(wire) == 3
+    assert len(prod) == 5 and len(wire) == 3
     actual = dict(source_sha256=prod[0], wire_sha256=wire[0], mode="unchanged")
     sources = dict(source_sha256=I.__file__, wire_sha256=W.__file__)
     for p, w in (
         (prod[0], wire[0]),
         (prod[1], wire[0]),
+        (prod[2], wire[0]),
         (prod[-2], wire[-2]),
         (prod[-1], wire[-1]),
     ):
@@ -511,3 +512,189 @@ def test_identifier_successor_keeps_frozen_contracts_without_mixing_generations(
     )
     assert not C.contract_matches(dict(actual, source_sha256="0" * 64), actual, sources)
     assert not C.contract_matches(dict(actual, mode="changed"), actual, sources)
+
+
+def _completed_context(epoch, item):
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    end = datetime.fromtimestamp(epoch, ZoneInfo("Asia/Seoul")).replace(
+        second=0, microsecond=0
+    ) - timedelta(minutes=1)
+    # Exact MCNEX 2026-10-29 08:00..08:04 completed OHLCV values.
+    values = [
+        (20250, 20300, 19990, 20150, 4017),
+        (20150, 20550, 20050, 20400, 6934),
+        (20400, 20650, 20350, 20600, 12567),
+        (20600, 20900, 20600, 20800, 18002),
+        (20800, 21100, 20650, 20650, 31602),
+    ]
+    return dict(
+        schema="entry_candle_context_v1",
+        request_code=item,
+        session="premarket_krx_like",
+        rest_route="_NX",
+        ws_route="nxt_only",
+        route_equivalence="not_proven",
+        bar_schema=dict(order="oldest_to_latest", timezone="Asia/Seoul", interval="1m"),
+        source_quality=dict(
+            status="fresh_consistent",
+            blockers=[],
+            decision_window=dict(
+                provider_call_allowed=True, end_timestamp=end.isoformat()
+            ),
+        ),
+        bars=[
+            dict(
+                t=(end - timedelta(minutes=4 - i)).strftime("%H:%M"),
+                **dict(zip(("o", "h", "l", "c", "v"), row)),
+                forming=False,
+                partial_volume=False,
+            )
+            for i, row in enumerate(values)
+        ],
+    )
+
+
+def test_completed_candle_registry_to_wire_and_consumer_with_exact_mcnex_values(
+    tmp_path, monkeypatch
+):
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+
+    f = next(iter(FIXTURES.values()))
+    snap = (f["event"], f["source"])
+    original, parent, old = definitions(f)
+    scope = old["production_input_contract"]["scope_ids"]
+    new = G.production_definition(
+        parent,
+        scope_ids=scope,
+        production_contract=M.contract(scope, completed_candles=True),
+    )
+    context = _completed_context(f["event"]["epoch"], f["event"]["source_item"])
+    before = copy.deepcopy(context)
+    inp, prompt, schema = G.production_request(snap, new, entry_context=context)
+    source = inp[M.CANDLE_FIELD]
+    assert source["status"] == "observed"
+    assert source["latest_upper_wick_ratio"] == pytest.approx(2 / 3)
+    assert source["latest_close_return_pct"] == pytest.approx(100 * (20650 / 20800 - 1))
+    assert source["latest_volume_ratio"] == pytest.approx(31602 / 18002)
+    assert context == before
+    for registry in (original, parent, new):
+        G.register(tmp_path, registry)
+    assert G.load(tmp_path, new["registry_sha256"]) == new
+    from src.engine.scalping import reversal_auxiliary_compatibility as compatibility
+
+    forged = dict(
+        new["production_input_contract"],
+        source_sha256=compatibility.REVIEWED_CONTRACT_SOURCE_PAIRS[
+            "src/engine/scalping/reversal_auxiliary_production_input.py"
+        ][0][0],
+    )
+    with pytest.raises(ValueError, match="completed_candle_contract_changed"):
+        M.validate(forged)
+    env = G.envelope(inp, new)
+    req = G.request(snap, new, entry_context=context)
+    assert req["candidate_input"] == env["wire_input"]
+    aliases = W.encode(inp)[2]
+    response = dict(
+        assessed={aliases[s["ref"]]: True for s in inp["signals"]},
+        screen=dict(verdict="CAUTION", risk=M.CANDLE_RISK, fact=aliases[M.CANDLE_FACT]),
+        confidence=50,
+    )
+    assert G.decode_response(response, inp, new)["contradicting_fact_ids"] == [
+        M.CANDLE_FACT
+    ]
+    base = G.production_request(snap, parent)
+    a = dict(
+        action="ENTER_NOW",
+        policy_version="continuous_reversal_policy_v6",
+        signal_set_hash=P.digest(base[0]["signals"]),
+    )
+    monkeypatch.setattr(I, "selected_definition", lambda *args: (new, None))
+    assert I.apply_request(
+        tmp_path, dict(bundle_sha256="a" * 64), snap, (a, *base), entry_context=context
+    )[1:] == (inp, prompt, schema)
+    assert (
+        M.CANDLE_FIELD not in G.production_request(snap, old, entry_context=context)[0]
+    )
+    bad = copy.deepcopy(inp)
+    bad[M.CANDLE_FIELD]["latest_upper_wick_ratio"] = 0
+    with pytest.raises(ValueError, match="projection_changed"):
+        G.envelope(bad, new)
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "missing",
+        "other_item",
+        "forming",
+        "future",
+        "stale",
+        "prior_day",
+        "blocked",
+        "invalid_bar",
+        "sparse",
+    ],
+)
+def test_completed_candle_missing_or_invalid_never_becomes_adverse_fact(fault):
+    f = next(iter(FIXTURES.values()))
+    _, parent, old = definitions(f)
+    scope = old["production_input_contract"]["scope_ids"]
+    new = G.production_definition(
+        parent,
+        scope_ids=scope,
+        production_contract=M.contract(scope, completed_candles=True),
+    )
+    context = _completed_context(f["event"]["epoch"], f["event"]["source_item"])
+    if fault == "missing":
+        context = None
+    if fault == "other_item":
+        context["request_code"] = "097520_AL"
+    if fault == "forming":
+        context["bars"][-1]["forming"] = True
+    if fault == "future":
+        context["bars"][-1]["t"] = "23:59"
+    if fault == "stale":
+        context["source_quality"]["status"] = "stale"
+    if fault == "prior_day":
+        context["source_quality"]["decision_window"][
+            "end_timestamp"
+        ] = "2000-01-01T08:04:00+09:00"
+    if fault == "blocked":
+        context["source_quality"]["blockers"] = ["route_conflict"]
+    if fault == "invalid_bar":
+        context["bars"][-1]["h"] = 1
+    if fault == "sparse":
+        context["bars"][-1]["t"] = context["bars"][-2]["t"]
+    inp = G.production_request((f["event"], f["source"]), new, entry_context=context)[0]
+    assert inp[M.CANDLE_FIELD]["status"] == "unavailable"
+    assert M.CANDLE_RISK not in inp["entry_setup_evidence_v1"]["risk_fact_bindings"]
+    G.envelope(inp, new)
+
+
+def test_forming_suffix_does_not_hide_completed_predecessors():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    common = dict(
+        epoch=datetime(
+            2026, 10, 29, 8, 5, 29, tzinfo=ZoneInfo("Asia/Seoul")
+        ).timestamp(),
+        source_item="097520_NX",
+    )
+    context = _completed_context(common["epoch"], common["source_item"])
+    before = M.completed_candle_source(context, common)
+    context["bars"].append(
+        dict(
+            t="08:05",
+            o=20650,
+            h=20900,
+            l=20600,
+            c=20850,
+            v=100,
+            forming=True,
+            partial_volume=True,
+        )
+    )
+    assert M.completed_candle_source(context, common) == before

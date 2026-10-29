@@ -326,7 +326,7 @@ def test_full_analyze_target_records_raw_then_decodes(
         POLICY, "assess", lambda *args, **kw: (copy.deepcopy(a), inp, prompt, schema)
     )
     monkeypatch.setattr(D, "validate_claim_with_receipt", lambda *args, **kw: snap)
-    monkeypatch.setattr(I, "apply_request", lambda *args: args[-1])
+    monkeypatch.setattr(I, "apply_request", lambda *args, **kwargs: args[-1])
     monkeypatch.setattr(I, "validate_decision", lambda *args, **kw: new)
     monkeypatch.setattr(N, "load_effective", lambda **kw: {"bundle_sha256": "b" * 64})
     monkeypatch.setattr(

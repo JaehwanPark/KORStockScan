@@ -554,6 +554,18 @@ def path_vote_gap_source(payload, hashes, *, context_source=None):
         input_preflight_status=preflight.get("status"),
         input_preflight_blockers=blockers(preflight.get("blockers")),
         flow_present=bool(payload.get("flow")),
+        execution_pnl_source={
+            k: ((payload.get("flow") or {}).get("execution_pnl") or {}).get(k)
+            for k in (
+                "executable_sell_price",
+                "remaining_qty",
+                "best_bid_qty",
+                "estimated_fee_tax_pct",
+                "estimated_slippage_bps",
+                "estimated_net_executable_pnl_pct",
+                "cost_estimate_status",
+            )
+        },
         source={
             k: (payload.get("source") or {}).get(k)
             for k in (
@@ -1393,6 +1405,67 @@ def path_vote_store_path(data_dir: str | Path, position_key: str) -> Path:
     return Path(data_dir) / "runtime" / "holding_path_votes" / f"{identity}.jsonl"
 
 
+def path_vote_response_schema(paths, snapshot_id):
+    """Constrain the producer to the consumer's existing per-path contract."""
+    from src.engine.ai_response_contracts import resolve_ai_response_schema
+
+    paths = tuple(paths)
+    if not paths or len(set(paths)) != len(paths) or set(paths) - PATH_IDS:
+        raise ValueError("invalid_requested_paths")
+    schema = copy.deepcopy(resolve_ai_response_schema(PATH_PROMPT_VERSION))
+    schema["properties"]["input_snapshot_id"]["enum"] = [snapshot_id]
+    votes = schema["properties"]["votes"]
+    template = votes["items"]
+    alternatives = []
+    for path in paths:
+        item = copy.deepcopy(template)
+        item["properties"]["path_id"]["enum"] = [path]
+        item["properties"]["reason_codes"] = dict(
+            type="array",
+            minItems=1,
+            maxItems=6,
+            items=dict(
+                type="string",
+                minLength=5,
+                maxLength=64,
+                pattern="^" + PATH_REASON_PREFIX[path] + "[a-z0-9_]+$",
+            ),
+        )
+        alternatives.append(item)
+    votes.update(
+        minItems=len(paths), maxItems=len(paths), items=dict(anyOf=alternatives)
+    )
+    return schema
+
+
+def _path_response_diagnostics(vote, prefix):
+    """Bounded rejection details; no repaired verdict or opaque raw response."""
+    errors = []
+    if set(vote) != {"path_id", "verdict", "conviction", "reason_codes"}:
+        errors.append("fields_mismatch")
+    if vote.get("verdict") not in VERDICTS:
+        errors.append("verdict_invalid")
+    if vote.get("conviction") not in CONVICTIONS:
+        errors.append("conviction_invalid")
+    codes = vote.get("reason_codes")
+    if not isinstance(codes, list) or not 1 <= len(codes) <= 6:
+        errors.append("reason_count_invalid")
+    if isinstance(codes, list):
+        for code in codes[:7]:
+            if not isinstance(code, str):
+                errors.append("reason_type_invalid")
+                continue
+            if not code.startswith(prefix):
+                errors.append("reason_prefix_invalid")
+            if not 5 <= len(code) <= 64:
+                errors.append("reason_length_invalid")
+            if not code.isascii() or not all(
+                c.islower() or c.isdigit() or c == "_" for c in code
+            ):
+                errors.append("reason_charset_invalid")
+    return sorted(set(errors))
+
+
 def normalize_path_vote_bundle(
     response: Any,
     *,
@@ -1528,6 +1601,11 @@ def normalize_path_vote_bundle(
         events.append(
             {
                 **common,
+                "response_contract_errors": (
+                    _path_response_diagnostics(vote, prefix)
+                    if response_ok
+                    else ["bundle_invalid"]
+                ),
                 "path_id": path,
                 "path_policy_sha256": (
                     input_snapshot_id(PATH_POLICY_BY_MARKET[(path, market)])

@@ -173,6 +173,131 @@ def read(root, identity, *, now, limit, include_forming=True, revision=None):
         return None
 
 
+def causal_prefixes(root, requests):
+    """Read bounded, as-of completed prefixes for an outcome-blind reservoir.
+
+    One metadata census per day, indexed scope lookups, and named revisions
+    only. A later correction or current pointer never supplies past features.
+    Multiple authentication scopes must agree; their identities stay private.
+    """
+    if not isinstance(requests, list) or len(requests) > 4096:
+        raise ValueError("history_causal_request_bounds")
+    from collections import defaultdict
+
+    groups = defaultdict(list)
+    results = [
+        dict(status="unavailable", reason="history_database_absent") for _ in requests
+    ]
+    for index, request in enumerate(requests):
+        at, item, session = (request.get(k) for k in ("at", "item", "session"))
+        if (
+            type(at) not in (int, float)
+            or not math.isfinite(at)
+            or not isinstance(item, str)
+            or not re.fullmatch(r"\d{6}(?:_NX|_AL)?", item)
+            or not isinstance(session, str)
+            or not session
+        ):
+            raise ValueError("history_causal_request_invalid")
+        day = datetime.fromtimestamp(at, KST).strftime("%Y%m%d")
+        groups[day].append((index, request))
+    for day, batch in groups.items():
+        path = _path(root, dict(date=day))
+        if not path.exists():
+            continue
+        if path.stat().st_size > MAX_DATABASE_BYTES:
+            raise ValueError("history_causal_database_unbounded")
+        with closing(
+            sqlite3.connect(
+                path.absolute().as_uri() + "?mode=ro", uri=True, timeout=0.025
+            )
+        ) as db:
+            db.execute("BEGIN")
+            scopes = defaultdict(list)
+            for scope, revision, raw in db.execute(
+                "SELECT c.scope,r.hash,r.manifest FROM current c JOIN revisions r ON c.revision=r.hash"
+            ):
+                manifest = _unpack(raw)
+                identity = manifest["identity"]
+                if _digest(manifest) != revision or _digest(identity) != scope:
+                    raise ValueError("history_causal_scope_changed")
+                if identity["date"] == day:
+                    scopes[identity["item"], identity["session"]].append(
+                        (scope, identity)
+                    )
+            cache = {}
+            for index, request in batch:
+                at = request["at"]
+                found = []
+                for scope, identity in scopes[request["item"], request["session"]]:
+                    selected = db.execute(
+                        "SELECT hash,available,manifest FROM revisions WHERE scope=? AND available<=? "
+                        "ORDER BY available DESC,hash LIMIT 1",
+                        (scope, at),
+                    ).fetchone()
+                    if selected is None:
+                        continue
+                    revision, available, raw = selected
+                    manifest = _unpack(raw)
+                    key = (scope, revision)
+                    if key not in cache:
+                        # Use the existing hash-validating reader; cache only an
+                        # immutable five-row prefix, never a mutable latest view.
+                        cache[key] = read(
+                            root,
+                            identity,
+                            now=at,
+                            limit=min(5, len(manifest["bar_hashes"])),
+                            include_forming=False,
+                            revision=revision,
+                        )
+                    result = cache[key]
+                    if result is None:
+                        continue
+                    rows, meta = result
+                    completed, forming = _completed(rows, at)
+                    completed = [
+                        row
+                        for row in completed
+                        if row["source_timestamp"].startswith(day)
+                    ]
+                    if (
+                        forming
+                        or not completed
+                        or meta.get("api_id") != "ka10080"
+                        or meta.get("request_code") != request["item"]
+                    ):
+                        continue
+                    found.append(
+                        dict(
+                            rows=completed,
+                            revision=revision,
+                            available_at=available,
+                            source_meta=meta,
+                        )
+                    )
+                if not found:
+                    results[index] = dict(
+                        status="unavailable", reason="causal_revision_missing"
+                    )
+                elif len({_digest(row["rows"]) for row in found}) != 1:
+                    results[index] = dict(
+                        status="unavailable", reason="causal_revision_conflict"
+                    )
+                else:
+                    chosen = max(
+                        found, key=lambda row: (row["available_at"], row["revision"])
+                    )
+                    results[index] = dict(
+                        status="verified",
+                        item=request["item"],
+                        session=request["session"],
+                        at=at,
+                        **chosen,
+                    )
+    return results
+
+
 def outcome_revisions(root, day, *, as_of=None):
     """Export bounded, portable completed revisions for offline outcomes.
 

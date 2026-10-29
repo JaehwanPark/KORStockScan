@@ -248,6 +248,20 @@ def prepare(data_root, day, machine, parent, *, research=None):
         else I.effective_bindings(data_root, parent, day=day)
     )
     candidate = G.load(data_root, cfg["candidate_registry"])
+    from src.engine.scalping import reversal_auxiliary_production_input as M
+    from src.engine.scalping import reversal_auxiliary_research_population as population
+    from src.trading.market import completed_history as history
+
+    context_required = any(
+        G.load(data_root, ident).get("production_input_contract", {}).get("version")
+        == M.CANDLE_VERSION
+        for ident in {cfg["candidate_registry"], *current.values()}
+    )
+    context_code = (
+        {Path(m.__file__).name: P.file_hash(m.__file__) for m in (population, history)}
+        if context_required
+        else {}
+    )
     excluded = set(candidate["development_keys"]) | set(
         machine.get("quarantined_conflicts", [])
     )
@@ -270,6 +284,7 @@ def prepare(data_root, day, machine, parent, *, research=None):
                 context,
                 P.file_hash(__file__),
                 materializer_hash,
+                context_code,
             ]
         )
         cached = store.checkpoint(prep_key)
@@ -382,6 +397,7 @@ def prepare(data_root, day, machine, parent, *, research=None):
         ]
         pairs = []
         groups = defaultdict(list)
+        prepared = []
         for p in selected_all:
             sid = p["scope"]
             old = current[sid]
@@ -397,6 +413,36 @@ def prepare(data_root, day, machine, parent, *, research=None):
             else:
                 snap = store.get(p["snapshot_obj"])
                 snapshot_obj = p["snapshot_obj"]
+            prepared.append((p, snap, snapshot_obj))
+        if context_required:
+            population.attach_completed_contexts(data_root, [s for _, s, _ in prepared])
+        context_exclusions = []
+        for p, snap, original_obj in prepared:
+            sid, old = p["scope"], current[p["scope"]]
+            if context_required and any(
+                G.load(data_root, ident)
+                .get("production_input_contract", {})
+                .get("version")
+                == M.CANDLE_VERSION
+                for ident in (old, cfg["candidate_registry"])
+            ):
+                observed = M.completed_candle_source(
+                    snap[1].get("entry_candle_context"), snap[0]
+                )
+                if observed["status"] != "observed":
+                    reason = (
+                        snap[1].get("entry_candle_source_gap") or observed["reason"]
+                    )
+                    census["completed_candle_source_gap:" + reason] += 1
+                    context_exclusions.append(
+                        dict(
+                            opportunity_key=p["opportunity_key"],
+                            reason=reason,
+                            snapshot_obj=store.put(snap),
+                        )
+                    )
+                    continue
+            snapshot_obj = store.put(snap) if context_required else original_obj
             pair = dict(
                 scope=sid,
                 opportunity_key=p["opportunity_key"],
@@ -446,6 +492,8 @@ def prepare(data_root, day, machine, parent, *, research=None):
             config_sha256=cfg["artifact_content_sha256"],
             selector=selector,
             input_materializer_code_sha256=materializer_hash,
+            completed_context_code_sha256=context_code,
+            completed_context_exclusions=context_exclusions,
             eligible_census=dict(census),
             not_sampled_budget=sum(map(len, choices.values())) - len(selected_all),
             pairs=pairs,
@@ -1096,6 +1144,7 @@ def evaluate(data_root, day, *, campaign_path=None):
             observation_mode="confirmation_replay",
             population_claim="completed_common_pairs_only",
             eligible_census=c["eligible_census"],
+            completed_context_exclusions=c.get("completed_context_exclusions", []),
             not_sampled_budget=c["not_sampled_budget"],
             state="evaluated",
             call_limit=c["call_limit"],

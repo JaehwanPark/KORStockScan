@@ -23,18 +23,10 @@ REVIEWED_CONTRACT_SOURCE_PAIRS = {
         (
             "ac517cab3a60a6a224cbabe1ef3b162edf9dfa1992b6ebfa0b4fafbf9e34428a",
             "29bcf083d4849d0c8ca883c75a4397caba47448aa2c4951671e669eeeb638003",
+            "324b2d6e41bafaf0eddb1b65069de8f140325bb84e4e3aa42941e397d75d3464",
+            "0e576decb06aa17fff3548cdf15f4f23a2a87db57596b67095b7f8313d2f920f",
         ),
-        "324b2d6e41bafaf0eddb1b65069de8f140325bb84e4e3aa42941e397d75d3464",
-    ),
-}
-
-
-# Exact identifier-only reader successor. Frozen numeric input contracts retain
-# their original identities; mixed formatting generations are still rejected.
-REVIEWED_CONTRACT_SOURCE_SUCCESSORS = {
-    "src/engine/scalping/reversal_auxiliary_production_input.py": (
-        "324b2d6e41bafaf0eddb1b65069de8f140325bb84e4e3aa42941e397d75d3464",
-        "0e576decb06aa17fff3548cdf15f4f23a2a87db57596b67095b7f8313d2f920f",
+        "642381efec468d62a1ba68582b6a74b35fc36ee8cc2738c8cc2271eed80214bb",
     ),
 }
 
@@ -51,12 +43,9 @@ def _source_generations(source):
         reviewed_formatting_predecessor,
     )
 
-    successor = REVIEWED_CONTRACT_SOURCE_SUCCESSORS.get(name)
-    prior = successor[0] if successor and actual == successor[1] else actual
     pair = REVIEWED_CONTRACT_SOURCE_PAIRS.get(name)
-    if pair is not None and prior == pair[1]:
-        historical = (prior, pair[0][1], pair[0][0])
-        return (actual, *historical) if prior != actual else historical
+    if pair is not None and actual == pair[1]:
+        return (actual, *reversed(pair[0]))
     return (actual, actual, reviewed_formatting_predecessor(name, actual))
 
 
@@ -70,17 +59,19 @@ def contract_matches(expected, actual, sources):
         return False
     if expected == actual:
         return True
-    views = [dict(actual) for _ in range(4)]
-    for field, source in sources.items():
-        generations = _source_generations(source)
-        if actual.get(field) != generations[0]:
+    generations = {
+        field: _source_generations(source) for field, source in sources.items()
+    }
+    width = max(map(len, generations.values()))
+    views = [dict(actual) for _ in range(width)]
+    for field, values in generations.items():
+        if actual.get(field) != values[0]:
             return False
-        # View 1 projects only exact reviewed successors to their immediately
-        # consumed generation. Views 2/3 retain the original coherent format
-        # generations; this is not a Cartesian mix of individually known hashes.
-        offsets = (0, 1 if len(generations) == 4 else 0, -2, -1)
-        for view, offset in zip(views, offsets):
-            view[field] = generations[offset]
+        # New reviewed semantic generations precede the two original formatting
+        # phases. Pad the current phase, never mix original with new sources.
+        aligned = [values[0]] * (width - len(values)) + list(values)
+        for view, value in zip(views, aligned):
+            view[field] = value
     return expected in views
 
 

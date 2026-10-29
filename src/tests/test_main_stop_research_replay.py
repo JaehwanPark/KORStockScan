@@ -896,8 +896,12 @@ def test_native_early_preset_limit_up_captures_source_without_changing_exit(
         transport_epoch=1,
         observed_epoch=at,
         best_bid=13000,
+        best_ask=13020,
         best_bid_qty=20,
-        orderbook={"bids": [{"price": 13000, "volume": 20}]},
+        orderbook={
+            "bids": [{"price": 13000, "volume": 20}],
+            "asks": [{"price": 13020, "volume": 20}],
+        },
     )
     ws = dict(
         code="005930",
@@ -1005,6 +1009,9 @@ def test_native_early_preset_limit_up_captures_source_without_changing_exit(
     signal = next(fields for stage, fields in logs if stage == "exit_signal")
     assert signal["exit_rule"] == "daily_limit_up_immediate_exit"
     if fault is None:
+        assert "main_stop_normal_exit_decision" in signal, signal.get(
+            "main_stop_normal_exit_decision_gap"
+        )
         decision = json.loads(signal["main_stop_normal_exit_decision"])
         assert (
             len(captured) == 1
@@ -1897,3 +1904,105 @@ def test_restored_datetime_and_large_order_receipt_reach_native_terminal_consume
     )
     assert endpoint["receipt_binding"]["status"] == "COMPLETED"
     assert endpoint["at"] == rows[-1]["at"]
+
+
+def _basis_request(net=-3.1574):
+    average = 20759.0909
+    fee = 20150 * 0.0023 / average * 100
+    return dict(
+        request_id="mcnex-request",
+        at=100.0,
+        payload=dict(
+            position_key="record:49580",
+            buy_fill_identity="b" * 64,
+            position=dict(
+                buy_price=average,
+                curr_price=20200,
+                profit_rate=-2.92,
+                peak_profit=0.21,
+                held_sec=1862,
+            ),
+            quote=dict(
+                best_bid=20150, best_ask=20200, bid_total_depth=100, ask_total_depth=100
+            ),
+            source=dict(quote_observed_at=99.9),
+            source_quality=dict(allowed=True),
+            last_ticks=[dict(price=20200)],
+            flow=dict(
+                microstructure=dict(best_bid=20150, best_ask=20200),
+                execution_pnl=dict(
+                    executable_sell_price=20150,
+                    average_entry_price=average,
+                    mark_price=20200,
+                    remaining_qty=11,
+                    estimated_fee_tax_pct=fee,
+                    estimated_slippage_bps=0,
+                    estimated_net_executable_pnl_pct=net,
+                    cost_estimate_source=dict(
+                        source="frozen_configured_cost_and_visible_bid_depth_model",
+                        actual_broker_cost=False,
+                        actual_fill=False,
+                        quantity=11,
+                        modeled_vwap=20150,
+                        percent_basis="average_entry_notional",
+                        cost_source_sha256="c" * 64,
+                        cost_known_at=1,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
+def test_paired_basis_research_does_not_infer_grace_elapsed_or_fill():
+    row = _basis_request()
+    result = replay.compare_soft_stop_basis(
+        [row], baseline(), thresholds=[-3, -2.75], grace_seconds=[0, 60]
+    )
+    assert result["eligible_count"] == 1 and result["paired_ev_krw"] is None
+    assert (
+        not result["allowed_runtime_apply"] and not result["continuous_coverage_proven"]
+    )
+    no_grace, grace = result["cells"][:2]
+    assert (
+        no_grace["mark_breach_count"] == 0 and no_grace["executable_breach_count"] == 1
+    )
+    assert (
+        no_grace["observations"][0]["conditional_first_touch"]["executable_net_pct"][
+            "disposition"
+        ]
+        == "exit_candidate"
+    )
+    assert (
+        grace["observations"][0]["conditional_first_touch"]["executable_net_pct"][
+            "due_at"
+        ]
+        == 160
+    )
+    assert baseline().hard_stop_pct == -5 and baseline().soft_emergency_pct == -4
+
+
+@pytest.mark.parametrize(
+    "fault", ["stale", "cost", "quantity", "arithmetic", "missing", "future_cost"]
+)
+def test_basis_research_keeps_source_and_cost_gaps_null(fault):
+    row = _basis_request()
+    p = row["payload"]
+    pnl = p["flow"]["execution_pnl"]
+    if fault == "stale":
+        p["source"]["quote_observed_at"] = 96
+    if fault == "cost":
+        pnl["cost_estimate_source"]["actual_broker_cost"] = True
+    if fault == "quantity":
+        pnl["cost_estimate_source"]["quantity"] = 10
+    if fault == "arithmetic":
+        pnl["estimated_net_executable_pnl_pct"] = -1
+    if fault == "missing":
+        pnl["estimated_net_executable_pnl_pct"] = None
+    if fault == "future_cost":
+        pnl["cost_estimate_source"]["cost_known_at"] = 101
+    result = replay.compare_soft_stop_basis(
+        [row], baseline(), thresholds=[-3], grace_seconds=[60]
+    )
+    assert result["eligible_count"] == 0 and sum(result["excluded"].values()) == 1
+    assert result["paired_ev_krw"] is None

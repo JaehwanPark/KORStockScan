@@ -296,3 +296,237 @@ def test_manual_handoff_never_becomes_a_realized_loss_or_research_failure():
             pin_sha256="a" * 64,
             handoffs=[changed],
         )
+
+
+def history_prefix(root, event, *, received=None, price=100, scope="test", count=5):
+    from datetime import timedelta
+    from src.trading.market import completed_history as H
+    from src.trading.market.session_contract import resolve_market_session
+
+    at = event["epoch"]
+    now = received if received is not None else at - 0.01
+    clock = datetime.fromtimestamp(at, H.KST)
+    end = clock.replace(second=0, microsecond=0) - timedelta(minutes=1)
+    rows = [
+        dict(
+            source_timestamp=(end - timedelta(minutes=count - i - 1)).strftime(
+                "%Y%m%d%H%M%S"
+            ),
+            시가=price,
+            고가=price + 2,
+            저가=price - 1,
+            현재가=price + 1,
+            거래량=10 + i,
+        )
+        for i in range(count)
+    ]
+    identity = H.key(
+        [scope],
+        event["source_item"],
+        clock.strftime("%Y%m%d"),
+        resolve_market_session(clock).session_regime,
+    )
+    assert H.publish(
+        root,
+        identity,
+        rows,
+        dict(
+            api_id="ka10080",
+            request_code=event["source_item"],
+            rest_received_ts_ms=int(now * 1000),
+        ),
+        now=now,
+    )
+    return identity, rows
+
+
+@pytest.mark.parametrize(
+    "fault", ["valid", "missing", "future", "stale", "conflict", "early"]
+)
+def test_causal_history_population_never_borrows_future_or_wrong_scope(tmp_path, fault):
+    from src.engine.scalping import reversal_auxiliary_production_input as M
+
+    event = dict(
+        epoch=datetime(2026, 10, 29, 10, 5, 30, tzinfo=R.K.KST).timestamp(),
+        source_item="097520_NX",
+    )
+    if fault != "missing":
+        observed = dict(event)
+        if fault == "stale":
+            observed["epoch"] -= 60
+        history_prefix(
+            tmp_path,
+            observed,
+            received=event["epoch"] + 1 if fault == "future" else None,
+            count=1 if fault == "early" else 5,
+        )
+    if fault == "conflict":
+        history_prefix(tmp_path, event, scope="other", price=200)
+    snapshot = [event, {}]
+    R.attach_completed_contexts(tmp_path, [snapshot])
+    result = M.completed_candle_source(snapshot[1]["entry_candle_context"], event)
+    assert result["status"] == (
+        "observed" if fault in {"valid", "early"} else "unavailable"
+    )
+    frozen = copy.deepcopy(snapshot)
+    # A correction received after confirmation must not rewrite the snapshot.
+    history_prefix(tmp_path, event, received=event["epoch"] + 2, price=300)
+    R.attach_completed_contexts(tmp_path, [snapshot])
+    assert snapshot == frozen
+    if fault == "valid":
+        fresh = [event, {}]
+        R.attach_completed_contexts(tmp_path, [fresh])
+        assert fresh == frozen
+        assert result["original_context"]["bars"][-1]["c"] == 101
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_completed_context_native_campaign_and_selection_consumer(
+    tmp_path, monkeypatch, available
+):
+    from src.tests.test_reversal_auxiliary_production_input import definitions, FIXTURES
+    from src.engine.scalping import reversal_auxiliary_registry as G
+    from src.engine.scalping import reversal_auxiliary_production_input as M
+    from src.engine.scalping import reversal_auxiliary_tuning as T
+    from src.engine.scalping import reversal_auxiliary_intraday as I
+    from src.engine.ai import offline_comparison_store as S
+
+    f = copy.deepcopy(next(iter(FIXTURES.values())))
+    snapshot = [f["event"], f["source"]]
+    original, compact, current = definitions(f)
+    scopes = current["production_input_contract"]["scope_ids"]
+    sid = scopes[0]
+    candidate = G.production_definition(
+        compact,
+        scope_ids=scopes,
+        production_contract=M.contract(scopes, completed_candles=True),
+    )
+    for definition in (original, compact, current, candidate):
+        G.register(tmp_path, definition)
+    if available:
+        history_prefix(tmp_path, snapshot[0])
+    day = datetime.fromtimestamp(snapshot[0]["epoch"], R.K.KST).date().isoformat()
+    manifest = dict(
+        scopes={sid: list(snapshot[0]["branch_signals"])},
+        detector_manifest_hash="a" * 64,
+    )
+    parent = dict(
+        bundle_sha256="b" * 64, continuous_reversal=dict(operating_manifest=manifest)
+    )
+    with S.Store(tmp_path) as store:
+        from src.tests.test_offline_comparison_store import activate
+
+        activate(store)
+        point = dict(
+            opportunity_key=R.U.opportunity(snapshot[0]),
+            scope=sid,
+            symbol=snapshot[0]["symbol"],
+            day=day,
+            outcome=dict(status="WIN"),
+            snapshot_obj=store.put(snapshot),
+        )
+        points = [point]
+        obj = store.put(points)
+    machine = R.P.seal(
+        dict(
+            source_date=day,
+            operating_manifest=manifest,
+            policy_schema="continuous_reversal_policy_v6",
+            partitions=[dict(records_object=obj, records_sha256=R.P.digest(points))],
+        )
+    )
+    monkeypatch.setattr(
+        I, "effective_bindings", lambda *a, **kw: {sid: current["registry_sha256"]}
+    )
+    T.configure(
+        tmp_path,
+        candidate=candidate["registry_sha256"],
+        scopes=scopes,
+        seed="causal-test",
+    )
+    campaign = T.prepare(tmp_path, day, machine, parent)
+    if not available:
+        assert campaign["pairs"] == []
+        assert len(campaign["completed_context_exclusions"]) == 1
+        calls = T.calls(
+            tmp_path,
+            day,
+            transport=lambda *a, **k: pytest.fail("source gap spent budget"),
+        )
+        assert calls["new_calls"] == 0
+        report = T.evaluate(tmp_path, day)
+        assert report["comparison_complete"] is False
+        assert (
+            report["completed_context_exclusions"]
+            == campaign["completed_context_exclusions"]
+        )
+        return
+    with S.Store(tmp_path) as store:
+        pair = campaign["pairs"][0]
+        snap = store.get(pair["snapshot_obj"])
+        req = store.request(pair["requests"]["candidate"])
+        assert req == G.request(snap, candidate)
+        assert (
+            G.production_request(snap, candidate)[0][M.CANDLE_FIELD]["status"]
+            == "observed"
+        )
+    report = T.evaluate(tmp_path, day)
+    assert report["scopes"][sid]["paired_points"] == 0
+    assert report["scopes"][sid]["improved"] is False
+    assert report["comparison_complete"] is False
+    assert campaign["completed_context_code_sha256"]
+
+    def offline_transport(req, **kwargs):
+        definition = (
+            candidate
+            if req["candidate"]["production_input_contract"]["version"]
+            == M.CANDLE_VERSION
+            else current
+        )
+        logical = G.production_request(snap, definition)[0]
+        env = G.envelope(logical, definition)
+        aliases = env["citation_map"]
+        return dict(
+            provider_provenance=dict(response_id="offline-fixture"),
+            candidate_response=dict(
+                assessed={aliases[x["ref"]]: True for x in logical["signals"]},
+                screen=dict(
+                    verdict="PASS",
+                    risk="NO_BLOCKING_RISK",
+                    fact=aliases["observed_machine_signal"],
+                ),
+                confidence=60,
+            ),
+        )
+
+    calls = T.calls(tmp_path, day, transport=offline_transport)
+    assert calls["new_calls"] == 2
+    resolved = T.evaluate(tmp_path, day)
+    assert resolved["comparison_complete"] is True
+    assert resolved["scopes"][sid]["paired_points"] == 1
+    assert resolved["scopes"][sid]["improved"] is False  # Same decision is no edge.
+
+
+def test_cumulative_population_has_no_lifetime_batch_cap(tmp_path, monkeypatch):
+    from src.trading.market import completed_history as H
+
+    counts = []
+
+    def reader(root, requests):
+        counts.append(len(requests))
+        return [
+            dict(status="unavailable", reason="history_database_absent")
+            for _ in requests
+        ]
+
+    monkeypatch.setattr(H, "causal_prefixes", reader)
+    event = dict(
+        epoch=datetime(2026, 10, 29, 10, 5, 30, tzinfo=R.K.KST).timestamp(),
+        source_item="097520_NX",
+    )
+    snapshots = [[event, {}] for _ in range(4097)]
+    R.attach_completed_contexts(tmp_path, snapshots)
+    assert counts == [4096, 1]
+    assert all(
+        s[1]["entry_candle_source_gap"] == "history_database_absent" for s in snapshots
+    )

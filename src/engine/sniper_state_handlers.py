@@ -30593,28 +30593,25 @@ def _main_stop_quote_context(
         if bid_source == "fresh_rest_executable_bid"
         else config.max_ws_age_ms
     ) / 1000.0
-    grid_source_complete = bool(
-        market_type
-        and exit_allowed_by_clock
-        and bid_received_at is not None
-        and 0 <= now_ts - bid_received_at <= quote_max_age_sec
-        and price_usable
-        and executable_bid_qty > 0
-        and bid_identity_proven
-        and not stock.get("scalp_trailing_arm_persist_gap")
-        and quote_state_for_tuning
-        not in {
-            "",
-            "missing",
-            "diverged",
-            "blocked",
-            "stale",
-            "conflict",
-            "invalid",
-            "unavailable",
-        }
-        and not _truthy_log_value(quality.get("quote_consistency_entry_blocked"))
-    )
+    source_gaps = []
+    for valid, reason in (
+        (bool(market_type), "market_session_missing"),
+        (bool(exit_allowed_by_clock), "market_exit_clock_blocked"),
+        (bid_received_at is not None, "bid_clock_missing"),
+        (bid_received_at is None or 0 <= now_ts - bid_received_at <= quote_max_age_sec,
+         "bid_quote_stale_or_future"),
+        (bool(price_usable), "executable_price_unusable"),
+        (executable_bid_qty > 0, "bid_depth_missing"),
+        (bool(bid_identity_proven), "bid_identity_missing"),
+        (not stock.get("scalp_trailing_arm_persist_gap"), "arm_persistence_gap"),
+        (quote_state_for_tuning not in {
+            "", "missing", "diverged", "blocked", "stale", "conflict", "invalid", "unavailable"
+        } and not _truthy_log_value(quality.get("quote_consistency_entry_blocked")),
+         "quote_quality_invalid"),
+    ):
+        if not valid:
+            source_gaps.append(reason)
+    grid_source_complete = not source_gaps
     # Retain only the current validated evaluation context. A normal exit may
     # capture this exact quote once even inside the regular one-second cadence.
     from src.engine.scalping.position_peak_ledger import position_cycle_id
@@ -30636,6 +30633,7 @@ def _main_stop_quote_context(
             else quote_receipt
         ),
         complete=grid_source_complete,
+        source_gap_reasons=source_gaps,
         market=market_type,
         evaluator=evaluator,
         decision_profit_pct=holding_profit_rate_at_eval,
@@ -31998,58 +31996,10 @@ def _observe_scalp_trailing_input_transition(
             tuning_grid_max_evaluation_gap_sec=round(max_evaluation_gap, 6),
             tuning_grid_heartbeat=heartbeat_due,
             tuning_grid_source_gap_reason=(
-                "-"
-                if grid_source_complete
-                and not coverage_exhausted
-                and max_evaluation_gap <= 2.0
-                else (
-                    "market_session_missing"
-                    if not market_type
-                    else (
-                        "market_exit_clock_blocked"
-                        if not exit_allowed_by_clock
-                        else (
-                            "bid_clock_missing"
-                            if bid_received_at is None
-                            else (
-                                "bid_depth_missing"
-                                if executable_bid_qty <= 0
-                                else (
-                                    "bid_identity_missing"
-                                    if not bid_identity_proven
-                                    else (
-                                        "arm_persistence_gap"
-                                        if stock.get("scalp_trailing_arm_persist_gap")
-                                        else (
-                                            "evaluation_gap"
-                                            if max_evaluation_gap > 2.0
-                                            else (
-                                                "quote_quality_invalid"
-                                                if quote_state_for_tuning
-                                                in {
-                                                    "",
-                                                    "missing",
-                                                    "diverged",
-                                                    "blocked",
-                                                    "stale",
-                                                    "conflict",
-                                                    "invalid",
-                                                    "unavailable",
-                                                }
-                                                or _truthy_log_value(
-                                                    quality.get(
-                                                        "quote_consistency_entry_blocked"
-                                                    )
-                                                )
-                                                else "coverage_exhausted"
-                                            )
-                                        )
-                                    )
-                                )
-                            )
-                        )
-                    )
-                )
+                (stop_context.get("source_gap_reasons") or [None])[0]
+                or ("coverage_exhausted" if coverage_exhausted else
+                    "evaluation_gap" if max_evaluation_gap > 2.0 else
+                    "source_contract_unverified" if not grid_source_complete else "-")
             ),
             evaluator=evaluator,
             trailing_arm_latched=bool(stock.get("scalp_trailing_arm_latched")),

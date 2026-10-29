@@ -22,6 +22,96 @@ from src.engine.scalping import reversal_extended_union as U
 from src.engine.scalping import continuous_reversal_operating_postclose as O
 
 
+def attach_completed_contexts(data_root, snapshots):
+    """Freeze causal REST prefixes after blind selection, before request IDs.
+
+    Existing history is the producer for every confirmation, including events
+    that never reached AI or an order. No new REST call or outcome bar is used.
+    """
+    from datetime import datetime
+    from src.trading.market import completed_history as H
+    from src.trading.market.session_contract import resolve_market_session
+    from src.engine.scalping import reversal_auxiliary_production_input as M
+
+    pending, requests = [], []
+    for index, (event, source) in enumerate(snapshots):
+        if "entry_candle_context" in source:
+            continue  # Immutable snapshots do not rediscover later revisions.
+        if not event.get("source_item"):
+            source["entry_candle_context"] = None
+            source["entry_candle_source_gap"] = "confirmation_source_item_missing"
+            continue
+        pending.append(index)
+        requests.append(
+            dict(
+                at=event["epoch"],
+                item=event["source_item"],
+                session=resolve_market_session(
+                    datetime.fromtimestamp(event["epoch"], H.KST)
+                ).session_regime,
+            )
+        )
+    # Cumulative campaigns can exceed one daily reservoir. Keep each native
+    # read bounded without imposing a lifetime cap on policy generation.
+    results = (
+        result
+        for start in range(0, len(requests), 4096)
+        for result in H.causal_prefixes(data_root, requests[start : start + 4096])
+    )
+    for index, result in zip(pending, results):
+        event, source = snapshots[index]
+        source["entry_candle_context"] = None
+        if result["status"] != "verified":
+            source["entry_candle_source_gap"] = result["reason"]
+            continue
+        bars = [
+            dict(
+                t=datetime.strptime(r["source_timestamp"], "%Y%m%d%H%M%S").strftime(
+                    "%H:%M:%S"
+                ),
+                o=r["시가"],
+                h=r["고가"],
+                l=r["저가"],
+                c=r["현재가"],
+                v=r["거래량"],
+                forming=False,
+                partial_volume=False,
+            )
+            for r in result["rows"]
+        ]
+        end = datetime.strptime(
+            result["rows"][-1]["source_timestamp"], "%Y%m%d%H%M%S"
+        ).replace(tzinfo=H.KST)
+        context = dict(
+            schema="entry_completed_revision_context_v1",
+            request_code=result["item"],
+            session=result["session"],
+            bars=bars,
+            bar_schema=dict(
+                order="oldest_to_latest", timezone="Asia/Seoul", interval="1m"
+            ),
+            causal_revision=dict(
+                revision=result["revision"],
+                available_at=result["available_at"],
+                confirmation_at=event["epoch"],
+                rows_sha256=H._digest(result["rows"]),
+            ),
+            source_quality=dict(
+                status="verified_causal_revision",
+                blockers=[],
+                decision_window=dict(
+                    provider_call_allowed=True, end_timestamp=end.isoformat()
+                ),
+            ),
+        )
+        # Do not qualify a stale/missing suffix merely because a revision exists.
+        projected = M.completed_candle_source(context, event)
+        source["entry_candle_context"] = projected["original_context"]
+        if projected["status"] != "observed":
+            source["entry_candle_source_gap"] = projected["reason"]
+    return snapshots
+
+
 def retained_source_inventory(data_root, machine, *, as_of, market=None):
     """Find retained dates omitted by the published cumulative manifest."""
     from datetime import date
@@ -314,6 +404,7 @@ def build_cumulative(data_root, parent, machine, *, seed, excluded=(), per_scope
                 ):
                     raise ValueError("research_selected_snapshot_identity_changed")
                 selected.append((point, snapshot))
+    attach_completed_contexts(data_root, [snapshot for _, snapshot in selected])
     with S.Store(data_root) as store:
         points = [
             dict(
@@ -617,6 +708,7 @@ def build(data_root, parent, machine, *, seed, excluded, per_scope=6):
                         )
                     )
                 materialized.append((p, snapshot))
+    attach_completed_contexts(data_root, [snapshot for _, snapshot in materialized])
     with S.Store(data_root) as store:
         points = []
         for p, snapshot in materialized:

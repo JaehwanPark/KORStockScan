@@ -441,20 +441,26 @@ def binding(value):
     )
 
 
-def production_request(snapshot, value):
+def production_request(snapshot, value, *, entry_context=None):
     validate(value)
     A = projector(value["input_version"])
     event, source = snapshot
+    if entry_context is None:
+        entry_context = source.get("entry_candle_context")
     inp, _, schema = A.production_request(source, value["base_arm"], event=event)
     if "production_input_contract" in value:
         from src.engine.scalping import reversal_auxiliary_production_input as M
 
-        inp = M.project(inp, expected_contract=value["production_input_contract"])
+        inp = M.project(
+            inp,
+            expected_contract=value["production_input_contract"],
+            entry_context=entry_context,
+        )
         schema = A.response_schema(inp)
     return inp, value["prompt"], schema
 
 
-def request(snapshot, value):
+def request(snapshot, value, *, entry_context=None):
     # Preserve historical exact request IDs for eligible actual-response reuse.
     from src.engine.scalping.continuous_reversal_operating_postclose import (
         request as old_request,
@@ -468,7 +474,9 @@ def request(snapshot, value):
         system_prompt=value["prompt"], prompt_version=binding(value)["prompt_version"]
     )
     if "production_input_contract" in value:
-        inp, _, schema = production_request(snapshot, value)
+        inp, _, schema = production_request(
+            snapshot, value, entry_context=entry_context
+        )
         req.update(candidate_input=inp, candidate_input_sha256=P.digest(inp))
         req["candidate"].update(
             response_schema=schema,
@@ -486,7 +494,9 @@ def request(snapshot, value):
         from src.engine.scalping import reversal_auxiliary_wire as W
 
         req = W.request(
-            req, production_request(snapshot, value)[0], value["wire_contract"]
+            req,
+            production_request(snapshot, value, entry_context=entry_context)[0],
+            value["wire_contract"],
         )
     return req
 

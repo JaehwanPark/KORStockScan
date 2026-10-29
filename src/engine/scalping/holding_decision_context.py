@@ -283,16 +283,28 @@ def _best_levels(ws_data: dict[str, Any]) -> dict[str, int]:
     }
 
 
-def _observed_exit_costs(position, ws, *, levels, fresh, average, quantity, now):
+def _observed_exit_costs(
+    position, ws, *, levels, fresh, average, quantity, now, diagnostics=None
+):
     """Model full-quantity execution from the frozen fee source and visible bids.
 
     This is configured-cost/current-book arithmetic, never broker cost or a
     promised fill. Missing depth, malformed levels and unknown fees stay null.
     Consume normalized book rows only; no request, parser or fallback price.
     """
-    cost = position.get("_trailing_entry_cost_model")
-    if not fresh or average <= 0 or quantity <= 0 or type(cost) is not dict:
+
+    def missing(reason):
+        if diagnostics is not None:
+            diagnostics.update(status="unavailable", reason=reason)
         return None
+
+    cost = position.get("_trailing_entry_cost_model")
+    if not fresh:
+        return missing("executable_quote_not_fresh")
+    if average <= 0 or quantity <= 0:
+        return missing("position_basis_missing")
+    if type(cost) is not dict:
+        return missing("frozen_cost_source_missing")
     rate = cost.get("sell_cost_rate")
     known = cost_known_epoch(cost.get("known_at"))
     sha = cost.get("source_sha256")
@@ -311,18 +323,18 @@ def _observed_exit_costs(position, ws, *, levels, fresh, average, quantity, now)
         or len(sha) != 64
         or any(c not in "0123456789abcdef" for c in sha)
     ):
-        return None
+        return missing("frozen_cost_source_invalid")
     bids = (
         (ws.get("orderbook") or {}).get("bids")
         if type(ws.get("orderbook")) is dict
         else None
     )
     if type(bids) is not list or not bids:
-        return None
+        return missing("native_bid_levels_missing")
     left, proceeds, previous = quantity, 0.0, None
     for index, row in enumerate(bids[:10]):
         if type(row) is not dict:
-            return None
+            return missing("native_bid_level_invalid")
         price, volume = row.get("price"), row.get("qty", row.get("volume"))
         if (
             type(price) not in (int, float)
@@ -336,13 +348,20 @@ def _observed_exit_costs(position, ws, *, levels, fresh, average, quantity, now)
                 and (price != levels["best_bid"] or volume != levels["best_bid_qty"])
             )
         ):
-            return None
+            return missing("native_bid_level_invalid")
         take = min(left, volume)
         proceeds += take * price
         left -= take
         previous = price
         if left == 0:
             basis = quantity * average
+            if diagnostics is not None:
+                diagnostics.update(
+                    status="modeled",
+                    reason=None,
+                    visible_filled_qty=quantity,
+                    depth_levels=index + 1,
+                )
             return dict(
                 fee_tax_pct=proceeds * rate / basis * 100.0,
                 slippage_bps=(levels["best_bid"] * quantity - proceeds)
@@ -359,7 +378,9 @@ def _observed_exit_costs(position, ws, *, levels, fresh, average, quantity, now)
                 actual_broker_cost=False,
                 actual_fill=False,
             )
-    return None
+    if diagnostics is not None:
+        diagnostics.update(visible_filled_qty=quantity - left, required_qty=quantity)
+    return missing("visible_bid_depth_insufficient")
 
 
 def _request_suffix(request_code: str) -> str:
@@ -1096,6 +1117,7 @@ def build_holding_decision_context(
         not math.isfinite(estimated_slippage_bps) or estimated_slippage_bps < 0
     ):
         estimated_slippage_bps = None
+    cost_estimate_status = {}
     modeled_costs = _observed_exit_costs(
         position,
         ws,
@@ -1104,6 +1126,7 @@ def build_holding_decision_context(
         average=avg_price,
         quantity=memory_qty,
         now=now_epoch,
+        diagnostics=cost_estimate_status,
     )
     # Explicit invalid inputs remain gaps. Only absent fields can be supplied
     # by the existing frozen cost source plus full visible-quantity coverage.
@@ -1129,6 +1152,17 @@ def build_holding_decision_context(
         and estimated_fee_tax_pct is not None
         and estimated_slippage_bps is not None
         else None
+    )
+    cost_estimate_status["missing_components"] = [
+        key
+        for key, value in (
+            ("estimated_fee_tax_pct", estimated_fee_tax_pct),
+            ("estimated_slippage_bps", estimated_slippage_bps),
+        )
+        if value is None
+    ]
+    cost_estimate_status["net_pnl_status"] = (
+        "available" if estimated_net_executable_pnl_pct is not None else "unavailable"
     )
     active_exit_token = bool(
         position.get("exit_token")
@@ -1303,6 +1337,7 @@ def build_holding_decision_context(
             "spread_cost_bps": spread_bps,
             "estimated_slippage_bps": estimated_slippage_bps,
             "cost_estimate_source": modeled_costs,
+            "cost_estimate_status": cost_estimate_status,
             "estimated_net_executable_pnl_pct": (estimated_net_executable_pnl_pct),
             "remaining_qty": memory_qty,
             "best_bid_qty": levels["best_bid_qty"],
@@ -1646,6 +1681,7 @@ def holding_decision_context_model_payload(
                     "spread_cost_bps",
                     "estimated_slippage_bps",
                     "cost_estimate_source",
+                    "cost_estimate_status",
                     "estimated_net_executable_pnl_pct",
                     "remaining_qty",
                     "best_bid_qty",

@@ -584,7 +584,11 @@ def test_replay_depth_identity_uses_0d_clock_separately_from_newer_0b(
         holding_profit_rate_at_eval=-0.44,
     )
     assert ctx["complete"] is (fault is None)
+    if fault == "stale":
+        assert "bid_quote_stale_or_future" in ctx["source_gap_reasons"]
+        assert "coverage_exhausted" not in ctx["source_gap_reasons"]
     if fault is None:
+        assert ctx["source_gap_reasons"] == []
         assert ctx["bid_qty"] == 330
         assert ctx["quote"]["observed_epoch"] == depth_at
         assert ctx["quote"]["source_type"] == "0D"

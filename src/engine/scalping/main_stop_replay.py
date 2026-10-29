@@ -2588,3 +2588,151 @@ def choose(aggregates, contract):
     if row["holdout_delta"] / row["holdout_n"] <= contract["minimum_paired_ev_krw"]:
         return None, "hold_no_edge"
     return name, "selected"
+
+
+def compare_soft_stop_basis(observations, parent, *, thresholds, grace_seconds):
+    """Bounded paired observation study, never a selectable stop policy.
+
+    Sparse AI snapshots cannot prove a continuous grace interval or a fill.
+    Compare mark and full-visible-depth net PnL on the SAME eligible rows; show
+    conditional first-touch deadlines, never an invented historical exit/EV.
+    Existing continuous native replay owns later economic selection.
+    """
+    from src.engine.ai.holding_exit_vote import path_vote_input_gaps
+
+    parent = StopValues.parse(asdict(parent))
+    if (
+        not isinstance(observations, list)
+        or len(observations) > 4096
+        or not isinstance(thresholds, (list, tuple))
+        or not 1 <= len(thresholds) <= 8
+        or not isinstance(grace_seconds, (list, tuple))
+        or not 1 <= len(grace_seconds) <= 8
+    ):
+        raise ValueError("stop_basis_research_bounds_invalid")
+    grid = [
+        StopValues.parse(asdict(replace(parent, soft_stop_pct=t, grace_sec=g)))
+        for t in thresholds
+        for g in grace_seconds
+    ]
+    rows, gaps, seen = [], Counter(), set()
+    for row in observations:
+        payload = row.get("payload") or {}
+        request = row.get("request_id")
+        at = row.get("at")
+        if not isinstance(request, str) or not request or request in seen:
+            raise ValueError("stop_basis_request_identity_invalid")
+        seen.add(request)
+        source = payload.get("source") or {}
+        if (
+            not finite(at)
+            or not finite(source.get("quote_observed_at"))
+            or not 0 <= at - source["quote_observed_at"] <= 3
+        ):
+            gaps["quote_clock_invalid"] += 1
+            continue
+        errors = path_vote_input_gaps(
+            dict(payload, requested_paths=["EXIT_SOFT_STOP"])
+        )["EXIT_SOFT_STOP"]
+        if errors:
+            gaps["input:" + ",".join(errors)] += 1
+            continue
+        pnl = (payload.get("flow") or {}).get("execution_pnl") or {}
+        model = pnl.get("cost_estimate_source") or {}
+        basis = pnl.get("average_entry_price")
+        vwap = model.get("modeled_vwap")
+        quantity = pnl.get("remaining_qty")
+        sha = model.get("cost_source_sha256")
+        if (
+            model.get("source") != "frozen_configured_cost_and_visible_bid_depth_model"
+            or model.get("actual_broker_cost") is not False
+            or model.get("actual_fill") is not False
+            or model.get("quantity") != quantity
+            or type(quantity) is not int
+            or quantity <= 0
+            or model.get("percent_basis") != "average_entry_notional"
+            or not isinstance(sha, str)
+            or len(sha) != 64
+            or any(c not in "0123456789abcdef" for c in sha)
+            or not finite(model.get("cost_known_at"))
+            or model["cost_known_at"] > at
+            or not finite(basis)
+            or basis <= 0
+            or not finite(vwap)
+            or vwap <= 0
+            or not finite(pnl.get("mark_price"))
+            or pnl["mark_price"] <= 0
+            or any(
+                not finite(pnl.get(k)) or pnl[k] < 0
+                for k in ("estimated_fee_tax_pct", "estimated_slippage_bps")
+            )
+        ):
+            gaps["full_quantity_cost_model_unverified"] += 1
+            continue
+        net = pnl["estimated_net_executable_pnl_pct"]
+        fee = pnl["estimated_fee_tax_pct"]
+        if not math.isclose(net, 100 * (vwap / basis - 1) - fee, abs_tol=0.00011):
+            gaps["net_cost_arithmetic_conflict"] += 1
+            continue
+        # Same fee convention and once-only visible-depth slippage. Spread is
+        # already reflected by bid/VWAP and is not subtracted for a second time.
+        mark = 100 * (pnl["mark_price"] / basis - 1) - pnl["mark_price"] / vwap * fee
+        rows.append(
+            dict(
+                request_id=request,
+                at=at,
+                position_key=payload.get("position_key"),
+                buy_fill_identity=payload.get("buy_fill_identity"),
+                mark_net_pct=mark,
+                executable_net_pct=net,
+                source_sha256=digest(payload),
+            )
+        )
+    cells = []
+    for values in grid:
+        paired = []
+        for row in rows:
+            outcomes = {}
+            for name in ("mark_net_pct", "executable_net_pct"):
+                decision = soft_decision(values, profit_pct=row[name], now=row["at"])
+                outcomes[name] = asdict(decision)
+            paired.append(dict(**row, conditional_first_touch=outcomes))
+        cells.append(
+            dict(
+                soft_stop_pct=values.soft_stop_pct,
+                grace_sec=values.grace_sec,
+                observations=paired,
+                mark_breach_count=sum(
+                    r["mark_net_pct"] <= values.soft_stop_pct for r in rows
+                ),
+                executable_breach_count=sum(
+                    r["executable_net_pct"] <= values.soft_stop_pct for r in rows
+                ),
+            )
+        )
+    return dict(
+        schema="main_stop_basis_observation_research_v1",
+        status="diagnostic_only_continuous_replay_required",
+        parent_sha256=digest(asdict(parent)),
+        input_count=len(observations),
+        eligible_count=len(rows),
+        excluded=dict(gaps),
+        cells=cells,
+        metric_role="instrumentation_gap",
+        decision_authority="report_only",
+        primary_decision_metric="paired_mark_executable_threshold_disagreement",
+        window_policy="same_original_holding_requests_no_gap_imputation",
+        sample_floor=1,
+        source_quality_gate="native_request_binding_full_quantity_configured_cost_and_fresh_quote",
+        forbidden_uses=[
+            "policy_selection",
+            "actual_exit_or_fill_claim",
+            "realized_economics",
+            "grace_elapsed_inference",
+        ],
+        continuous_coverage_proven=False,
+        paired_ev_krw=None,
+        runtime_effect=False,
+        allowed_runtime_apply=False,
+        actual_order_submitted=False,
+    )

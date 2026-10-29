@@ -2369,6 +2369,17 @@ def test_frozen_fee_and_full_visible_depth_feed_exit_vote_without_actual_cost_cl
         recent_candles=_candles(60, start=datetime(2026, 7, 23, 9, 0, tzinfo=KST)),
     )
     pnl = ctx["execution_pnl"]
+    if fault == "insufficient":
+        assert pnl["cost_estimate_status"] == dict(
+            status="unavailable",
+            reason="visible_bid_depth_insufficient",
+            visible_filled_qty=201,
+            required_qty=220,
+            missing_components=["estimated_fee_tax_pct", "estimated_slippage_bps"],
+            net_pnl_status="unavailable",
+        )
+    elif fault == "unknown_fee":
+        assert pnl["cost_estimate_status"]["reason"] == "frozen_cost_source_missing"
     payload = build_path_vote_input(
         stock_code="000660",
         ws_data=ws,

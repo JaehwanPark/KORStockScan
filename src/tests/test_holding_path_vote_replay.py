@@ -462,6 +462,13 @@ def test_provider_call_returns_separate_votes_once(monkeypatch):
         holding_context={},
     )
     assert len(calls) == 1
+    schema = calls[0][2]["response_schema_override"]
+    assert schema["properties"]["input_snapshot_id"]["enum"] == [
+        calls[0][1]["input_snapshot_id"]
+    ]
+    assert schema["properties"]["votes"]["items"]["anyOf"][0]["properties"]["path_id"][
+        "enum"
+    ] == ["EXIT_SOFT_STOP"]
     assert [row["path_id"] for row in rows] == ["EXIT_SOFT_STOP", "ADD_REBOUND"]
     assert all(row["status"] == "VALID" for row in rows)
     provider_meta["model"] = "gpt-5.4-nano-2026-03-17"
@@ -1886,3 +1893,55 @@ def test_frozen_completed_native_identity_preserves_main_source_and_exclusions(
         assert gaps == ["frozen_vote_source_identity_mismatch"]
     else:
         assert gaps == ["frozen_vote_position_identity_mismatch"]
+
+
+def test_path_response_producer_schema_enforces_consumer_limits_and_snapshot():
+    import re
+    from src.engine.ai.holding_exit_vote import path_vote_response_schema
+
+    paths = ("EXIT_TRAILING_TP", "EXIT_SOFT_STOP")
+    schema = path_vote_response_schema(paths, "snapshot")
+    response = dict(
+        input_snapshot_id="snapshot",
+        votes=[
+            dict(
+                path_id=p,
+                verdict="PASS",
+                conviction="TENTATIVE",
+                reason_codes=[PATH_REASON_PREFIX[p] + "bid_weakening"],
+            )
+            for p in paths
+        ],
+    )
+    assert schema["properties"]["input_snapshot_id"]["enum"] == ["snapshot"]
+    votes = schema["properties"]["votes"]
+    assert votes["minItems"] == votes["maxItems"] == 2
+    soft = votes["items"]["anyOf"][1]["properties"]
+    assert soft["path_id"]["enum"] == ["EXIT_SOFT_STOP"]
+    reasons = soft["reason_codes"]
+    assert (reasons["minItems"], reasons["maxItems"]) == (1, 6)
+    assert reasons["items"]["maxLength"] == 64
+    assert re.fullmatch(reasons["items"]["pattern"], "exit_soft_bid_weakening")
+    assert not re.fullmatch(reasons["items"]["pattern"], "exit_tp_bid_weakening")
+    # Unknown/malformed historical responses still fail closed, never repaired.
+    row = _events("EXIT_SOFT_STOP", "PREMARKET")[0]
+    response["votes"][1]["reason_codes"] = ["exit_soft_" + "a" * 65]
+    events = normalize_path_vote_bundle(
+        response,
+        requested_paths=paths,
+        expected_snapshot_id="snapshot",
+        position_key=row["position_key"],
+        market=row["market"],
+        session_key=row["session_key"],
+        model=row["model"],
+        route=row["route"],
+        transport_epoch=row["transport_epoch"],
+        source_generation=row["source_generation"],
+        requested_at=row["requested_at"],
+        received_at=row["received_at"],
+        quote_observed_at=row["quote_observed_at"],
+        buy_fill_identity=row["buy_fill_identity"],
+        buy_fill_legs=row["buy_fill_legs"],
+    )
+    assert events[1]["status"] == "INSUFFICIENT"
+    assert "reason_length_invalid" in events[1]["response_contract_errors"]

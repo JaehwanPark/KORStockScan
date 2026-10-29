@@ -717,7 +717,7 @@ def selected_definition(data_root, bundle, assessment):
     return (G.load(data_root, ident), v) if ident else (None, v)
 
 
-def apply_request(data_root, bundle, snapshot, result):
+def apply_request(data_root, bundle, snapshot, result, *, entry_context=None):
     a, inp, prompt, schema = result
     if (
         a.get("policy_version") not in {V.SCHEMA, "continuous_reversal_policy_v6"}
@@ -729,7 +729,9 @@ def apply_request(data_root, bundle, snapshot, result):
     value, overlay = selected_definition(data_root, bundle, a)
     if value is None:
         return result
-    inp, prompt, schema = G.production_request(snapshot, value)
+    inp, prompt, schema = G.production_request(
+        snapshot, value, entry_context=entry_context
+    )
     a = copy.deepcopy(a)
     if P.digest(inp["signals"]) != a["signal_set_hash"]:
         raise ValueError("auxiliary_overlay_machine_evidence_changed")
