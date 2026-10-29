@@ -722,7 +722,24 @@ def test_machine_primary_transport_screen_is_nonexposure_not_contract_gap():
         },
     )
 
-    result = sentinel._machine_primary_entry_funnel([event])
+    terminal = sentinel.PipelineEvent(
+        event.emitted_at,
+        event.pipeline,
+        "ai_confirmed_terminal_no_budget",
+        event.stock_name,
+        event.stock_code,
+        event.record_id,
+        {
+            **event.fields,
+            "terminal_reason": "entry_ai_transport_timeout",
+            "downstream_terminal_reason": "entry_policy_no_buy_score_prior",
+            "source_stage": "blocked_ai_score",
+            "actual_order_submitted": "false",
+            "broker_order_forbidden": "true",
+            "allowed_runtime_apply": "false",
+        },
+    )
+    result = sentinel._machine_primary_entry_funnel([event, terminal])
     row = result["evaluation_ledger"][0]
     assert row["conflict_reasons"] == []
     assert row["final_state"] == "ai_nonpass_no_exposure"
@@ -1885,6 +1902,22 @@ def test_ai_confirmed_terminal_no_budget_is_split_by_terminal_reason(
                 },
             )
         )
+    rows.append(
+        _event(
+            "2026-05-06", "10:03:20", "ai_confirmed_terminal_no_budget",
+            record_id=300,
+            fields={
+                "terminal_reason": "entry_ai_transport_timeout",
+                "downstream_terminal_reason": "entry_policy_no_buy_score_prior",
+                "source_stage": "blocked_ai_score",
+                "ai_result_source": "timeout",
+                "ai_decision_evaluation_status": "not_evaluated_transport_timeout",
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "allowed_runtime_apply": False,
+            },
+        )
+    )
     _write_events(tmp_path, "2026-05-06", rows)
 
     report = sentinel.build_buy_funnel_sentinel_report(
@@ -1903,6 +1936,7 @@ def test_ai_confirmed_terminal_no_budget_is_split_by_terminal_reason(
         for item in report["current"]["session"]["blocker_top"]
     }
     assert terminal_reasons["ai_terminal:first_ai_wait_big_bite_not_confirmed"] == 3
+    assert terminal_reasons["ai_terminal:entry_ai_transport_timeout"] == 1
     assert (
         terminal_reasons["ai_terminal:blocked_ai_score_below_buy_score_threshold"] == 2
     )
@@ -1910,7 +1944,7 @@ def test_ai_confirmed_terminal_no_budget_is_split_by_terminal_reason(
     assert "ai_confirmed_terminal_no_budget:-" not in blockers
     assert (
         report["current"]["session"]["stage_events"]["ai_confirmed_terminal_no_budget"]
-        == 5
+        == 6
     )
     assert (
         report["event_load"]["cache_schema_version"]

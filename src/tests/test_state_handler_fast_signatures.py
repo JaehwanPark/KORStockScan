@@ -6417,6 +6417,57 @@ def test_log_ai_confirmed_terminal_no_budget_emits_contract_fields(monkeypatch):
     assert fields["quote_age_source"] == "last_ws_update_ts"
 
 
+@pytest.mark.parametrize(
+    ("source_stage", "reason"),
+    [
+        ("first_ai_wait", "first_ai_wait_big_bite_not_confirmed"),
+        ("blocked_ai_score", "entry_policy_no_buy_score_prior"),
+    ],
+)
+def test_terminal_timeout_preserves_downstream_branch_without_inventing_ai_decision(
+    monkeypatch, source_stage, reason
+):
+    emitted = []
+    monkeypatch.setattr(
+        handlers, "emit_pipeline_event", lambda *args, **kwargs: emitted.append(kwargs["fields"])
+    )
+    decision = {
+        "action": "WAIT",
+        "score": 50,
+        "ai_result_source": "timeout",
+        "entry_mechanistic_action": "ENTER_NOW",
+        "evaluation_attempt_id": "original-attempt",
+    }
+    handlers._log_ai_confirmed_terminal_no_budget(
+        {"id": 44}, "000035", terminal_reason=reason, source_stage=source_stage,
+        ai_decision=decision,
+    )
+    fields = emitted[-1]
+    assert fields["terminal_reason"] == "entry_ai_transport_timeout"
+    assert fields["downstream_terminal_reason"] == reason
+    assert fields["source_stage"] == source_stage
+    assert fields["ai_decision_evaluation_status"] == "not_evaluated_transport_timeout"
+    assert fields["evaluation_attempt_id"] == "original-attempt"
+    assert fields["actual_order_submitted"] is False
+    assert fields["broker_order_forbidden"] is True
+    assert fields["allowed_runtime_apply"] is False
+
+    decision["ai_result_source"] = "live"
+    handlers._log_ai_confirmed_terminal_no_budget(
+        {"id": 44}, "000035", terminal_reason=reason, source_stage=source_stage,
+        ai_decision=decision,
+    )
+    assert emitted[-1]["terminal_reason"] == reason
+    assert "downstream_terminal_reason" not in emitted[-1]
+
+    decision["ai_result_source"] = "timeout"
+    handlers._log_ai_confirmed_terminal_no_budget(
+        {"id": 44}, "000035", terminal_reason="other_explicit_guard", source_stage=source_stage,
+        ai_decision=decision,
+    )
+    assert emitted[-1]["terminal_reason"] == "other_explicit_guard"
+
+
 @pytest.mark.parametrize("with_attempt", [False, True])
 def test_terminal_no_budget_merges_source_invalid_receipts(monkeypatch, with_attempt):
     emitted = []

@@ -20088,6 +20088,19 @@ def _log_ai_confirmed_terminal_no_budget(
     extra_fields: dict[str, Any] | None = None,
 ) -> None:
     stock_fields = stock if isinstance(stock, dict) else {}
+    decision = ai_decision if isinstance(ai_decision, dict) else {}
+    # These two branches consume a fail-closed fallback as WAIT/score 50.
+    # Preserve the downstream branch while attributing its exact timeout to
+    # the transport, rather than claiming an evaluated AI score or WAIT.
+    prior_terminal_reason = str(terminal_reason or "unknown_terminal_no_budget")
+    timeout_fallback = (
+        (source_stage, prior_terminal_reason)
+        in {
+            ("first_ai_wait", "first_ai_wait_big_bite_not_confirmed"),
+            ("blocked_ai_score", "entry_policy_no_buy_score_prior"),
+        }
+        and str(decision.get("ai_result_source") or "").strip().lower() == "timeout"
+    )
     action = str(
         (ai_decision or {}).get("action")
         or stock_fields.get("last_watching_ai_action")
@@ -20122,8 +20135,19 @@ def _log_ai_confirmed_terminal_no_budget(
                 "actual_order_submitted": False,
                 "broker_order_forbidden": True,
                 "allowed_runtime_apply": False,
-                "terminal_reason": str(terminal_reason or "unknown_terminal_no_budget"),
+                "terminal_reason": (
+                    "entry_ai_transport_timeout" if timeout_fallback else prior_terminal_reason
+                ),
                 "source_stage": str(source_stage or "unknown"),
+                **(
+                    {
+                        "downstream_terminal_reason": prior_terminal_reason,
+                        "ai_result_source": "timeout",
+                        "ai_decision_evaluation_status": "not_evaluated_transport_timeout",
+                    }
+                    if timeout_fallback
+                    else {}
+                ),
                 "ai_score": f"{score_value:.1f}",
                 "ai_action": action or "UNKNOWN",
                 "entry_score_threshold": f"{float(entry_score_threshold):.1f}",
