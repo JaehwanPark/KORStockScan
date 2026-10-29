@@ -5370,6 +5370,14 @@ def test_scoped_entry_handoff_rejects_each_missing_dirty_or_mixed_consumer(tmp_p
     )
 
 
+@pytest.mark.parametrize("dependency", sorted(handoff.REVIEWED_SCHEDULED_SUFFIX_CHANGED))
+@pytest.mark.parametrize("fault", ["missing", "dirty", "committed_change"])
+def test_scheduled_suffix_handoff_rejects_each_changed_consumer(tmp_path, dependency, fault):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, "pre_submit_delay", fault, "current", dependency
+    )
+
+
 @pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
 @pytest.mark.parametrize(
     "fault", [None, "missing", "dirty", "committed_change", "parent_mix"]
@@ -5378,6 +5386,7 @@ def test_scoped_entry_handoff_rejects_each_missing_dirty_or_mixed_consumer(tmp_p
     "generation",
     [
         "current",
+        "cron_phase_binding",
         "issuer_bytes_source",
         "quantity_source",
         "stopped_preparation",
@@ -5432,7 +5441,8 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_CRON_PHASE_BINDING_PROFILE,
+        "current": handoff.REVIEWED_SCHEDULED_SUFFIX_PROFILE,
+        "cron_phase_binding": handoff.REVIEWED_CRON_PHASE_BINDING_PROFILE,
         "causal_item": handoff.REVIEWED_CAUSAL_ITEM_PROFILE,
         "prefix_cost_context": handoff.REVIEWED_PREFIX_COST_CONTEXT_PROFILE,
         "prefix_cost_handoff": handoff.REVIEWED_PREFIX_COST_HANDOFF_PROFILE,
@@ -5544,6 +5554,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     "show",
                     {
                         "preopen_validation": "6d9ed3575",
+                        "cron_phase_binding": "b0b7f47e8",
                         "probe_avg_consumed": "8fadd634d",
                         "holding_history_consumed": "a1c403555",
                         "postclose_integrated": "8ad99e22a",

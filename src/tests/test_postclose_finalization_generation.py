@@ -20,7 +20,7 @@ DAY = "2026-09-28"
 
 
 def _retry_fixture(root, monkeypatch):
-    _fixture(root)
+    _fixture(root, DAY)
     from src.engine.infrastructure import runtime_release_router as router
     from src.engine.automation import postclose_done_controller as controller
 
@@ -94,6 +94,63 @@ def test_detector_suffix_retry_preserves_native_prefix_and_failure(
 
 
 @pytest.mark.parametrize(
+    "source,effective", [("2026-09-23", "2026-09-28"),
+                         ("2026-10-23", "2026-10-26"),
+                         ("2026-10-29", "2026-10-30")],
+)
+@pytest.mark.parametrize("damage", [None, "preflight", "effective", "clock", "mode"])
+def test_scheduled_failed_suffix_preserves_calendar_and_preflight_boundaries(
+    tmp_path, monkeypatch, source, effective, damage
+):
+    import os
+    import sys
+    from datetime import datetime
+
+    monkeypatch.setattr(sys.modules[__name__], "DAY", source)
+    log, failed, _ = _retry_fixture(tmp_path, monkeypatch)
+    final = log / "postclose_finalization_cron.log"
+    text = final.read_text().replace("2026-09-29", effective).replace(
+        "recovery=true", "recovery=false")
+    if damage == "preflight":
+        text += ("Traceback: rejected before START\n"
+                 f"[FAIL] postclose_finalization target_date={source} "
+                 "reason=detector_resume_prefix_invalid\n")
+    elif damage == "effective":
+        text = text.replace(f"effective_date={effective}", "effective_date=2026-09-27")
+    elif damage == "clock":
+        text = text.replace(f"started_at={effective}", "started_at=2026-09-27")
+    elif damage == "mode":
+        text = text.replace("recovery=false", "recovery=unknown")
+    final.write_text(text)
+    cleanup = log / "log_rotation_cleanup_cron.log"
+    cleanup.write_text(cleanup.read_text().replace("2026-09-29", effective))
+    controller = (tmp_path / "data/report/postclose_done_controller"
+                  / f"postclose_done_controller_{source}.json")
+    body = json.loads(controller.read_bytes())
+    body["generated_at"] = f"{effective}T07:01:00+09:00"
+    _write_json(controller, body)
+    _write_json(Path(body["attempt_path"]), body)
+    body = json.loads(failed.read_bytes())
+    body["timestamp"] = f"{effective}T07:04:00+09:00"
+    _write_json(failed, body)
+    stamp = datetime.fromisoformat(f"{effective}T07:05:00+09:00").timestamp()
+    os.utime(final, (stamp, stamp))
+    originals = {p: p.read_bytes() for p in (final, cleanup, failed)}
+    if damage in {None, "preflight"}:
+        result = capture_detector_retry_prefix(tmp_path, source)
+        receipt = json.loads(Path(result["receipt_path"]).read_bytes())
+        assert receipt["original_started_at"] == f"{effective}T07:00:00+09:00"
+        assert receipt["controller_reexecuted"] is False
+        assert receipt["cleanup_reexecuted"] is False
+        assert Path(receipt["originals"]["finalization_log"]["path"]).read_bytes() == originals[final]
+    else:
+        with pytest.raises(FinalizationGenerationError):
+            capture_detector_retry_prefix(tmp_path, source)
+    assert all(p.read_bytes() == raw for p, raw in originals.items())
+
+
+@pytest.mark.parametrize("initial_mode", ["true", "false"])
+@pytest.mark.parametrize(
     "defect",
     [
         None,
@@ -107,9 +164,11 @@ def test_detector_suffix_retry_preserves_native_prefix_and_failure(
     ],
 )
 def test_failed_suffix_can_retry_only_with_unchanged_original_native_anchor(
-    tmp_path, monkeypatch, defect
+    tmp_path, monkeypatch, defect, initial_mode
 ):
     log, failed, _ = _retry_fixture(tmp_path, monkeypatch)
+    final = log / "postclose_finalization_cron.log"
+    final.write_text(final.read_text().replace("recovery=true", "recovery=" + initial_mode))
     first = capture_detector_retry_prefix(tmp_path, DAY)
     first_receipt = json.loads(Path(first["receipt_path"]).read_bytes())
     if defect == "legacy_parent":

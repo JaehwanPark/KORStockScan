@@ -671,6 +671,22 @@ def capture_detector_retry_prefix(
     lines = segment.splitlines()
     failure = f"[FAIL] postclose_finalization target_date={target_date} reason=final_detector_failed"
     handoff = f"[INFO] postclose_finalization target_date={target_date} cleanup=done detector_handoff=started"
+
+    def failed_attempt_lines(value):
+        # A rejected preflight emits diagnostics before START. Preserve those
+        # bytes in the anchor, as for completed rebinding, without assigning
+        # them to the preceding failed native execution.
+        terminals = [i for i, line in enumerate(value) if line == failure]
+        if not terminals:
+            return value
+        if len(terminals) != 1 or any(
+            line.startswith(("[START] ", "[DONE] "))
+            for line in value[terminals[0] + 1 :]
+        ):
+            raise FinalizationGenerationError("retry_suffix_chain_invalid")
+        return value[: terminals[0] + 1]
+
+    lines = failed_attempt_lines(lines)
     latest_started = lines[0] if lines else ""
     anchor = frozen
     native_prefix = None
@@ -751,6 +767,7 @@ def capture_detector_retry_prefix(
             if start in original_log
             else []
         )
+        lines = failed_attempt_lines(lines)
     original_controller = original_fields = None
     if rebind_completed:
         original_controller, original_fields = _completed_prefix_controller(
@@ -759,8 +776,6 @@ def capture_detector_retry_prefix(
     if not rebind_completed and (
         not lines
         or lines[-1] != failure
-        or "recovery=true" not in lines[0]
-        or "recovery=true" not in latest_started
         or '[INFO] postclose_finalization controller_terminal_receipt={"issues": [], "status": "pass"}'
         not in lines
         or f"[INFO] postclose_finalization cleanup_done target_date={target_date}"
@@ -795,6 +810,23 @@ def capture_detector_retry_prefix(
         return value
 
     started = stamp(lines[0], "started_at")
+    for native_start in (lines[0], latest_started):
+        fields = dict(re.findall(r"(\w+)=([^ ]+)", native_start))
+        if fields.get("recovery") == "true":
+            continue
+        # The scheduled wrapper uses recovery=false but has the same native
+        # controller/cleanup/detector contract. Its source and effective day
+        # must bind to the real trading calendar and the producer's KST clock.
+        from src.utils.market_day import is_krx_trading_day, next_krx_trading_date
+        from zoneinfo import ZoneInfo
+        source = datetime.fromisoformat(target_date).date()
+        effective = next_krx_trading_date(source)
+        if (fields.get("recovery") != "false"
+                or not is_krx_trading_day(source)
+                or fields.get("effective_date") != effective.isoformat()
+                or stamp(native_start, "started_at").astimezone(
+                    ZoneInfo("Asia/Seoul")).date() != effective):
+            raise FinalizationGenerationError("retry_scheduled_source_binding_invalid")
     cleanup_started = stamp(cleanup[cleanup_starts[-1]], "started_at")
     cleanup_finished = stamp(terminal, "finished_at")
     failed = json.loads(anchor["failed_detector"])

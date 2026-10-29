@@ -3646,7 +3646,29 @@ for _name, _current in REVIEWED_CRON_PHASE_BINDING_CHANGED.items():
                     if origin != _current)
 
 
+REVIEWED_SCHEDULED_SUFFIX_DEPENDENCIES = {
+    "src/engine/automation/postclose_finalization_generation.py":
+        "3a34c0eaa23718ca6f090747eeb99129f0ae4b49186633ed07a3dc944b30dba8",
+    "src/utils/market_day.py":
+        "ebef1d35c9405b772484d34459eabf8ca26e59fec0bfd92aebe1b7d17781a511",
+}
+_suffix_owner = "src/engine/automation/postclose_finalization_generation.py"
+_suffix_current = REVIEWED_SCHEDULED_SUFFIX_DEPENDENCIES[_suffix_owner]
+_suffix_history = REVIEWED_PREPARATION_HISTORY.setdefault(_suffix_owner, set())
+_suffix_origins = {"a2a29adac3c9777bd6ffc26ae480b80e49a40cd19fc40ce8b0e5479a21f9e9d2"}
+_suffix_origins.update(value for pair in _suffix_history for value in pair)
+_suffix_history.update((origin, _suffix_current) for origin in _suffix_origins
+                       if origin != _suffix_current)
+
+
 def reviewed_preparation_pair(relative, old, current):
+    # The report/recovery owner remains outside the startup-required profile.
+    # Its new comparison endpoint requires its actual native calendar reader.
+    if (relative == _suffix_owner and current == _suffix_current
+            and any((ROOT / name).is_symlink() or not (ROOT / name).is_file()
+                    or _sha(ROOT / name) != expected
+                    for name, expected in REVIEWED_SCHEDULED_SUFFIX_DEPENDENCIES.items())):
+        return False
     cron_phase_binding = any(
         (ROOT / name).is_file() and not (ROOT / name).is_symlink()
         and _sha(ROOT / name) == expected

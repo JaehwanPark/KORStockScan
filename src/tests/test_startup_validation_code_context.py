@@ -4209,6 +4209,38 @@ def test_probe_avg_independent_reader_preserves_complete_profile(tmp_path, monke
     assert C.reviewed_preparation_pair(relative, old, C.REVIEWED_PROBE_AVG_CHANGED[relative]) is (fault is None)
 
 
+@pytest.mark.parametrize("dependency", sorted(C.REVIEWED_SCHEDULED_SUFFIX_DEPENDENCIES))
+@pytest.mark.parametrize("fault", [None, "missing", "changed", "symlink", "unknown"])
+def test_scheduled_suffix_report_comparison_binds_native_calendar(
+    tmp_path, monkeypatch, dependency, fault
+):
+    # Keep the issued startup-required inventory unchanged. The report-only
+    # comparison endpoint additionally binds its own calendar dependency.
+    inventory = {**C.REVIEWED_CRON_PHASE_BINDING_PROFILE,
+                 **C.REVIEWED_SCHEDULED_SUFFIX_DEPENDENCIES}
+    for name, expected in inventory.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        raw = (ROOT / name).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == expected
+        path.write_bytes(raw)
+    monkeypatch.setattr(C, "ROOT", tmp_path)
+    damaged = tmp_path / dependency
+    if fault == "missing": damaged.unlink()
+    elif fault == "changed": damaged.write_bytes(damaged.read_bytes() + b"\n")
+    elif fault == "symlink":
+        other = tmp_path / "outside.py"
+        other.write_bytes(damaged.read_bytes())
+        damaged.unlink()
+        damaged.symlink_to(other)
+    owner = "src/engine/automation/postclose_finalization_generation.py"
+    old = ("0" * 64 if fault == "unknown" else
+           "a2a29adac3c9777bd6ffc26ae480b80e49a40cd19fc40ce8b0e5479a21f9e9d2")
+    assert C.reviewed_preparation_pair(
+        owner, old, C.REVIEWED_SCHEDULED_SUFFIX_DEPENDENCIES[owner]
+    ) is (fault is None)
+
+
 @pytest.mark.parametrize("fault", [None, "missing", "changed", "symlink", "unknown", "predecessor_mix"])
 def test_startup_storage_independent_reader_keeps_exact_complete_generation(tmp_path, monkeypatch, fault):
     for name, expected in C.REVIEWED_STARTUP_STORAGE_PROFILE.items():

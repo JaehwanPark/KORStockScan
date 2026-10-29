@@ -209,6 +209,23 @@ Use the actual target date instead of the example. A plan check proves routing, 
 
 ## Scheduled scope and maintenance
 
+Manual archive recovery retains the native `dashboard_db_archive_cron` owned-log
+boundary and its canonical cron log. The internal `dashboard_db_archive.log`
+records compression details; it cannot replace the wrapper's source-dated terminal
+receipt. Preserve the router's source-date environment and reuse verified archive
+prefixes. Never copy a DONE marker into a missing consumer log.
+
+Final detector suffix recovery accepts both failed scheduled and failed recovery
+attempts. A scheduled prefix additionally binds its effective day and KST start
+to the native trading calendar. Original controller, cleanup, detector clocks,
+source generations and raw logs remain mandatory. A rejected preflight before a
+new START preserves the preceding execution anchor and all rejection evidence;
+it cannot grant stage completion or reset a deadline. Use the existing
+`--recover-closed-target --resume-final-detector` owner only for an unchanged
+authenticated prefix. Changed calculations or generations require their native
+dependency disposition; a report-only repair grants no new startup or policy
+authority.
+
 Nine cron entrypoints use the selection: 07:35 PREOPEN threshold, 07:55 main start, 20:05 EOD, 20:10 cooperative postclose stop and bounded cleanup, 20:30 postclose/controller/tuning, 20:50 archive and 05:35 next-KRX-session finalization. Main and archive wrappers validate the exact-date EOD terminal before resource-heavy work. The finalizer resolves the immediately prior KRX trading date from the effective date, skips non-trading effective dates, stops predecessor waiting at 06:00 and bounds cleanup/detector completion by 06:50, leaving 30 minutes before the 07:20 PREOPEN scanner. The 21:05 paired replay wrapper is manual compatibility; the main wrapper owns the current auxiliary calculation. The operational cron check requires all nine installed owners. Existing environment values, log ownership/redirection and wrapper locks are preserved. The 07:30 legacy stop remains separate; the 20:10 stop uses the native stop-only transition and verifies collector closure before calculation. Other Main intraday observer/scanner jobs retain their separate owners. Dedicated retired services, timers and IPO auto-order cron are removed.
 
 The normal installer migrates only recognized owned postclose/controller/tuning

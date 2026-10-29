@@ -13689,6 +13689,20 @@ for _name, _current in REVIEWED_CRON_PHASE_BINDING_CHANGED.items():
         (origin, _current) for origin in _origins if origin != _current)
 
 
+# Failed scheduled suffix successor; prior issued profiles stay immutable.
+REVIEWED_SCHEDULED_SUFFIX_CHANGED = {'src/engine/automation/postclose_finalization_generation.py': '3a34c0eaa23718ca6f090747eeb99129f0ae4b49186633ed07a3dc944b30dba8', 'src/engine/infrastructure/startup_validation_code_context.py': '919c6794fc7fd0162b60a7d8264c4c64645d2447e6b227bca7ea759dacb266c0', 'src/utils/market_day.py': 'ef42333260854caa6c69b12488b62d16e6ea58c1e32b8edc48ffeefd66206ca8'}
+REVIEWED_SCHEDULED_SUFFIX_ORIGINS = {'src/engine/automation/postclose_finalization_generation.py': 'a2a29adac3c9777bd6ffc26ae480b80e49a40cd19fc40ce8b0e5479a21f9e9d2', 'src/engine/infrastructure/startup_validation_code_context.py': '88e987301273fcd282ad7148f530693c8186708efcaa91fcbac723b4e616e2db', 'src/utils/market_day.py': 'ef42333260854caa6c69b12488b62d16e6ea58c1e32b8edc48ffeefd66206ca8'}
+REVIEWED_SCHEDULED_SUFFIX_HASHES = {**REVIEWED_CRON_PHASE_BINDING_HASHES, **REVIEWED_SCHEDULED_SUFFIX_CHANGED}
+REVIEWED_SCHEDULED_SUFFIX_PROFILE = {**REVIEWED_CRON_PHASE_BINDING_PROFILE, **REVIEWED_SCHEDULED_SUFFIX_CHANGED}
+REVIEWED_SCHEDULED_SUFFIX_VARIANTS = _holding_history_variants(REVIEWED_SCHEDULED_SUFFIX_HASHES)
+for _name, _current in REVIEWED_SCHEDULED_SUFFIX_CHANGED.items():
+    _pairs = REVIEWED_ENTRY_COST_PAIRS.get(_name, ())
+    _origins = {value for pair in _pairs for value in pair}
+    _origins.add(REVIEWED_SCHEDULED_SUFFIX_ORIGINS[_name])
+    REVIEWED_ENTRY_COST_PAIRS[_name] = _pairs + tuple(
+        (origin, _current) for origin in _origins if origin != _current)
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -14850,6 +14864,14 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_CRON_PHASE_BINDING_PROFILE
         prepared_variants = REVIEWED_CRON_PHASE_BINDING_VARIANTS
+    if any(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == sha
+        for name, sha in REVIEWED_SCHEDULED_SUFFIX_CHANGED.items()
+        if sha != REVIEWED_SCHEDULED_SUFFIX_ORIGINS[name]
+    ):
+        prepared_hashes = REVIEWED_SCHEDULED_SUFFIX_PROFILE
+        prepared_variants = REVIEWED_SCHEDULED_SUFFIX_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present
