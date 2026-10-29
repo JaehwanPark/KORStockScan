@@ -23,10 +23,10 @@ from src.engine.scalping import continuous_reversal_operating_postclose as O
 
 
 def attach_completed_contexts(data_root, snapshots):
-    """Freeze causal REST prefixes after blind selection, before request IDs.
+    """Freeze causal REST prefixes before source-eligible blind selection.
 
-    Existing history is the producer for every confirmation, including events
-    that never reached AI or an order. No new REST call or outcome bar is used.
+    REST history is produced on demand, not for every confirmation. Missing
+    coverage remains explicit. No new REST call or outcome bar is used.
     """
     from datetime import datetime
     from src.trading.market import completed_history as H
@@ -110,6 +110,52 @@ def attach_completed_contexts(data_root, snapshots):
         if projected["status"] != "observed":
             source["entry_candle_source_gap"] = projected["reason"]
     return snapshots
+
+
+def qualify_completed_points(data_root, store, points, *, generation, code):
+    """Incremental source census before sampling; labels never enter the predicate.
+
+    Existing immutable object/checkpoint storage owns the derived evidence.
+    Only 256 snapshots are decoded at once; unchanged day/source generations
+    reuse compact receipts, including verified gaps. Never freeze a gap as
+    permanent merely because the daily DB had not yet been published.
+    """
+    from src.engine.scalping import reversal_auxiliary_production_input as M
+
+    for start in range(0, len(points), 256):
+        batch = points[start : start + 256]
+        pending, results = [], {}
+        for point in batch:
+            key = "auxiliary-completed-source:" + P.digest(
+                [point["snapshot_obj"], point["day"], generation[point["day"]], code]
+            )
+            cached = store.checkpoint(key)
+            if cached is not None:
+                results[point["opportunity_key"]] = cached
+            else:
+                pending.append((point, key, store.get(point["snapshot_obj"])))
+        from datetime import datetime
+
+        for point, _, snapshot in pending:
+            if (
+                datetime.fromtimestamp(snapshot[0]["epoch"], K.KST).date().isoformat()
+                != point["day"]
+            ):
+                raise ValueError("auxiliary_completed_point_day_changed")
+        attach_completed_contexts(data_root, [s for _, _, s in pending])
+        for point, key, snapshot in pending:
+            context = M.completed_candle_source(
+                snapshot[1].get("entry_candle_context"), snapshot[0]
+            )
+            receipt = dict(
+                status=context["status"],
+                reason=snapshot[1].get("entry_candle_source_gap") or context["reason"],
+                entry_candle_context=context["original_context"],
+            )
+            store.checkpoint(key, receipt)
+            results[point["opportunity_key"]] = receipt
+        for point in batch:
+            yield point, results[point["opportunity_key"]]
 
 
 def retained_source_inventory(data_root, machine, *, as_of, market=None):

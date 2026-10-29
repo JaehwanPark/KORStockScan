@@ -325,3 +325,48 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 기존 `HoldingProfitExitSourceContractRepair`가 다음을 계속 소유한다: 메인 세션에서 코드 통합·정책 인계·P5·실제 PID 소비, 승인된 장후 후보 설정의 native 승계, source2026-10-29 정규 장후20:10 이후 새 적격 분봉/paired 응답과 target2026-10-30 PREOPEN07:35/Main07:55~08:05 소비. 원천가용성이 확인되지 않은 표본은 다음 날로 미뤄 정상 처리하지 않고 원 날짜의 제외 상태를 유지한다. RFHIC49558의 기존 BUY 결손과 이번 역사 분봉 결손, 신규 생산자 결함은 서로 다른 분모로 기록한다. 아직 후보별 실제 경제성 개선이나 자연 수용을 주장하지 않는다.
 
 [배포 인계 지시문 및 검증 자료](../../data/audit/holding_source_repair/2026-10-29/HANDOFF.md). 원본과 연구 실패 시도는 `tmp/mcnex-source-repair-20261029` 및 `tmp/mcnex-postclose-completion-20261029`에 보존한다. 외부 Project/Calendar 동기화는 실행하지 않았으며 기존 표준 사용자 명령을 유지한다.
+
+## 11. 적격 원천 0건 원인 재분류와 자동 선정 정체 수리 — 2026-10-29
+
+Owner: `HoldingProfitExitSourceContractRepair`. 기준은 §10의 `c709099a04c160662e065f6d2e64bd043400b4f0`이며, 이번 범위는 source-only 수리·격리 검증·배포 인계다. Main 재기동, live 설정·정책, provider/주문 변경은 수행하지 않았다. [후속 배포 인계 및 전체 증거](../../data/audit/holding_source_repair/2026-10-29/source-gap-v2/HANDOFF.md).
+
+### 원인과 역사 결손
+
+기존 85개 표본의 적격0은 유지된다. 그러나 이를 전체 모집단의 원천0 또는 손절 실적 축적 필요로 해석한 것은 잘못이었다. REST minute history는 기존 요청 때만 생산되며 **모든 확인 신호의 생산자가 아니다**. §10의 범위 주장을 이 조사로 정정한다.
+
+| 기존85건 | 수 | 원천 기준 분류 |
+| --- | ---: | --- |
+| 이력 DB 부재 | 58 | 9/29·30,10/2·6·7·8. 저장소에 해당 producer가 처음 추가된 commit은10/9 `9dc8ac91e`. 해당 native revision은 현재 보존 원천에 없다. |
+| 같은 item 수집 부재 | 9 | 보존 DB의 전체 revision에 item이 없다. 새 날의 수집 결함과 동일 사건으로 합산하지 않는다. |
+| 다른 session에서 뒤늦게 수신 | 12 | REGULAR 확인 뒤 AFTER/CLOSED에 수집. session alias 결함이 아니며 장후 outcome 자료를 당시 feature로 사용할 수 없다. |
+| 같은 session 첫 수신이 확인 이후 | 3 | 당시 정보 가용성 위반이므로 소급 사용 불가. |
+| 최신 완료 suffix가 오래됨 | 3 | 10/21 11:06~11:14 확인에10:36까지의 봉만 존재. 결손 구간을 합성하지 않는다. |
+
+합계85. **보존된 native history에서 복구 가능한 당시 입력은0**이다. 사후 Kiwoom 조회로 과거 수신 시각·당시 revision을 만들 수 없다. 다만 DB 부재만으로 다른 모든 원본 archive까지 소실되었다고 단정하지 않는다. 대체 당시 원본이 발견되면 native 원천·item/session·수신 시각·hash를 검증한 새 세대로만 복원한다. 이 불확실성은 역사 결손 진단이며 신규 적격 원천의 연구를 막지 않는다.
+
+엠씨넥스10/29 확인08:05:28.575357과 첫 REST revision08:05:28.679는 서로 다른 시각이다. 실제 AI 단계에는 완료 분봉이 있었으나 확인 시각 replay에는 없었다. 이 자료를 확인 이전으로 옮기거나 임의0.1초 유예로 적격화하지 않는다. 실제 AI 단계 연구를 확장하려면 그 단계의 동결 입력·cutoff·원래 capture 계보를 별도로 사용해야 한다.
+
+### 재현된 구조 결함과 수리
+
+1. **원천 검사 전 표본 선정**: 결손의 낮은 hash 순위가 유효 표본의 연구 슬롯을 차지했다. `reversal_auxiliary_tuning.prepare`를 원천 적격성 확인→기존 seed/scope round-robin→동일 양측 request 순서로 변경했다. outcome으로 source를 고르지 않는다. 개발·충돌 제외, 예산, 기존 selector 경제성/유지 조건은 그대로다.
+2. **빈 campaign 영구 재사용**: 같은 machine/config/code 아래 original revision 복원이 있어도 준비 cache key가 바뀌지 않았다. native revision hash/scope/available 집합의 content generation을 cache에 결합했다. 없는 DB와 나중에 복원된 DB는 서로 다른 세대다. 미래에 수신된 자료는 generation이 바뀌어도 계속 제외한다.
+3. **쓰기 파일 한도를 읽기 전체 차단에 재사용**: 10/12 DB134,332,416byte와10/13 DB134,299,648byte가128MiB를 넘어서 cumulative reader가 `history_causal_database_unbounded`로 중단됐다. 이후 날짜가 늘어도 같은 과거 파일 때문에 반복되는 결함이다. writer의128MiB/범위 제한은 유지하고, reader는 indexed metadata의 실제 읽기량을 같은 한도 안에서 검사한다. 기존 named revision·원시 행 hash 검증 및5봉 projection을 유지했다.
+4. **전체 제외 근거와 성능**: 기존 comparison store에서256개 단위 source qualification/checkpoint를 재사용한다. gap preview는256개이며 전체 제외는 동일 store의 hash-bound chunk manifest로 보존하고 campaign intake/evaluation까지 전달한다. source/date/code 세대가 달라지면 재검증하고 source가 검사 도중 바뀌면 campaign 발행을 중단한다. 별도 DB·수집기·실시간 history 조회·provider 호출은 추가하지 않았다.
+
+### 실제 원천 재검증
+
+- 최신 native machine `fcd5ad61b9a6d4a8bd7af9a432955af4e2f334cd21f85c0a5b28b784df3b46ab`의 원41950 point를 확인했다. 기존85개 모두 이 원천 집합에 존재한다. 기존 campaign machine `3e849b7c…`와 최신 machine 세대는 구분해 보존했다.
+- 기존48 REGULAR scope: 현재 확인6313개 중 source 적격1. 10/26 HPSP036930_AL, key `17b43f431ee0e2ece6c02c0e27d943c27d3474a812b2405c3f84b11286683fd5`. 기존85 표본에서 누락됐다.
+- 제안128scope: 현재 확인10596개 중 source 적격148(PRE84/REGULAR1/AFTER63), DB 부재8156/당시 revision 부재1915/suffix·품질 결손377. 적격은6개 날짜(10/15·22·23·26·27·28)에 존재한다. **148은 source 적격 수이며 provider 비교 완료·선정된 정책 수가 아니다.**
+- 148개를 native materializer→v2 registry request까지 검증했다. original object와 frozen source·request hash는 private qualification store 및 증거 JSON에 보존했다. 기존85 원본, 실패 시도와 앞선 배포본은 변경하지 않았다.
+- 같은10596개 첫 qualification6.929초/동일 세대 재사용0.509초, process peak RSS136200KiB. DB physical bytes/실제 Main latency는 미측정. 둘 다 같은 source census이며 장중 성능 개선 주장으로 사용하지 않는다.
+
+### 리뷰·대체·검증 및 인계
+
+`implementation → self review → fixes → re-review`에서 빈 cache 영구화, 오래된 DB 전체 실패, v1 cache의 불필요한 재조회, 제외 근거의 무한 inline 증가와 point/date cache 결합을 보완했다. 실제 범위3개 기존 source owner·기존 test1개를 확장했고 새 module/worker/entrypoint는 없다. 기존 sample-first exclusion은 **replaced**, 물리 DB 크기 reader 차단은 **removed**, 동일 writer 한도/기존 source reader/하드 안전장치/v1 입력은 **retained**다. 현 배포본의 모든 기존 원천·매수/보유/손절 보완은 선행c709에 계속 포함된다.
+
+원 코드에서 starved/cached-zero 회귀2건 실패를 재현했다. 수리 후 해당 시험, 없는·미래·stale·다른 scope·conflict·복원 세대·4097 chunk·300개 제외 manifest·native paired request/evaluate를 검증했다. 198개 관련 시험 통과 후 최종 보완한 population/tuning 및 날짜 음성 시험을 재검증했다. 최종 수/로그·compile·ruff·diff·문서 검증과 source/test/doc 증감은 배포 manifest가 소유한다.
+
+의존성 disposition: raw/native history·machine calculation·원085 campaign은 `reuse/read-only revalidate`; 변경된 auxiliary preparation/source qualification/campaign/request/evaluation은 native owner로 `regenerate`; report/policy publisher→PREOPEN→PID는 그 결과에 따라 재준비·검증한다. 기존 성공한 다른 family 계산과 cleanup을 재실행하지 않는다. 원 연구 설정128scope·seed·max_pairs50·예산안은 source-code contract가 같으므로 그대로 인계하되 live config CAS/진행 writer를 다시 확인한다. source148개 발견만으로 후보를 live 채택하지 않는다.
+
+현재 checklist의 동일 owner와 source10/29 장후→10/30 PREOPEN/Main 창을 유지한다. 실제 자동 campaign의 적격 수/양측 완료/선정·incumbent 보존 사유, native 정책 인계·P5·배포 후 exact PID/observer/health, 새 BUY→signal→terminal→assembler와 비용 후 경제성은 각각 별도 수용이다. 일정 변경은 native calendar/schedule에 맞춰 인계 세션이 갱신한다.

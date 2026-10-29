@@ -380,7 +380,7 @@ def test_causal_history_population_never_borrows_future_or_wrong_scope(tmp_path,
         assert result["original_context"]["bars"][-1]["c"] == 101
 
 
-@pytest.mark.parametrize("available", [True, False])
+@pytest.mark.parametrize("available", [True, False, "starved", "many_gaps"])
 def test_completed_context_native_campaign_and_selection_consumer(
     tmp_path, monkeypatch, available
 ):
@@ -426,6 +426,27 @@ def test_completed_context_native_campaign_and_selection_consumer(
             snapshot_obj=store.put(snapshot),
         )
         points = [point]
+        if available in {"starved", "many_gaps"}:
+            # The lower blind rank used to spend the whole slot on a frozen gap.
+            gap = copy.deepcopy(snapshot)
+            gap[1]["entry_candle_context"] = None
+            gap_key = next(
+                str(i)
+                for i in range(10000)
+                if R.P.digest(["causal-test", str(i)])
+                < R.P.digest(["causal-test", point["opportunity_key"]])
+            )
+            points.append(
+                dict(
+                    point,
+                    opportunity_key=gap_key,
+                    snapshot_obj=store.put(gap),
+                    outcome=dict(status="FAIL_STOP"),
+                )
+            )
+        if available == "many_gaps":
+            for i in range(299):
+                points.append(dict(points[-1], opportunity_key="gap-extra-" + str(i)))
         obj = store.put(points)
     machine = R.P.seal(
         dict(
@@ -443,6 +464,7 @@ def test_completed_context_native_campaign_and_selection_consumer(
         candidate=candidate["registry_sha256"],
         scopes=scopes,
         seed="causal-test",
+        max_pairs=1,
     )
     campaign = T.prepare(tmp_path, day, machine, parent)
     if not available:
@@ -460,7 +482,30 @@ def test_completed_context_native_campaign_and_selection_consumer(
             report["completed_context_exclusions"]
             == campaign["completed_context_exclusions"]
         )
+        # Restoring an original as-of receipt invalidates a cached empty run.
+        history_prefix(tmp_path, snapshot[0])
+        recovered = T.prepare(tmp_path, day, machine, parent)
+        assert len(recovered["pairs"]) == 1
+        assert (
+            recovered["artifact_content_sha256"] != campaign["artifact_content_sha256"]
+        )
         return
+    assert len(campaign["pairs"]) == 1
+    assert campaign["pairs"][0]["opportunity_key"] == point["opportunity_key"]
+    if available == "starved":
+        assert len(campaign["completed_context_exclusions"]) == 1
+        assert (
+            campaign["selector"]["method"] == "source_eligible_scope_round_robin_sha256"
+        )
+    if available == "many_gaps":
+        assert len(campaign["completed_context_exclusions"]) == 256
+        assert (
+            sum(r["count"] for r in campaign["completed_context_exclusion_objects"])
+            == 300
+        )
+        assert len(campaign["completed_context_exclusion_objects"]) == 2
+        with S.Store(tmp_path) as store:
+            T.validate_campaign(store, campaign)
     with S.Store(tmp_path) as store:
         pair = campaign["pairs"][0]
         snap = store.get(pair["snapshot_obj"])
@@ -530,3 +575,106 @@ def test_cumulative_population_has_no_lifetime_batch_cap(tmp_path, monkeypatch):
     assert all(
         s[1]["entry_candle_source_gap"] == "history_database_absent" for s in snapshots
     )
+
+
+def test_completed_source_census_reuses_receipts_without_rest_reads(
+    tmp_path, monkeypatch
+):
+    from src.engine.ai import offline_comparison_store as S
+    from src.trading.market import completed_history as H
+
+    event = dict(
+        epoch=datetime(2026, 10, 29, 10, 5, 30, tzinfo=R.K.KST).timestamp(),
+        source_item="097520_NX",
+    )
+    history_prefix(tmp_path, event)
+    generation = H.causal_generation(tmp_path, ["2026-10-29"])
+    with S.Store(tmp_path) as store:
+        point = dict(
+            snapshot_obj=store.put([event, {}]), opportunity_key="one", day="2026-10-29"
+        )
+        first = list(
+            R.qualify_completed_points(
+                tmp_path, store, [point], generation=generation, code="reviewed"
+            )
+        )
+        monkeypatch.setattr(
+            H, "causal_prefixes", lambda *a: pytest.fail("unchanged prefix reread")
+        )
+        second = list(
+            R.qualify_completed_points(
+                tmp_path, store, [point], generation=generation, code="reviewed"
+            )
+        )
+        assert first == second
+        assert first[0][1]["status"] == "observed"
+
+
+def test_history_generation_does_not_borrow_later_originals(tmp_path):
+    from src.trading.market import completed_history as H
+
+    event = dict(
+        epoch=datetime(2026, 10, 29, 10, 5, 30, tzinfo=R.K.KST).timestamp(),
+        source_item="097520_NX",
+    )
+    missing = H.causal_generation(tmp_path, ["2026-10-29"])
+    history_prefix(tmp_path, event, received=event["epoch"] + 1)
+    assert H.causal_generation(tmp_path, ["2026-10-29"]) != missing
+    snapshot = [event, {}]
+    R.attach_completed_contexts(tmp_path, [snapshot])
+    assert snapshot[1]["entry_candle_context"] is None
+
+
+def test_indexed_reader_can_read_full_writer_but_keeps_read_budget(
+    tmp_path, monkeypatch
+):
+    from src.trading.market import completed_history as H
+    from src.trading.market.session_contract import resolve_market_session
+
+    event = dict(
+        epoch=datetime(2026, 10, 29, 10, 5, 30, tzinfo=R.K.KST).timestamp(),
+        source_item="097520_NX",
+    )
+    history_prefix(tmp_path, event)
+    path = H._path(tmp_path, dict(date="20261029"))
+    monkeypatch.setattr(H, "MAX_DATABASE_BYTES", 16000)
+    assert path.stat().st_size > H.MAX_DATABASE_BYTES
+    assert H.causal_generation(tmp_path, ["2026-10-29"])["2026-10-29"]
+    snapshot = [event, {}]
+    R.attach_completed_contexts(tmp_path, [snapshot])
+    assert snapshot[1]["entry_candle_context"] is not None
+    monkeypatch.setattr(H, "MAX_DATABASE_BYTES", 1)
+    with pytest.raises(ValueError, match="metadata_budget"):
+        H.causal_generation(tmp_path, ["2026-10-29"])
+    request = dict(
+        at=event["epoch"],
+        item=event["source_item"],
+        session=resolve_market_session(
+            datetime.fromtimestamp(event["epoch"], H.KST)
+        ).session_regime,
+    )
+    with pytest.raises(ValueError, match="metadata_budget"):
+        H.causal_prefixes(tmp_path, [request])
+
+
+def test_completed_point_day_cannot_reuse_another_dates_generation(tmp_path):
+    from src.engine.ai import offline_comparison_store as S
+
+    event = dict(
+        epoch=datetime(2026, 10, 29, 10, 5, 30, tzinfo=R.K.KST).timestamp(),
+        source_item="097520_NX",
+    )
+    with S.Store(tmp_path) as store:
+        point = dict(
+            snapshot_obj=store.put([event, {}]), opportunity_key="one", day="2026-10-28"
+        )
+        with pytest.raises(ValueError, match="point_day_changed"):
+            list(
+                R.qualify_completed_points(
+                    tmp_path,
+                    store,
+                    [point],
+                    generation={"2026-10-28": None},
+                    code="reviewed",
+                )
+            )

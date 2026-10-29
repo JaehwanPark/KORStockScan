@@ -173,6 +173,38 @@ def read(root, identity, *, now, limit, include_forming=True, revision=None):
         return None
 
 
+def causal_generation(root, days):
+    """Identity of available immutable revisions; absence is not a permanent cache.
+
+    Read metadata only, once per date. Never expose private scope identifiers.
+    A newly imported original revision invalidates a cached empty campaign.
+    """
+    generations = {}
+    for day in sorted(set(days)):
+        parsed = datetime.strptime(day, "%Y-%m-%d")
+        path = _path(root, dict(date=parsed.strftime("%Y%m%d")))
+        if not path.exists():
+            generations[day] = None
+            continue
+        with closing(
+            sqlite3.connect(
+                path.absolute().as_uri() + "?mode=ro", uri=True, timeout=0.025
+            )
+        ) as db:
+            fingerprint = hashlib.sha256()
+            read_bytes = 0
+            for row in db.execute(
+                "SELECT hash,scope,available FROM revisions ORDER BY hash"
+            ):
+                raw = _bytes(row) + b"\n"
+                read_bytes += len(raw)
+                if read_bytes > MAX_DATABASE_BYTES:
+                    raise ValueError("history_causal_metadata_budget")
+                fingerprint.update(raw)
+            generations[day] = fingerprint.hexdigest()
+    return generations
+
+
 def causal_prefixes(root, requests):
     """Read bounded, as-of completed prefixes for an outcome-blind reservoir.
 
@@ -205,8 +237,6 @@ def causal_prefixes(root, requests):
         path = _path(root, dict(date=day))
         if not path.exists():
             continue
-        if path.stat().st_size > MAX_DATABASE_BYTES:
-            raise ValueError("history_causal_database_unbounded")
         with closing(
             sqlite3.connect(
                 path.absolute().as_uri() + "?mode=ro", uri=True, timeout=0.025
@@ -214,9 +244,13 @@ def causal_prefixes(root, requests):
         ) as db:
             db.execute("BEGIN")
             scopes = defaultdict(list)
+            read_bytes = 0
             for scope, revision, raw in db.execute(
                 "SELECT c.scope,r.hash,r.manifest FROM current c JOIN revisions r ON c.revision=r.hash"
             ):
+                read_bytes += len(raw)
+                if read_bytes > MAX_DATABASE_BYTES:
+                    raise ValueError("history_causal_metadata_budget")
                 manifest = _unpack(raw)
                 identity = manifest["identity"]
                 if _digest(manifest) != revision or _digest(identity) != scope:
@@ -231,16 +265,22 @@ def causal_prefixes(root, requests):
                 found = []
                 for scope, identity in scopes[request["item"], request["session"]]:
                     selected = db.execute(
-                        "SELECT hash,available,manifest FROM revisions WHERE scope=? AND available<=? "
+                        "SELECT hash,available FROM revisions WHERE scope=? AND available<=? "
                         "ORDER BY available DESC,hash LIMIT 1",
                         (scope, at),
                     ).fetchone()
                     if selected is None:
                         continue
-                    revision, available, raw = selected
-                    manifest = _unpack(raw)
+                    revision, available = selected
                     key = (scope, revision)
                     if key not in cache:
+                        raw = db.execute(
+                            "SELECT manifest FROM revisions WHERE hash=?", (revision,)
+                        ).fetchone()[0]
+                        read_bytes += len(raw)
+                        if read_bytes > MAX_DATABASE_BYTES:
+                            raise ValueError("history_causal_metadata_budget")
+                        manifest = _unpack(raw)
                         # Use the existing hash-validating reader; cache only an
                         # immutable five-row prefix, never a mutable latest view.
                         cache[key] = read(

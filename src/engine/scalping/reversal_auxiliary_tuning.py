@@ -255,10 +255,16 @@ def prepare(data_root, day, machine, parent, *, research=None):
     context_required = any(
         G.load(data_root, ident).get("production_input_contract", {}).get("version")
         == M.CANDLE_VERSION
-        for ident in {cfg["candidate_registry"], *current.values()}
+        for ident in {
+            cfg["candidate_registry"],
+            *(current[s] for s in cfg["scopes"] if s in current),
+        }
     )
     context_code = (
-        {Path(m.__file__).name: P.file_hash(m.__file__) for m in (population, history)}
+        {
+            Path(m.__file__).name: P.file_hash(m.__file__)
+            for m in (population, history, M)
+        }
         if context_required
         else {}
     )
@@ -274,6 +280,27 @@ def prepare(data_root, day, machine, parent, *, research=None):
         from src.engine.scalping import reversal_cumulative_postclose as materializer
 
         materializer_hash = P.file_hash(materializer.__file__)
+
+        def load_points():
+            for part in machine["partitions"]:
+                points = store.get(part["records_object"])
+                if P.digest(points) != part["records_sha256"]:
+                    raise ValueError("auxiliary_tuning_partition_changed")
+                for p in points:
+                    ident = p["opportunity_key"]
+                    if ident in seen:
+                        if P.digest(seen[ident]) != P.digest(p):
+                            conflicting.add(ident)
+                        continue
+                    seen[ident] = p
+
+        if context_required:
+            load_points()
+        context_generation = (
+            history.causal_generation(data_root, {p["day"] for p in seen.values()})
+            if context_required
+            else {}
+        )
         prep_key = "auxiliary-prepare:" + P.digest(
             [
                 day,
@@ -285,6 +312,7 @@ def prepare(data_root, day, machine, parent, *, research=None):
                 P.file_hash(__file__),
                 materializer_hash,
                 context_code,
+                context_generation,
             ]
         )
         cached = store.checkpoint(prep_key)
@@ -292,17 +320,8 @@ def prepare(data_root, day, machine, parent, *, research=None):
             validate_campaign(store, cached)
             P.write(out / "latest-campaign.json", cached)
             return cached
-        for part in machine["partitions"]:
-            points = store.get(part["records_object"])
-            if P.digest(points) != part["records_sha256"]:
-                raise ValueError("auxiliary_tuning_partition_changed")
-            for p in points:
-                ident = p["opportunity_key"]
-                if ident in seen:
-                    if P.digest(seen[ident]) != P.digest(p):
-                        conflicting.add(ident)
-                    continue
-                seen[ident] = p
+        if not context_required:
+            load_points()
         for ident, p in seen.items():
             census["eligible_universe"] += 1
             census["outcome_" + p["outcome"]["status"]] += 1
@@ -340,6 +359,86 @@ def prepare(data_root, day, machine, parent, *, research=None):
                         census["typed_candidate_incompatible"] += 1
                         continue
                 choices[p["scope"]].append((P.digest([cfg["seed"], ident]), p))
+        context_exclusions = []
+        context_exclusion_objects = []
+        completed_sources = {}
+        source_coverage = {}
+        if context_required:
+            source_points = [p for values in choices.values() for _, p in values]
+            # Point dates are authoritative even for research partitions that
+            # deliberately omit normalized_source metadata.
+            point_generation = {
+                d: context_generation[d] for d in {p["day"] for p in source_points}
+            }
+            required_scopes = {
+                sid
+                for sid in choices
+                if any(
+                    G.load(data_root, ident)
+                    .get("production_input_contract", {})
+                    .get("version")
+                    == M.CANDLE_VERSION
+                    for ident in (current[sid], cfg["candidate_registry"])
+                )
+            }
+            accepted = defaultdict(list)
+            exclusion_batch = []
+            for p, receipt in population.qualify_completed_points(
+                data_root,
+                store,
+                source_points,
+                generation=point_generation,
+                code=context_code,
+            ):
+                sid = p["scope"]
+                if sid in required_scopes and receipt["status"] != "observed":
+                    reason = receipt["reason"]
+                    census["completed_candle_source_gap:" + reason] += 1
+                    exclusion = dict(
+                        opportunity_key=p["opportunity_key"],
+                        reason=reason,
+                        source_snapshot_obj=p["snapshot_obj"],
+                    )
+                    if len(context_exclusions) < 256:
+                        context_exclusions.append(exclusion)
+                    exclusion_batch.append(exclusion)
+                    if len(exclusion_batch) == 256:
+                        context_exclusion_objects.append(
+                            dict(
+                                object=store.put(exclusion_batch),
+                                count=len(exclusion_batch),
+                                sha256=P.digest(exclusion_batch),
+                            )
+                        )
+                        exclusion_batch = []
+                    continue
+                accepted[sid].append((P.digest([cfg["seed"], p["opportunity_key"]]), p))
+                completed_sources[p["opportunity_key"]] = receipt
+                census["completed_candle_source_eligible"] += 1
+            if exclusion_batch:
+                context_exclusion_objects.append(
+                    dict(
+                        object=store.put(exclusion_batch),
+                        count=len(exclusion_batch),
+                        sha256=P.digest(exclusion_batch),
+                    )
+                )
+            if (
+                history.causal_generation(data_root, point_generation)
+                != point_generation
+            ):
+                raise ValueError("auxiliary_completed_source_generation_changed")
+            source_coverage = dict(
+                population="source_eligible_confirmations_not_all_opportunities",
+                candidate_confirmations=len(source_points),
+                eligible_confirmations=sum(len(v) for v in accepted.values()),
+                excluded_confirmations=sum(
+                    r["count"] for r in context_exclusion_objects
+                ),
+                exclusion_preview_limit=256,
+                complete_exclusion_owner="completed_context_exclusion_objects",
+            )
+            choices = accepted
         for values in choices.values():
             values.sort(key=lambda v: v[0])
         # Source-day rotation; scope and within-scope selection ignore labels.
@@ -356,7 +455,11 @@ def prepare(data_root, day, machine, parent, *, research=None):
         selector = dict(
             seed=cfg["seed"],
             scope_order=scopes,
-            method="scope_round_robin_sha256",
+            method=(
+                "source_eligible_scope_round_robin_sha256"
+                if context_required
+                else "scope_round_robin_sha256"
+            ),
             scope_population={s: len(v) for s, v in choices.items()},
             selected_keys=[p["opportunity_key"] for p in selected],
         )
@@ -415,8 +518,10 @@ def prepare(data_root, day, machine, parent, *, research=None):
                 snapshot_obj = p["snapshot_obj"]
             prepared.append((p, snap, snapshot_obj))
         if context_required:
-            population.attach_completed_contexts(data_root, [s for _, s, _ in prepared])
-        context_exclusions = []
+            for p, snap, _ in prepared:
+                snap[1]["entry_candle_context"] = completed_sources[
+                    p["opportunity_key"]
+                ]["entry_candle_context"]
         for p, snap, original_obj in prepared:
             sid, old = p["scope"], current[p["scope"]]
             if context_required and any(
@@ -430,18 +535,7 @@ def prepare(data_root, day, machine, parent, *, research=None):
                     snap[1].get("entry_candle_context"), snap[0]
                 )
                 if observed["status"] != "observed":
-                    reason = (
-                        snap[1].get("entry_candle_source_gap") or observed["reason"]
-                    )
-                    census["completed_candle_source_gap:" + reason] += 1
-                    context_exclusions.append(
-                        dict(
-                            opportunity_key=p["opportunity_key"],
-                            reason=reason,
-                            snapshot_obj=store.put(snap),
-                        )
-                    )
-                    continue
+                    raise ValueError("auxiliary_completed_selected_source_changed")
             snapshot_obj = store.put(snap) if context_required else original_obj
             pair = dict(
                 scope=sid,
@@ -494,6 +588,9 @@ def prepare(data_root, day, machine, parent, *, research=None):
             input_materializer_code_sha256=materializer_hash,
             completed_context_code_sha256=context_code,
             completed_context_exclusions=context_exclusions,
+            completed_context_exclusion_objects=context_exclusion_objects,
+            completed_context_generation=context_generation,
+            completed_context_coverage=source_coverage,
             eligible_census=dict(census),
             not_sampled_budget=sum(map(len, choices.values())) - len(selected_all),
             pairs=pairs,
@@ -534,6 +631,10 @@ def validate_campaign(store, campaign):
         or campaign.get("schema") != SCHEMA
     ):
         raise ValueError("auxiliary_campaign_changed")
+    for receipt in campaign.get("completed_context_exclusion_objects", []):
+        excluded = store.get(receipt["object"])
+        if len(excluded) != receipt["count"] or P.digest(excluded) != receipt["sha256"]:
+            raise ValueError("auxiliary_completed_exclusion_changed")
     rows = list(store.owners(campaign["artifact_content_sha256"]))
     expected = {
         (p["opportunity_key"], role, rid, p["outcome"]["status"])
@@ -1145,6 +1246,10 @@ def evaluate(data_root, day, *, campaign_path=None):
             population_claim="completed_common_pairs_only",
             eligible_census=c["eligible_census"],
             completed_context_exclusions=c.get("completed_context_exclusions", []),
+            completed_context_exclusion_objects=c.get(
+                "completed_context_exclusion_objects", []
+            ),
+            completed_context_coverage=c.get("completed_context_coverage", {}),
             not_sampled_budget=c["not_sampled_budget"],
             state="evaluated",
             call_limit=c["call_limit"],
