@@ -104,3 +104,39 @@ does not close its missing closed-generation issuer, historical physical-identit
 readers and rollback intake. `PrePostcloseStorageSequencing` retains plaintext
 until original/index/archive generations and every required consumer plus current
 FD/writer checks are verified. No unverified unlink or reclaimed bytes are claimed.
+
+
+### Scoped lifetime integration - 2026-10-29
+
+The user additionally authorized ordered integration of `110ecded1`, `39f241977`,
+and `000442d9a` over the current candidate. Their source changes are retained
+without reverting the startup/storage/candle repairs. The native lifetime
+transition retains the exact active parent and unchanged auxiliary/branch
+selection; the supplied 128 scope policies set branch-specific processing
+budgets of 8.4, 8.7 or 9.6 seconds with the original five-second default for
+unissued branches. These are operator initial budgets, not observed signal
+survival or economic evidence. Native invalidation removes an original claim
+while AI is pending; later signals cannot resurrect that claim. Existing quote,
+account, custody, order and physical-send guards retain authority.
+
+Standalone startup/storage and scoped-entry profiles remain historical readers.
+A complete combined inventory now owns the final candidate and independent
+preparation reader. Missing, dirty, mixed and unknown members fail closed.
+The four report-only fixture generations are invalidated by the changed shared
+contract and must be issued through their existing native owners. They are not
+new startup safety or economic gates. Source-only trailing regeneration resumes
+its verified copy checkpoint; the first admission attempt ran no calculation
+and the next bounded step stopped at its native copy checkpoint.
+
+Replacement map: the three imported commits extend existing deadline, native
+state/claim and policy publication owners; no new scheduler, subscription,
+provider, engine-root module or forwarding wrapper is introduced. Old runtime
+paths remain required for original five-second signals and sealed predecessor
+readers. Original source gaps, costs/null and cleanup protections remain.
+
+Code review, targeted regression and complete profile intake precede immutable
+commit, report-currentness issuance, active-parent handoff/parity and candidate
+P5. Selection/preparation is followed by selected P5, actual PID consumption and
+its first native observer/health. Only then may the same-day lifetime policy
+be activated through the explicit native transition and checked against the
+actual PID. Tonight's EOD/stop/cleanup/postclose sequence remains separately OPEN.
