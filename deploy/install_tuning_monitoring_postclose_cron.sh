@@ -13,7 +13,7 @@ mv "$TMP_CRON.filtered" "$TMP_CRON"
 
 cat >> "$TMP_CRON" <<EOF
 # tuning monitoring parquet/DuckDB postclose sync
-10 20 * * 1-5 TUNING_MONITORING_PREDECESSOR_WAIT_SEC=43200 bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner tuning_monitoring_postclose_cron --log $PROJECT_DIR/logs/tuning_monitoring_postclose_cron.log $RUNNER \$(TZ=Asia/Seoul date +\\%F) # TUNING_MONITORING_POSTCLOSE
+30 20 * * 1-5 TUNING_MONITORING_PREDECESSOR_WAIT_SEC=43200 bash $PROJECT_DIR/deploy/run_with_owned_log.sh --owner tuning_monitoring_postclose_cron --log $PROJECT_DIR/logs/tuning_monitoring_postclose_cron.log $RUNNER \$(TZ=Asia/Seoul date +\\%F) # TUNING_MONITORING_POSTCLOSE
 EOF
 
 crontab "$TMP_CRON"

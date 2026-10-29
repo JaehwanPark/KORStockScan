@@ -1520,7 +1520,7 @@ def test_generation_warning_has_one_current_owner_without_borrowing_prior_day(
         and task.title.startswith(f"[{task_id}]")
     ]
     assert len(parsed) == 1
-    assert result["manual_task_reuse_count"] == int(manual_on_target)
+    assert result["manual_task_reuse_count"] == 1
     if manual_on_target:
         assert manual in text
     else:
@@ -1950,6 +1950,7 @@ def test_semantic_owners_survive_rollover_without_reopening_completed_work(
         "holding_profit_exit": "HoldingProfitExitSourceContractRepair",
         "initial_quantity": "InitialQuantityProducerConsumerRepair1010",
         "market_weakness": "MainMarketWeaknessPostcloseObservation1008",
+        "operational": "PrePostcloseStorageSequencing",
     }
     source = mod.stage2_checklist_path(day)
     source.parent.mkdir(parents=True, exist_ok=True)
@@ -1986,7 +1987,7 @@ def test_semantic_owners_survive_rollover_without_reopening_completed_work(
         )
         if expected_open:
             assert "missing cost stays null" in first and "original failure" in first
-            if stage != "market_weakness":
+            if stage not in {"market_weakness", "operational"}:
                 alert = dict(stage=stage, owner=stage)
                 _project_semantic_owner(alert, current, target)
                 assert (

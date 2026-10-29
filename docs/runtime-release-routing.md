@@ -69,6 +69,29 @@ A reviewed native-code repair whose source hashes differ from the active policy 
 
 An explicitly blocked initial PREOPEN Main may have native bootstrap/PID consumption but no intraday handoff. The ordered owner may adopt `operator_incident_startup_hold_v1` only with the caller's exact `operator_hold_sha256`, original selector/PID/start/cwd, the original live bootstrap verification, and the collector pin captured before the cooperative stop plus its native closed receipts. Missing proof preserves the hold. Snapshot original verification sources before preparation can advance mutable verification outputs; retain the original hold bytes. Complete candidate checks and P5 before compare-and-swap transfer to the normal ordered hold. Process absence or a new no-PID check is not live consumption. Use the existing drain/publish/prepare/validate/start/attest sequence and failure unwind; never manually delete the hold or infer flat inventory from shutdown.
 
+
+A clean candidate's P5 may validate that operator-stopped native PREOPEN origin
+through `closed_predecessor_review`. The prepared-generation reader must carry
+its authenticated closed observation into the independent startup policy loader,
+including original source hashes, actor identity and manifest, and repeat the
+native proof after full verification. Use the distinct closed-native preservation
+basis with historical consumption verified and actual PID consumption false.
+The normal live-PID reader remains unchanged. Missing or changed closure evidence
+fails; do not skip policy loading, invent a current PID receipt or renew a launch
+window. Candidate validation alone never authorizes release selection or hold
+transfer.
+
+Normalized trailing reuse copies retain the existing512MiB per-invocation batch and native combined disk budget. A sealed copy checkpoint binds the original approved source inventory and current code generation; resume only after source/destination identity and byte checks. Partial copies never publish a manifest or currentness receipt. Interrupted/changed/corrupt inputs preserve their failed evidence; continue only the bounded remaining copy before full native replay and report verification.
+
+
+For closed-source trailing preparation, `main_trailing_source_reuse` may stop at
+its existing per-invocation copy-byte budget with `trailing_reuse_copy_checkpoint_pending`.
+Resume only the same native preparation after verifying its sealed source/code
+inventory and copied source/target identities. Preserve the partial attempt and
+checkpoint; never increase the byte budget, rewrite the original manifest or
+start replay before the complete consumer manifest is published. The final native
+report/currentness and candidate/P5 consumers still verify the resulting generation.
+
 Candidate P5 may verify an explicitly held native PREOPEN predecessor after collector closure through the existing closed-predecessor review. The readiness reader and isolated Main preparation reader must bind the original PID/start/cwd, unchanged selector, original consumption/collector/source hashes and full bootstrap. Historical consumption remains true while current/new PID consumption remains false; revalidate the same closed proof at the end. Ordinary readers without that authenticated scope still require live consumption, and subsequent selected P5 and actual successor PID checks remain mandatory.
 
 Signal-clock integration retains the issued evaluation owner across NOT_SENT retries and unknown/in-flight outcomes. Register the complete merged source profile in both the handoff and independent preparation reader; retain immutable predecessor profiles. Validate actual native admission and hold transfer before rereading closed custody, and issue final candidate and selected P5 against that exact merged commit.
@@ -184,24 +207,29 @@ bash deploy/run_runtime_release.sh --check-cron
 
 Use the actual target date instead of the example. A plan check proves routing, not future policy approval, WS health or a running PID.
 
-Owned scheduled route failures before wrapper admission are appended as
-`[ROUTE_FAILURE]` records to that existing owner's log, with requested date,
-router source, PID and bounded reason. Preserve stderr and nonzero exit; a log
-record does not create a START/completion marker or retry the job. Print-only
-plans remain read-only, and a refused evidence write remains visible on stderr.
-Install the exact reviewed workspace router only at the idle, locked transition
-boundary after comparing its incumbent bytes.
-
 ## Scheduled scope and maintenance
 
-Eight cron entrypoints use the selection: 07:35 PREOPEN threshold, 07:55 main start, 20:05 EOD, 20:10 postclose/controller/tuning, 20:50 archive and 05:35 next-KRX-session finalization. Main and archive wrappers validate the exact-date EOD terminal before resource-heavy work. The finalizer resolves the immediately prior KRX trading date from the effective date, skips non-trading effective dates, stops predecessor waiting at 06:00 and bounds cleanup/detector completion by 06:50, leaving 30 minutes before the 07:20 PREOPEN scanner. The 21:05 paired replay wrapper is manual compatibility; the main wrapper owns the current auxiliary calculation. The cron check requires all eight installed owners. Existing environment values, log ownership/redirection and wrapper locks are preserved. Existing 07:30/20:10 stop behavior is unchanged; routing is not a redesign of shutdown semantics. Other Main intraday observer/scanner jobs retain their separate owners. Dedicated retired services, timers and IPO auto-order cron are removed.
+Nine cron entrypoints use the selection: 07:35 PREOPEN threshold, 07:55 main start, 20:05 EOD, 20:10 cooperative postclose stop and bounded cleanup, 20:30 postclose/controller/tuning, 20:50 archive and 05:35 next-KRX-session finalization. Main and archive wrappers validate the exact-date EOD terminal before resource-heavy work. The finalizer resolves the immediately prior KRX trading date from the effective date, skips non-trading effective dates, stops predecessor waiting at 06:00 and bounds cleanup/detector completion by 06:50, leaving 30 minutes before the 07:20 PREOPEN scanner. The 21:05 paired replay wrapper is manual compatibility; the main wrapper owns the current auxiliary calculation. The operational cron check requires all nine installed owners. Existing environment values, log ownership/redirection and wrapper locks are preserved. The 07:30 legacy stop remains separate; the 20:10 stop uses the native stop-only transition and verifies collector closure before calculation. Other Main intraday observer/scanner jobs retain their separate owners. Dedicated retired services, timers and IPO auto-order cron are removed.
+
+The normal installer migrates only recognized owned postclose/controller/tuning
+rows from20:10 to20:30, adds the routed20:10 stop-only owner when absent, and
+rejects unknown schedules or an active one-day override. The read-only check
+requires that final order without installing it. Stop failure, unclosed collectors
+or incomplete cleanup still block calculation; original stage deadlines and all
+other scheduled owners remain unchanged. The dated one-day mechanism below is
+historical compatibility and cannot duplicate an installed permanent stop owner.
 
 An explicitly authorized one-day postclose delay uses the existing cron router's
 `--install-postclose-delay-once` and `--restore-postclose-delay-once` modes. The
-owner records the original and installed cron rows and selection identity,
+owner records the original and installed cron rows, selection identity and an
+immutable raw selection snapshot before publication,
 verifies installation with compare-and-swap, and schedules bounded restoration
 of its own rows while preserving unrelated edits. The cron detector accepts the
 later start only while the issued receipt, producer and installed schedule agree;
+its original selection is authenticated as of installation, rather than requiring
+a mutable current selector to retain historical bytes. Legacy receipts may use
+the exact same-date native transition backup; no missing identity is inferred.
+
 missing or changed evidence is not a successful start and the original completion
 deadlines remain in force. This scheduling facility does not stop Main, run
 pre-postclose cleanup, or establish collector closure. Those require their own
@@ -215,7 +243,7 @@ The cron completion detector checks the finalizer and its cleanup against the im
 
 The widget-evaluation, episode final-refresh and owner-policy timers/installers are removed. Main postclose dispatch owns six stages: machine policy, pre-submit delay, legacy Main report, auxiliary policy, outcome labels and summary handoff. Optional Samsung diagnostics are report-only sidecars. Retired output absence is not a current startup or policy gap.
 
-After an authorized cron installer is run, check routing again: older installers can recreate workspace entrypoints. `bash deploy/run_runtime_release.sh --install-cron` reconciles the eight mandatory pipeline rows and all three intraday snapshot rows, preserves unrelated rows and leading environment/log redirections (including main start), creates before/after backups in `tmp/runtime-release-cron-*`, rejects missing/duplicate/unrecognized commands and verifies readback. It recognizes an actual command owner, not an echo/printf/conditional containing the route. Scheduled `--print-plan` and unexpected extra arguments are rejected; dated jobs retain the existing KST cron date expression. Unsupported command syntax requires review, not an automatic rewrite. `--check-cron` only reads the current snapshot and does not create or wait on an installer lock. Installation uses a nonblocking lock; do not run it concurrently with another crontab editor. Direct out-of-band edits after its final recheck cannot be atomically prevented by the crontab interface.
+After an authorized cron installer is run, check routing again: older installers can recreate workspace entrypoints. `bash deploy/run_runtime_release.sh --install-cron` reconciles the nine mandatory pipeline rows and all three intraday snapshot rows, preserves unrelated rows and leading environment/log redirections (including main start), creates before/after backups in `tmp/runtime-release-cron-*`, rejects missing/duplicate/unrecognized commands and verifies readback. It recognizes an actual command owner, not an echo/printf/conditional containing the route. Scheduled `--print-plan` and unexpected extra arguments are rejected; dated jobs retain the existing KST cron date expression. Unsupported command syntax requires review, not an automatic rewrite. `--check-cron` only reads the current snapshot and does not create or wait on an installer lock. Installation uses a nonblocking lock; do not run it concurrently with another crontab editor. Direct out-of-band edits after its final recheck cannot be atomically prevented by the crontab interface.
 
 Ordered deployment keeps already-existing native source-index readonly connections resident across Main drain, launch and exact PID attestation. The existing source owner checks paths/ownership; at most six current-day/global namespaces claim2MiB each. It opens no read transaction, creates no missing index, reads no raw history and changes no busy/quote/startup deadline. Pin failure leaves Main undrained; success/failure closes all pins. This prevents concurrent cold WAL recovery between the final old client and the new Main/launcher. Original failed transitions and owned holds remain subject to the documented phase-specific recovery.
 
@@ -244,18 +272,6 @@ A preserved intraday PREOPEN scope keeps its original label. P5 may delegate the
 The parent records successful native bundle loading and semantic validation boundaries: an intraday preserved generation can validate an already-read bundle. A rejected native validation never contributes a successful closure, and the original source, inventory and isolation checks remain required.
 
 The child requires unprivileged Linux Landlock and seccomp, closes inherited control descriptors and permits writes only in its private run directory. Native source/code/policy validation remains mandatory. A denied side effect, invalid or incomplete consumer, identity mismatch, timeout, changed input or surviving worker fails the validation; exit zero alone is insufficient. Results live under `data/report/main_startup_validation/<target>/<run-id>/final.json`. They always retain `actual_pid_consumed=false`, `allowed_runtime_apply=false` and `runtime_effect=false` and never replace the operating bootstrap/PID or observer receipts.
-
-Indexed stop proof keys may retain a physical gzip spelling. Resolve its native
-logical identity before comparing source stats or reading the isolated proof;
-retain the original key and exact gzip/receipt/database/WAL identities. Unknown
-or ambiguous aliases remain unbound; this never decompresses source in Main's
-isolated validation child.
-
-For indexed stop inputs, establish the native readonly SQLite reader before
-sealing physical source/database/WAL identities. SQLite can create an empty WAL
-on the first readonly open; subsequent index, WAL and source changes still fail
-the original binding and isolated consumer checks. This is an O(1) metadata
-preparation step, with no raw scan, retry or mutation of a generation.
 
 Before deployment, invoke the same module from the clean reviewed candidate with `--workspace <canonical-workspace> --target-date <date> --candidate-root <that-candidate-root>`. The candidate must already have the normal shared mounts and source validation. This does not publish a selector or issue an operating code handoff. Parent validation preserves the exact original prepared-policy code lineage, including authenticated historical origin receipts, then seals the reviewed source delta for a read-only child context. The context cannot be installed outside OS isolation and has no operating authority. Day-specific PREOPEN activation and real Main PID consumption retain their existing owners and checks. See the [plan and implementation boundaries](proposals/main-policy-load-and-exit-validation-plan-2026-10-18.md).
 
@@ -367,6 +383,8 @@ The ordered driver preserves the editable shared checklist throughout deployment
 
 An already-consumed legacy handoff can use its sealed historical checklist only while its exact consumed PID/start/cwd, selector, manifest, original policy and source hashes still verify. If the incumbent reader rejects a later editable-document change or never-consumed observation tail, the immutable candidate may run the full read-only `--verify-predecessor` check before drain. Exact reviewed source pairs and all native bootstrap/auxiliary validation remain mandatory. Active-policy compatibility also requires the separately issued immutable candidate receipt, its exact incumbent selector/root/commit, current PID and unchanged pointer/source/code hashes; the read-only context cannot escape into ordinary execution. Preserve the old failure log; this result never attests candidate PID consumption. Full postclose research remains strict. A carried stop policy with no selected cells and no consumed vote sources may exclude only complete native holding observations strictly later than its source date; existing consumed inputs, earlier-date rows, replacement, partial rows and unknown files still fail. New watch bindings seal original decoded prefixes; legacy unused prefixes have no historical hash and are not claimed byte-verified. See the [integration review](audits/main-postdeployment-policy-source-binding-repair-2026-10-15.md).
 
+A preserved intraday preparation may carry the original strict checklist bytes in its verified `operating_checklist` launch snapshot. The preparation reader binds that role, target/source date, original strict digest and actual non-symlink bytes before using the existing sealed-generation source check. An edited current checklist cannot replace those bytes. Missing, changed or mismatched snapshots fail closed; full bootstrap and auxiliary verification still run. This does not reseal postclose or grant policy/start authority.
+
 For the first intraday deployment after native PREOPEN, verify the incumbent with `intraday_release_handoff --verify --target-date <day> --pid <live-pid>`. An intraday handoff for that native commit need not exist. The ordered driver seals this actual live verification and exact manifest/env/PREOPEN/prepared hashes into its immutable `native-predecessor.json` before requesting termination. It also preserves the current strict-bound checklist bytes before publication: a PREOPEN-generated dated document may be absent from the original release Git tree. Preparation can use only that exact verified snapshot if Git bytes are absent; missing/corrupt snapshots fail closed. Stopped preparation and successor verification require the same proof path/hash, original selector, PID/start/cwd, date, source generation and original native commit. Missing proof fails closed; no historical intraday consumption is manufactured. Subsequent intraday transitions continue to require the predecessor's actual consumed handoff. Both paths keep graceful stop before selector publication and the normal new-PID/bootstrap checks.
 
 The native readiness/claim delivery and local AI timing repair is admitted by reviewed original-to-candidate file hash pairs in `intraday_release_handoff.REVIEWED_ENTRY_CONSUMER_SOURCES`. The shared-deadline latency repair adds separate exact pairs in `REVIEWED_ENTRY_LATENCY_SOURCES` and `REVIEWED_ENTRY_BOUNDARY_SOURCES`, retaining the predecessor pairs. This includes the actual timeout/failure timing path and cache-clock isolation. The final synchronous provider guard uses a fresh loader-owned immutable view and one signature pass; all existing native/registry/model/revocation checks execute and pointer/path custody is rechecked before the view closes. The pass never spans provider I/O or response/submit validation. Native load, claim and auxiliary timing are children of the aggregate final-guard interval, not additive top-level durations. Source-only capacity request budgets, freshness and required live sizing remain unchanged. The pre-stop candidate check verifies those exact bytes against the original delay-policy code contract; any further source change needs another reviewed pair. This code-only handoff does not alter source/quote age, the original entry deadline, policy membership, provider selection, custody or order guards. See [deployment review](audits/main-native-readiness-deployment-review-2026-10-12.md) and [latency review](audits/main-entry-auxiliary-shared-deadline-latency-implementation-review-2026-10-13.md). Incumbent bootstrap and candidate delay-code/auxiliary-reader preflight must pass before draining the incumbent; full bootstrap and source-exact checks run again after selection and for the actual successor PID.
@@ -416,6 +434,15 @@ raw/scoped profiles and receipts for their original consumers. Code deployment
 and unchanged-parent P5 do not prove A09 selection, new-policy startup or a full
 source-day postclose chain.
 
+
+The current ordered CLI pins candidate P5; it does not install the optional
+selected-validation callback. The approved transition workflow must invoke the
+existing `execute(driver, validate_prepared=...)` hook and run native
+`main_startup_validation.run_validation` against the final selected/prepared
+generation before `start`. A failed selected P5 stops the native transition.
+Post-start validation is recovered proof and cannot establish the omitted
+pre-start ordering. Preserve the original omission and its later verification.
+
 The observer validates the canonical ordered deployment transition before publication. During selected/prepared/starting it retains the exact frozen predecessor and incident state, skips calculation and notification, and returns deferred (75). The wrapper records DEFERRED without DONE, a cooldown update, or recovery of any earlier failure. A changed or invalid transition cannot publish current evidence. The existing detector allows only the exact captured predecessor through its bounded first scheduled slot; the next ordinary run must bind the attested current PID.
 
 Buy Funnel remains on its existing five-minute cron with the exclusive wrapper flock. Its default completion cooldown is zero: a long run no longer makes the next available scheduled run skip another window. A valid explicit `BUY_FUNNEL_SENTINEL_COOLDOWN_SEC` still overrides the default. The 600-second freshness check, native DONE/failure rules and source-only authority remain unchanged; a genuinely late report still fails freshness.
@@ -429,13 +456,6 @@ Prepare the reviewed code-preserving release with these wrapper/consumer contrac
 
 The sentinel cache reader also shares bounded, short immutable field names and string values within one read. It keeps at most 2048 key strings and 8192 value strings of at most192 characters. Containers, JSON types, field values, row population, cache bytes and raw source remain unchanged; larger/unique values decode normally. This reduces repeated-object memory at some CPU cost. Verify peak RSS, full report completion and freshness under the ordinary scheduled workload; a prefix decoder benchmark is not whole-Main performance evidence.
 
-
-The integrated postclose successor binds its reviewed listed-source parser, raw
-intake, pending scoring/deployment consumers, trade fact normalizer and held-SELL
-consumers as one complete code generation in both existing native readers. Keep
-issued predecessors addressable; an absent, dirty or mixed member fails the
-current integration. This code identity review does not convert exit intent into
-execution, reconstruct null costs, or authorize a scoring recipe change.
 
 ## Pending source-first scoring requests
 
@@ -555,8 +575,6 @@ Incident classification completes the existing bounded256-item scan even after a
 The reviewed product-intake successor binds the shared pure-equity name predicate and its prefetch/restored-queue consumers as one exact dependency generation. Preserve issued predecessor profiles, queue history and ordinary-equity eligibility; reject missing, dirty or independently changed helper/consumer bytes before drain. ETF exclusion does not change quote freshness, WS/request contracts, price/quantity/account/order guards or retired custody. See the [integration review](audits/postclose-root-cause-recovery-review-2026-10-19.md#etf-product-intake-integration).
 
 Before draining after any report CODE_PATHS dependency changes, verify the candidate's native bounded report currentness using the source date from its verified prepared receipt. A shared kiwoom_utils change invalidates the all-scope trailing report fingerprint even when numeric policy modules and capability generations are unchanged. Missing currentness leaves the incumbent running; use the existing bounded main_trailing_source_reuse preflight/write and independent issuer for only that source/target generation. Preserve original PREOPEN/holding/policy bytes and failures. A deferred health publication does not close the completed-full-consumer check.
-
-Normalized trailing reuse copies retain the existing512MiB per-invocation batch and native combined disk budget. A sealed copy checkpoint binds the original approved source inventory and current code generation; resume only after source/destination identity and byte checks. Partial copies never publish a manifest or currentness receipt. Interrupted/changed/corrupt inputs preserve their failed evidence; continue only the bounded remaining copy before full native replay and report verification.
 
 The observer computes observation_health only from the final publication dictionary after notifications and the final generation recheck, immediately before writing state/latest/dated files. Producer declaration must equal consumer recomputation. A selection/code generation change refuses publication. Integration coverage executes main parser/stage/notify/final-seal/publication, including a changed second completion clock and canonical fixed_watch_post_receipt_warmup evidence. This does not alter policies, native kernels or trade authority.
 
@@ -698,7 +716,7 @@ transition. [Default scope and proof boundaries](audits/postclose-root-cause-rec
 ### Evening Deployment And Postclose Continuation
 
 For the approved first natural-close transition, start preflight at19:55 KST.
-The installed20:05 EOD,20:10 postclose/controller/tuning and20:50 archive
+The installed20:05 EOD,20:10 stop-only,20:30 postclose/controller/tuning and20:50 archive
 triggers do not wait for a deployment startup hold. Before their due times,
 the authorized operator must preserve and temporarily pause only the affected
 entries, including conflicting research/finalization triggers. Record the
@@ -873,7 +891,6 @@ The protected database configuration successor is admitted only through the comp
 
 After the last affected source writer, verify report-only consumer generations as well as policy preparation. A monitor projection whose manifest binds changed detector code must be renewed by its native producer after full source validation, preserving existing historical exclusions. An optional research dependency whose physical identity changes must be revalidated only for the affected dates, followed by cumulative/notification consumers without resetting scheduled quota or sending research notifications. If these repairs occur after sealing, retain the original health observation and use native generation readers to prove whether strict/controller/preparation remain unchanged; report current diagnostic closure separately and never overwrite sealed health for another PASS.
 
-
 The quantity replay reader revalidates native BUY custody against the full current registry, but compares a sealed historical trade by its exact receipt, BUY identity, fill-event hashes, native clock and all economic fields. An unrelated append may change only the diagnostic whole-registry SHA. The existing issued-representation comparison may retain that original SHA in memory only when the independently digest-verified issued replay and every other native proof field agree; it never edits the source registry or frozen replay. The summary handoff uses the existing native quantity projection with exact current dependency/code/cost verification, retaining cold validation when no proof exists and rejection when a published proof is invalid.
 
 StoppedDeploymentRecovery may authenticate a selected P5 that failed in its isolated native intake before creating the Main child only when the exact failed attempt, source/target and dedicated verifier process session prove complete termination and descendant cleanup. This is recovery admission, not a passed startup check. Preserve the original failure/hold/deadline; run fresh candidate validation, phase-specific CAS, native prepare, selected P5, start and actual PID attestation through the existing ordered owner. Present execution identities must match their original failed candidate. Publish the exact successor observer before the first full health sweep.
@@ -903,6 +920,7 @@ invalidate research or policy-generation fingerprints. No adapter is installed
 outside isolation or without the Main proof; unknown paths and changed inputs
 remain rejected. Previously issued complete code profiles remain verifiable.
 
+
 A failed detector-only completed-prefix retry can leave the previous full report
 unchanged when admission prevented publication. The recovery owner may preserve
 that absence only against its authenticated immutable completed prefix and exact
@@ -912,6 +930,7 @@ never treats the prior report as current success: native full detector execution
 and a fresh matching terminal receipt remain required before DONE. Recheck the
 scheduled detector and lock owner before recovery admission; keep retries within
 the original stage budget and preserve every failed attempt.
+
 
 Admit this recovery-source successor only through its complete exact source
 profile and independent preparation pair inventory. Keep the original completed
@@ -1004,7 +1023,15 @@ Parent and isolated child repeat the same choice; changed scope/source, unknown
 code in both explicit origins and altered attestations still fail.
 
 
-The held-position smart SELL successor carries the verified HOLDING fact through all original adapter branches. Its complete native entry-code profile and independent preparation reader bind both changed sources together and retain issued predecessor generations. Missing, dirty, mixed or symlinked members remain invalid; the existing market-close, custody, route, quantity and order guards remain authoritative. Fresh affected report-capability fixtures, native active-parent parity and candidate/selected P5 are required before acceptance. This code repair does not replace original unresolved-terminal evidence. [Review](audits/postclose-root-cause-recovery-review-2026-10-19.md#postclose-monitor-source28-holding-context-repair-2026-10-28).
+The reviewed BUY preclaim-role successor uses `REVIEWED_PRECLAIM_MARKET_PROFILE`
+and the independent preparation reader's exact source pairs. Preserve the
+complete slot-return, carried-SELL and completion-report predecessor generation;
+missing, dirty or mixed shared handler/diagnostic/preparation sources fail before
+drain. This repair preserves the existing market veto and every source/safety
+guard. Research-only R1 or discovery allocation/pattern changes gain no live
+authority from code compatibility. Shared-handler changes still require fresh
+rising/holding capability evidence, native active-parent parity and candidate
+P5. See the [implementation review](audits/main-regular-nonfixed-opportunity-and-auxiliary-adequacy-review-2026-10-27.md#regular-preclaim-implementation-20261028).
 
 
 ### Prepared source checks after working checklist updates
@@ -1087,14 +1114,6 @@ generations. Exact per-file compatibility alone does not select a whole issued
 profile. Preserve the previous issuer/selector and contract-extension bindings,
 and exercise both native incumbent policy intake and independent candidate
 preparation before repeating the ordered transition.
-
-
-The probe-provenance and ADD-source integration uses the same complete source
-inventory in native handoff and independent preparation. Preserve every issued
-predecessor profile. A populated scanner cohort is a population observation,
-not a provenance failure; invalid source identities and clocks retain strict
-failure. Optional dated ADD source scope remains absent in old policy receipts
-and cannot be inferred from code deployment or a report-only observation.
 
 ### Native startup preparation byte custody and diagnostic report memo
 

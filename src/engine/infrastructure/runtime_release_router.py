@@ -34,6 +34,7 @@ OWNED = {
 TAGS = {
     "THRESHOLD_CYCLE_PREOPEN": "preopen",
     "THRESHOLD_CYCLE_POSTCLOSE": "postclose",
+    "POSTCLOSE_STOP_AFTER_EOD": "postclose-stop",
     "POSTCLOSE_DONE_CONTROLLER": "controller",
     "TUNING_MONITORING_POSTCLOSE": "tuning",
     "POSTCLOSE_FINALIZATION_0535": "finalize",
@@ -55,7 +56,7 @@ SNAPSHOT_CRON_TAGS = frozenset(
     }
 )
 CRON_TARGETS = frozenset({"start", *TAGS.values()})
-REQUIRED_CRON_TARGETS = CRON_TARGETS
+REQUIRED_CRON_TARGETS = CRON_TARGETS - {"postclose-stop"}
 OPERATIONS = (
     "start",
     "restart",
@@ -1381,15 +1382,19 @@ def make_plan(
 
 
 def render_crontab(
-    original: str, workspace: Path, *, require_snapshot_group: bool = False
+    original: str, workspace: Path, *, require_snapshot_group: bool = False,
+    require_postclose_stop: bool = False, install_postclose_order: bool = False,
 ) -> str:
-    """Route pipeline owners and the installed snapshot group without rescheduling.
+    """Route owned jobs, optionally installing the reviewed permanent postclose order.
 
-    The eight pipeline owners are required. The snapshot group must contain
+    Legacy transforms require eight owners; the operational CLI requires the
+    additional native stop owner and permanent schedule. The snapshot group must contain
     all three unique tags when present; the operational CLI also requires its
     presence. Legacy pure transforms can omit it. Unknown command shapes fail
     closed; other services, timers and intraday observers remain untouched.
     """
+    if install_postclose_order and not require_postclose_stop:
+        raise ValueError("cron_postclose_install_scope_invalid")
     router = f"bash {workspace}/deploy/run_runtime_release.sh"
     legacy_start = (
         f"/usr/bin/tmux new-session -d -s bot '/bin/bash -c \"cd {workspace}/src "
@@ -1411,6 +1416,8 @@ def render_crontab(
             result.append(line)
             continue
         tag = line.rsplit("#", 1)[-1].strip() if "#" in line else ""
+        if install_postclose_order and tag in {"POSTCLOSE_DELAY_RESTORE_ONCE", "POSTCLOSE_STOP_DELAY_ONCE"}:
+            raise ValueError("cron_one_day_transition_still_installed")
         snapshot = tag in SNAPSHOT_CRON_TAGS
         op = "monitor-snapshot" if snapshot else TAGS.get(tag) or LEGACY_TAGS.get(tag)
         if tag == "RUNTIME_RELEASE_START" or (
@@ -1429,6 +1436,13 @@ def render_crontab(
         if not scheduled:
             raise ValueError("cron_schedule_invalid")
         schedule, command = scheduled.groups()
+        if op in {"postclose", "controller", "tuning"} and require_postclose_stop:
+            if schedule.split() != ["30", "20", "*", "*", "1-5"]:
+                if not install_postclose_order or schedule.split() != ["10", "20", "*", "*", "1-5"]:
+                    raise ValueError("cron_postclose_schedule_unrecognized")
+                schedule = "30 20 * * 1-5 "
+        if op == "postclose-stop" and require_postclose_stop and schedule.split() != ["10", "20", "*", "*", "1-5"]:
+            raise ValueError("cron_postclose_stop_schedule_unrecognized")
         prefix = env_prefix.match(command).group()
         command = command[len(prefix) :]
         desired = f"{router} {op}"
@@ -1458,7 +1472,8 @@ def render_crontab(
             old = f"{workspace}/deploy/run_dashboard_db_archive_cron.sh 0"
         else:
             old = legacy_start
-        allowed = (desired, old, simple_start) if op == "start" else (desired, old)
+        allowed = ((desired,) if op == "postclose-stop" else
+                   (desired, old, simple_start) if op == "start" else (desired, old))
         matched = next(
             (c for c in allowed if command == c or command.startswith(c + " ")), None
         )
@@ -1503,8 +1518,13 @@ def render_crontab(
         else:
             line = schedule + prefix + desired + tail
         result.append(line)
+    if install_postclose_order and "postclose-stop" not in seen:
+        result.append(f"10 20 * * 1-5 {router} postclose-stop $(TZ=Asia/Seoul date +\\%F) # POSTCLOSE_STOP_AFTER_EOD")
+        seen.append("postclose-stop")
     if not REQUIRED_CRON_TARGETS.issubset(seen) or len(seen) != len(set(seen)):
         raise ValueError("cron_target_missing_or_duplicate")
+    if require_postclose_stop and "postclose-stop" not in seen:
+        raise ValueError("cron_postclose_stop_missing")
     if (seen_snapshots or require_snapshot_group) and (
         set(seen_snapshots) != SNAPSHOT_CRON_TAGS
         or len(seen_snapshots) != len(SNAPSHOT_CRON_TAGS)
@@ -1530,6 +1550,8 @@ def _one_day_delay_plan(original: str, workspace: Path, day: str) -> tuple[str, 
         raise ValueError("delay_cron_routing_invalid")
     if _DELAY_RESTORE_TAG in original or "POSTCLOSE_STOP_DELAY_ONCE" in original:
         raise ValueError("delay_restore_already_present")
+    if "# POSTCLOSE_STOP_AFTER_EOD" in original:
+        raise ValueError("delay_permanent_schedule_already_enabled")
     rows, before, installed = [], {}, {}
     for line in original.splitlines():
         tag = line.rsplit("#", 1)[-1].strip() if "#" in line else ""
@@ -1602,6 +1624,38 @@ def _write_exclusive_json(path: Path, value: dict) -> None:
         os.fsync(out.fileno())
 
 
+def _delay_selection_snapshot(workspace: Path, day: str, intent: dict) -> dict:
+    """Read the installed generation, independently of later selector advances."""
+    if date.fromisoformat(day).isoformat() != day:
+        raise ValueError("delay_selection_date_invalid")
+    snapshot = workspace / "data/audit/postclose_schedule_delay" / day / "selection.json"
+    declared = intent.get("selection_snapshot_path")
+    if declared is not None and declared != str(snapshot):
+        raise ValueError("delay_selection_snapshot_path_invalid")
+    if declared is not None or snapshot.exists() or snapshot.is_symlink():
+        paths = [snapshot]
+    else:
+        # Original v1 installers did not save this file. Preserve those receipts
+        # and inspect only canonical same-day native selector backups. This is
+        # a bounded legacy evidence lookup, unrelated to release inventory caps.
+        paths = []
+        for index, path in enumerate((workspace / "data/runtime/release_transitions" / day).glob("*/selection-before.json")):
+            if index >= 128:
+                raise ValueError("delay_legacy_selection_lookup_limit")
+            paths.append(path)
+        paths.append(workspace / "data/runtime/runtime_release_selection.json")
+    for path in paths:
+        value, raw = _startup_receipt(path)
+        if hashlib.sha256(raw).hexdigest() != intent.get("selection_sha256"):
+            continue
+        if (value.get("schema") != "runtime_release_selection_v1"
+                or value.get("release_root") != intent.get("release_root")
+                or value.get("git_commit") != intent.get("git_commit")):
+            raise ValueError("delay_selection_snapshot_binding_invalid")
+        return value
+    raise ValueError("delay_selection_snapshot_unavailable")
+
+
 def install_postclose_delay_once(workspace: Path, day: str, *, now: datetime) -> dict:
     """Publish the explicitly authorized exact-day delay under native cron locks."""
     if date.fromisoformat(day).isoformat() != day or now.tzinfo is None:
@@ -1617,7 +1671,8 @@ def install_postclose_delay_once(workspace: Path, day: str, *, now: datetime) ->
         own_sha = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         if hashlib.sha256((root / "src/engine/infrastructure/runtime_release_router.py").read_bytes()).hexdigest() != own_sha:
             raise ValueError("delay_producer_not_selected")
-        selection_sha = hashlib.sha256((workspace / "data/runtime/runtime_release_selection.json").read_bytes()).hexdigest()
+        selected_raw = _startup_receipt(workspace / "data/runtime/runtime_release_selection.json")[1]
+        selection_sha = hashlib.sha256(selected_raw).hexdigest()
         old = subprocess.check_output(["crontab", "-l"], text=True)
         new, lines = _one_day_delay_plan(old, workspace, day)
         if terminal.exists() or terminal.is_symlink():
@@ -1626,11 +1681,17 @@ def install_postclose_delay_once(workspace: Path, day: str, *, now: datetime) ->
         before = audit / "before.crontab"
         with before.open("x") as stream:
             stream.write(old); stream.flush(); os.fsync(stream.fileno())
+        snapshot = audit / "selection.json"
+        fd = os.open(snapshot, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(selected_raw); stream.flush(); os.fsync(stream.fileno())
         intent = dict(schema="postclose_schedule_delay_intent_v1", source_date=day,
                       release_root=str(root), git_commit=commit, producer_sha256=own_sha,
                       selection_sha256=selection_sha, original_crontab_sha256=hashlib.sha256(old.encode()).hexdigest(),
                       installed_crontab_sha256=hashlib.sha256(new.encode()).hexdigest(),
+                      selection_snapshot_path=str(snapshot),
                       original_start=[20, 10], override_start=[20, 30], **lines)
+        _delay_selection_snapshot(workspace, day, intent)
         intent["receipt_sha256"] = _delay_receipt_digest(intent)
         _write_exclusive_json(audit / "intent.json", intent)
         if subprocess.check_output(["crontab", "-l"], text=True) != old:
@@ -1695,21 +1756,26 @@ def _cron_routing_status(crontab: str) -> dict:
         for line in crontab.splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     )
+    stop_count = sum(line.rsplit("#", 1)[-1].strip() == "POSTCLOSE_STOP_AFTER_EOD"
+                     for line in crontab.splitlines() if line.strip() and not line.lstrip().startswith("#"))
     return {
         "cron_routing_verified": True,
-        "required_targets": len(REQUIRED_CRON_TARGETS),
+        "required_targets": len(REQUIRED_CRON_TARGETS) + stop_count,
+        "postclose_stop_targets": stop_count,
         "snapshot_targets": snapshot_count,
     }
 
 
 def manage_cron(
-    workspace: Path, install: bool, *, require_snapshot_group: bool = False
+    workspace: Path, install: bool, *, require_snapshot_group: bool = False,
+    require_postclose_stop: bool = False,
 ) -> None:
     if not install:
         old = subprocess.check_output(["crontab", "-l"], text=True)
         if (
             render_crontab(
-                old, workspace, require_snapshot_group=require_snapshot_group
+                old, workspace, require_snapshot_group=require_snapshot_group,
+                require_postclose_stop=require_postclose_stop,
             )
             != old
         ):
@@ -1722,7 +1788,9 @@ def manage_cron(
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         old = subprocess.check_output(["crontab", "-l"], text=True)
         new = render_crontab(
-            old, workspace, require_snapshot_group=require_snapshot_group
+            old, workspace, require_snapshot_group=require_snapshot_group,
+            require_postclose_stop=require_postclose_stop,
+            install_postclose_order=require_postclose_stop,
         )
         if new != old:
             backup_dir = Path(
@@ -1905,9 +1973,9 @@ def main() -> int:
                 raise ValueError("cron_mode_cannot_execute_operation")
             if args.install_cron:
                 with runtime_release_set_lock(workspace):
-                    manage_cron(workspace, True, require_snapshot_group=True)
+                    manage_cron(workspace, True, require_snapshot_group=True, require_postclose_stop=True)
             else:
-                manage_cron(workspace, False, require_snapshot_group=True)
+                manage_cron(workspace, False, require_snapshot_group=True, require_postclose_stop=True)
             return 0
         if args.check_release_set:
             if args.operation or args.print_plan:

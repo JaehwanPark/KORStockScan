@@ -1778,7 +1778,7 @@ def _carry_open_semantic_owners(
     target_date: str,
     projected_tasks: list[GeneratedTask],
 ) -> str:
-    """Preserve ongoing diagnostic acceptance absent from direct-family summaries.
+    """Preserve ongoing manual work and diagnostic acceptance across rollover.
 
     Only the exact source-day OPEN owners continue. A closed or absent owner
     is never recreated because economics are unavailable, and a target-day
@@ -1789,6 +1789,12 @@ def _carry_open_semantic_owners(
         "InitialQuantityProducerConsumerRepair1010",
         "MainMarketWeaknessPostcloseObservation1008",
     }
+    # Operational owners outside the generated block are not represented by
+    # family summaries. Carry their exact OPEN bodies without a fixed ID list.
+    owners.update(re.findall(
+        r"^- \[[ xX]\] `\[([A-Za-z0-9_:-]+)\]",
+        _manual_text_without_auto_block(source), re.MULTILINE,
+    ))
     target_ids = _task_ids_from_text(existing)
     target_matches = re.findall(
         r"^- \[[ xX]\] `\[([A-Za-z0-9_:-]+)\]", existing, re.MULTILINE

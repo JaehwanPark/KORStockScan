@@ -152,19 +152,17 @@ def _approved_schedule_start(day: str, crontab: str | None) -> tuple[int, int] |
                 ).encode()).hexdigest()):
             return None
         for field in ("source_date", "release_root", "git_commit", "producer_sha256",
-                      "selection_sha256", "original_crontab_sha256", "installed_crontab_sha256",
+                      "selection_sha256", "selection_snapshot_path", "original_crontab_sha256", "installed_crontab_sha256",
                       "original_start", "override_start", "original_lines", "installed_lines", "restore_line"):
             if value.get(field) != intent.get(field):
                 return None
         original = original_path.read_text()
         if hashlib.sha256(original.encode()).hexdigest() != intent.get("original_crontab_sha256"):
             return None
-        selection_path = workspace / "data/runtime/runtime_release_selection.json"
-        selection_raw = selection_path.read_bytes()
-        selection = json.loads(selection_raw)
+        from src.engine.infrastructure.runtime_release_router import _delay_selection_snapshot
+        selection = _delay_selection_snapshot(workspace, day, intent)
         root = Path(intent["release_root"])
         if (not isinstance(selection, dict)
-                or hashlib.sha256(selection_raw).hexdigest() != intent.get("selection_sha256")
                 or selection.get("release_root") != str(root)
                 or selection.get("git_commit") != intent.get("git_commit")
                 or hashlib.sha256((root / "src/engine/infrastructure/runtime_release_router.py").read_bytes()).hexdigest() != intent.get("producer_sha256")):
@@ -296,7 +294,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "id": "threshold_cycle_postclose",
         "log": "logs/threshold_cycle_postclose_cron.log",
         "status_artifact": "data/report/threshold_cycle_postclose_status/threshold_cycle_postclose_{date}.status.json",
-        "window_start": (20, 10),
+        "window_start": (20, 30),
         "window_end": (21, 40),
         "running_status_deadline": (23, 20),
         "mode": "once",
@@ -307,7 +305,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "id": "postclose_done_controller",
         "log": "logs/postclose_done_controller_cron.log",
         "status_artifact": "data/report/postclose_done_controller/postclose_done_controller_{date}.json",
-        "window_start": (20, 10),
+        "window_start": (20, 30),
         "window_end": (21, 55),
         "mode": "once",
         "critical": True,
@@ -326,7 +324,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "id": "tuning_monitoring_postclose",
         "log": "logs/tuning_monitoring_postclose_cron.log",
         "status_artifact": "data/report/tuning_monitoring/status/tuning_monitoring_postclose_{date}.json",
-        "window_start": (20, 10),
+        "window_start": (20, 30),
         "window_end": (21, 55),
         "mode": "once",
         "critical": False,
@@ -504,6 +502,11 @@ class CronCompletionDetector(BaseDetector):
                     details[f"{jid}_schedule_override"] = "installed_exact_date_verified"
                     continue
 
+            if jid in _OVERRIDE_TAGS and artifact_status == "failed":
+                issues.append(f"{jid}: status artifact failed")
+                details[f"{jid}_status"] = "fail"
+                details[f"{jid}_status_artifact_terminal"] = artifact_status
+                continue
             if not past_window_start:
                 details[f"{jid}_status"] = "not_yet_due"
                 details[f"{jid}_window"] = (

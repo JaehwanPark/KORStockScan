@@ -1217,7 +1217,9 @@ def original_cron(workspace):
         f"55 7 * * 1-5 /usr/bin/tmux new-session -d -s bot 'cd {workspace}/src && ./run_bot.sh'",
     ]
     for tag, op in router.TAGS.items():
-        if op in router.OWNED:
+        if op == "postclose-stop":
+            cmd = f"bash {workspace}/deploy/run_runtime_release.sh postclose-stop"
+        elif op in router.OWNED:
             script, owner = router.OWNED[op]
             cmd = (
                 f"bash {workspace}/deploy/run_with_owned_log.sh --owner {owner} "
@@ -1325,7 +1327,9 @@ def test_operational_cron_cli_requires_all_snapshot_tags_before_any_install(
     before = original_cron(workspace) + (
         snapshot_cron(workspace) if with_snapshots else ""
     )
-    current = router.render_crontab(before, workspace)
+    current = router.render_crontab(
+        before, workspace, require_postclose_stop=True, install_postclose_order=True
+    )
     monkeypatch.setattr(
         router,
         "__file__",
@@ -1496,7 +1500,8 @@ def test_cron_check_reports_pipeline_and_snapshot_counts_separately(
     router.manage_cron(workspace, False)
     assert json.loads(capsys.readouterr().out) == {
         "cron_routing_verified": True,
-        "required_targets": 8,
+        "required_targets": 9,
+        "postclose_stop_targets": 1,
         "snapshot_targets": 3 if with_snapshots else 0,
     }
     assert not (workspace / "data/runtime/runtime_release_cron.lock").exists()
@@ -1524,7 +1529,8 @@ def test_snapshot_install_uses_existing_backup_compare_write_and_readback(
     backup = Path(reports[0]["cron_backup"])
     assert (backup / "before.crontab").read_text() == before
     assert (backup / "after.crontab").read_text() == after
-    assert reports[-1]["required_targets"] == 8 and reports[-1]["snapshot_targets"] == 3
+    assert reports[-1]["required_targets"] == 9 and reports[-1]["snapshot_targets"] == 3
+    assert reports[-1]["postclose_stop_targets"] == 1
 
 
 def test_old_five_am_finalization_migrates_without_changing_other_jobs(tmp_path):
@@ -1549,21 +1555,25 @@ def test_cron_drift_blocks_install(tmp_path, mode):
     else:
         before = before.replace("run_threshold_cycle_postclose.sh", "unexpected.sh")
     with pytest.raises(ValueError):
-        router.render_crontab(before, tmp_path)
+        router.render_crontab(before, tmp_path, require_postclose_stop=True)
 
 
 @pytest.mark.parametrize("tag", sorted(router.TAGS))
 def test_cron_rejects_missing_scheduled_postclose_owner(tmp_path, tag):
+    installed = router.render_crontab(
+        original_cron(tmp_path), tmp_path,
+        require_postclose_stop=True, install_postclose_order=True,
+    )
     before = (
         "\n".join(
             line
-            for line in original_cron(tmp_path).splitlines()
+            for line in installed.splitlines()
             if f"# {tag}" not in line
         )
         + "\n"
     )
-    with pytest.raises(ValueError, match="cron_target_missing_or_duplicate"):
-        router.render_crontab(before, tmp_path)
+    with pytest.raises(ValueError, match="cron_(target_missing_or_duplicate|postclose_stop_missing)"):
+        router.render_crontab(before, tmp_path, require_postclose_stop=True)
 
 
 def test_cron_check_never_installs(release, monkeypatch):
@@ -2087,7 +2097,8 @@ def _delay_test_context(tmp_path, monkeypatch):
     (workspace / "data/runtime/runtime_release_selection.json").write_text(json.dumps({
         "schema": "runtime_release_selection_v1", "release_root": str(root), "git_commit": commit,
     }))
-    original = router.render_crontab(original_cron(workspace) + snapshot_cron(workspace), workspace,
+    legacy = "\n".join(line for line in original_cron(workspace).splitlines() if not line.endswith("# POSTCLOSE_STOP_AFTER_EOD")) + "\n"
+    original = router.render_crontab(legacy + snapshot_cron(workspace), workspace,
                                       require_snapshot_group=True)
     state = {"cron": original, "writes": []}
     monkeypatch.setattr(router, "selected_release", lambda _: (root, commit))
@@ -2218,12 +2229,134 @@ def test_detector_rejects_unproven_delay_receipts(tmp_path, monkeypatch, damage)
         # Whitespace changes alone preserve JSON semantics, so alter the bound field.
         body = json.loads(receipt.read_text()); body["owner"] = "other"; receipt.write_text(json.dumps(body))
     elif damage == "intent": intent.write_text(intent.read_text() + " ")
-    elif damage == "selector": selector.write_text(selector.read_text() + " ")
+    elif damage == "selector":
+        snapshot = workspace / "data/audit/postclose_schedule_delay/2026-10-29/selection.json"
+        snapshot.write_text(snapshot.read_text() + " ")
     elif damage == "cron": state["cron"] += "1 1 * * * /new/job # new\n"
     elif damage == "producer": (root / "src/engine/infrastructure/runtime_release_router.py").write_text("changed")
     elif damage == "missing": receipt.unlink()
     day = "2026-10-30" if damage == "date" else "2026-10-29"
     assert cc._approved_schedule_start(day, state["cron"]) is None
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("damage", [None, "changed", "missing", "other_date"])
+def test_delay_authority_uses_exact_installed_selection_after_normal_advance(
+    tmp_path, monkeypatch, legacy, damage
+):
+    import src.engine.error_detectors.cron_completion as cc
+
+    workspace, _, _, state, now = _delay_test_context(tmp_path, monkeypatch)
+    router.install_postclose_delay_once(workspace, "2026-10-29", now=now)
+    monkeypatch.setattr(cc, "PROJECT_ROOT", workspace)
+    audit = workspace / "data/audit/postclose_schedule_delay/2026-10-29"
+    receipt_path = workspace / "data/runtime/postclose_schedule_overrides/2026-10-29.json"
+    evidence = audit / "selection.json"
+    original = evidence.read_bytes()
+    if legacy:
+        # Exercise the original v1 shape without inventing an old receipt.
+        intent = json.loads((audit / "intent.json").read_bytes())
+        receipt = json.loads(receipt_path.read_bytes())
+        intent.pop("selection_snapshot_path")
+        receipt.pop("selection_snapshot_path")
+        intent["receipt_sha256"] = router._delay_receipt_digest(intent)
+        (audit / "intent.json").write_text(json.dumps(intent))
+        receipt["intent_sha256"] = hashlib.sha256((audit / "intent.json").read_bytes()).hexdigest()
+        receipt["receipt_sha256"] = router._delay_receipt_digest(receipt)
+        receipt_path.write_text(json.dumps(receipt))
+        evidence.unlink()
+        source = "2026-10-30" if damage == "other_date" else "2026-10-29"
+        evidence = workspace / "data/runtime/release_transitions" / source / ("b" * 40) / "selection-before.json"
+        evidence.parent.mkdir(parents=True)
+        evidence.write_bytes(original)
+    elif damage == "other_date":
+        # A foreign declared path cannot authenticate the installed generation.
+        intent = json.loads((audit / "intent.json").read_bytes())
+        receipt = json.loads(receipt_path.read_bytes())
+        intent["selection_snapshot_path"] = str(audit.parent / "2026-10-30/selection.json")
+        receipt["selection_snapshot_path"] = intent["selection_snapshot_path"]
+        intent["receipt_sha256"] = router._delay_receipt_digest(intent)
+        (audit / "intent.json").write_text(json.dumps(intent))
+        receipt["intent_sha256"] = hashlib.sha256((audit / "intent.json").read_bytes()).hexdigest()
+        receipt["receipt_sha256"] = router._delay_receipt_digest(receipt)
+        receipt_path.write_text(json.dumps(receipt))
+    selection = workspace / "data/runtime/runtime_release_selection.json"
+    selection.write_text(json.dumps(dict(schema="runtime_release_selection_v1", release_root="/new/selected", git_commit="b" * 40)))
+    if damage == "changed":
+        evidence.write_bytes(original + b" ")
+    if damage == "missing":
+        evidence.unlink()
+    before = {p: p.read_bytes() for p in (selection, receipt_path, audit / "intent.json")}
+    assert cc._approved_schedule_start("2026-10-29", state["cron"]) == ((20, 30) if damage is None else None)
+    assert all(p.read_bytes() == raw for p, raw in before.items())
+
+
+def test_permanent_postclose_installers_and_detector_share_2030_start():
+    import src.engine.error_detectors.cron_completion as cc
+
+    root = Path(__file__).resolve().parents[2]
+    for filename, tag in (
+        ("install_threshold_cycle_cron.sh", "THRESHOLD_CYCLE_POSTCLOSE"),
+        ("install_postclose_done_controller_cron.sh", "POSTCLOSE_DONE_CONTROLLER"),
+        ("install_tuning_monitoring_postclose_cron.sh", "TUNING_MONITORING_POSTCLOSE"),
+    ):
+        lines = [line for line in (root / "deploy" / filename).read_text().splitlines() if line.endswith("# " + tag)]
+        assert len(lines) == 1 and lines[0].split()[:5] == ["30", "20", "*", "*", "1-5"]
+    jobs = [row for row in cc.CRON_JOB_REGISTRY if row["id"] in cc._OVERRIDE_TAGS]
+    assert len(jobs) == 3 and all(row["window_start"] == (20, 30) for row in jobs)
+
+
+@pytest.mark.parametrize("existing_stop", [False, True])
+def test_native_cron_install_migrates_only_postclose_slots_and_stop_owner(tmp_path, monkeypatch, existing_stop):
+    workspace, _, original, state, _ = _delay_test_context(tmp_path, monkeypatch)
+    (workspace / "tmp").mkdir()
+    extra = "1 2 * * * /unchanged/research # AI_ENTRY_SETUP_PAIRED_REPLAY_POSTCLOSE\n"
+    if existing_stop:
+        original += f"10 20 * * 1-5 KEEP_POLICY_ENV=true bash {workspace}/deploy/run_runtime_release.sh postclose-stop $(TZ=Asia/Seoul date +\\%F) # POSTCLOSE_STOP_AFTER_EOD\n"
+    state["cron"] = original + extra
+    router.manage_cron(workspace, True, require_snapshot_group=True, require_postclose_stop=True)
+    installed = state["cron"]
+    assert extra in installed
+    assert router.render_crontab(installed, workspace, require_snapshot_group=True, require_postclose_stop=True) == installed
+    by_tag = lambda text: {x.rsplit("#", 1)[-1].strip(): x for x in text.splitlines() if x.strip() and not x.lstrip().startswith("#")}
+    before, after = by_tag(original + extra), by_tag(installed)
+    assert set(after) == set(before) | {"POSTCLOSE_STOP_AFTER_EOD"}
+    for tag, line in before.items():
+        assert after[tag] == ("30 20 " + line[len("10 20 "):] if tag in router._DELAY_TAGS else line)
+    assert after["POSTCLOSE_STOP_AFTER_EOD"].split()[:5] == ["10", "20", "*", "*", "1-5"]
+    plan = router.make_plan(workspace, workspace, "a" * 40, "postclose-stop", "2026-10-29")
+    assert plan["command"][-1] == "--stop-only"
+    count = len(state["writes"])
+    router.manage_cron(workspace, True, require_snapshot_group=True, require_postclose_stop=True)
+    assert len(state["writes"]) == count
+
+
+@pytest.mark.parametrize("kind", ["unknown_time", "one_day_transition", "missing_stop"])
+def test_postclose_schedule_migration_preserves_unknown_or_active_contracts(tmp_path, monkeypatch, kind):
+    workspace, _, _, state, _ = _delay_test_context(tmp_path, monkeypatch)
+    (workspace / "tmp").mkdir()
+    if kind == "unknown_time":
+        state["cron"] = "\n".join(
+            line.replace("10 20 ", "25 20 ", 1) if line.endswith("# THRESHOLD_CYCLE_POSTCLOSE") else line
+            for line in state["cron"].splitlines()
+        ) + "\n"
+    elif kind == "one_day_transition":
+        state["cron"] += "35 20 * * * /active/restore # POSTCLOSE_DELAY_RESTORE_ONCE\n"
+    before = state["cron"]
+    with pytest.raises(ValueError):
+        router.manage_cron(workspace, kind != "missing_stop", require_snapshot_group=True, require_postclose_stop=True)
+    assert state["cron"] == before and state["writes"] == []
+
+
+def test_stop_cron_tag_cannot_relabel_the_full_postclose_wrapper(tmp_path):
+    original = original_cron(tmp_path)
+    wrong = original.replace(
+        f"bash {tmp_path}/deploy/run_runtime_release.sh postclose-stop",
+        f"bash {tmp_path}/deploy/run_with_owned_log.sh --owner postclose_stop_cron --log {tmp_path}/logs/postclose_stop_cron.log {tmp_path}/deploy/run_threshold_cycle_postclose.sh",
+    )
+    assert wrong != original
+    with pytest.raises(ValueError, match="cron_command_unrecognized:postclose-stop"):
+        router.render_crontab(wrong, tmp_path)
 
 
 @pytest.mark.parametrize("source,bad", [("intent", []), ("intent", None), ("selection", []), ("selection", None)])
@@ -2254,7 +2387,7 @@ def test_detector_rejects_nonobject_authority_sources_without_crashing(tmp_path,
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text("[DONE] prior target_date=2026-10-28\n")
     monkeypatch.setattr(cc, "_today_kst", lambda: "2026-10-29")
-    monkeypatch.setattr(cc, "_kst_time_tuple", lambda: (20, 15))
+    monkeypatch.setattr(cc, "_kst_time_tuple", lambda: (20, 35))
     monkeypatch.setattr(cc, "is_krx_trading_day", lambda _: True)
     monkeypatch.setattr(cc, "CRON_JOB_REGISTRY", [job])
     monkeypatch.setattr(cc, "load_installed_crontab", lambda: state["cron"])
