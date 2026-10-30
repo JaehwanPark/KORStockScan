@@ -968,10 +968,23 @@ def verify_prepared(
                 handoff_basis = ("native_closed_preopen_preserved_generation" if closed is not None
                                  else "native_consumed_preopen_preserved_generation")
             else:
-                handoff = H.verify(target_date, commit, now=now)
-                preserved = handoff.get("handoff") or {}
+                review = H._PREDECESSOR_REVIEW.get() or {}
+                unprepared = (review.get("prepared_observation") or {}).get("unprepared_selected_handoff")
+                if unprepared is not None:
+                    selected_root, _ = selected_release(DATA_DIR.parent)
+                    if not H.predecessor_review_matches(review, target_date, selected_root, commit,
+                                                        Path(__file__).resolve().parents[3]):
+                        raise ValueError("prepared_unprepared_selection_custody_invalid")
+                    # No preparation is invented for the failed selection. Its
+                    # original consumed predecessor authenticates this source.
+                    preserved = H._read(Path(unprepared["predecessor_path"]))
+                    handoff_status = "pass"
+                else:
+                    handoff = H.verify(target_date, commit, now=now)
+                    preserved = handoff.get("handoff") or {}
+                    handoff_status = handoff["status"]
                 if (
-                    handoff["status"] != "pass"
+                    handoff_status != "pass"
                     or preserved.get("prepared_receipt_path") != str(receipt_path)
                     or preserved.get("prepared_receipt_sha256") != _sha(receipt_path)
                 ):

@@ -1237,3 +1237,5 @@ The predecessor reader belongs to candidate admission before selection; it
 intentionally rejects an already-selected candidate and cannot authenticate a
 current stop. Both readers retain their original root, policy and generation
 checks. Invalid consumption must fail before collector pinning or stop intent.
+
+A failed selection can precede issuance of its intraday preparation. In that phase, stopped preparation review binds the native original consumed predecessor and verifies that the failed selection's handoff and consumption remain absent. Readiness may revalidate that exact preserved historical generation; it cannot attest preparation or consumption of the failed selection. Newly prepared selected P5 and actual successor PID remain separate requirements, and the read-only scope grants no launch authority.

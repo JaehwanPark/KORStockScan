@@ -823,6 +823,14 @@ def predecessor_review_matches(review, day, root, commit, code_root):
         "postclose_observation"
     )
     if observation is not None:
+        unprepared = observation.get("unprepared_selected_handoff")
+        if unprepared is not None and (
+            Path(unprepared["path"]).exists()
+            or Path(unprepared["path"]).is_symlink()
+            or observation["source_hashes"].get(unprepared["predecessor_path"])
+            != unprepared["predecessor_sha256"]
+        ):
+            return False
         if review.get("postclose_observation") is not None:
             from src.engine.scalping import mechanistic_entry_runtime_policy as N
 
@@ -1180,14 +1188,29 @@ def stopped_preparation_review(day):
     handoff_path, consumed = _paths(day, commit)
     if consumed.exists() or consumed.is_symlink():
         raise ValueError("intraday_stopped_review_consumed_selection")
-    body = _read(handoff_path)
+    unprepared = None
+    if not handoff_path.exists() and not handoff_path.is_symlink():
+        failed = origin["failed"]
+        if (failed.get("failed_phase") != "selected"
+            or failed.get("error") != "deployment_validation_failed:src.engine.automation.intraday_release_handoff"):
+            raise ValueError("intraday_stopped_review_unprepared_origin_invalid")
+        predecessor_path = _paths(day, driver.previous_commit)[0]
+        if native["frozen_files"].get(str(predecessor_path)) != _sha(predecessor_path):
+            raise ValueError("intraday_stopped_review_unprepared_predecessor_unbound")
+        unprepared = dict(path=str(handoff_path), predecessor_path=str(predecessor_path),
+                          predecessor_sha256=_sha(predecessor_path))
+        body = _read(predecessor_path)
+    else:
+        body = _read(handoff_path)
     sources.update(body["frozen_files"])
-    sources[str(handoff_path)] = _sha(handoff_path)
+    if unprepared is None:
+        sources[str(handoff_path)] = _sha(handoff_path)
     proof = dict(
         target_date=day,
         release_commit=commit,
         source_hashes=sources,
-        original_first_launch_before=body["first_launch_before"],
+        original_first_launch_before=body["first_launch_before"] if unprepared is None else None,
+        **({"unprepared_selected_handoff": unprepared} if unprepared is not None else {}),
         runtime_effect=False,
         actual_pid_consumed=False,
         allowed_runtime_apply=False,
@@ -1203,13 +1226,15 @@ def stopped_preparation_review(day):
     )
     token = _PREDECESSOR_REVIEW.set(review)
     try:
-        checked = _verify_handoff(day, commit)
-        if checked["status"] != "pass":
+        checked = _verify_handoff(day, commit) if unprepared is None else None
+        if ((checked is not None and checked["status"] != "pass")
+            or not predecessor_review_matches(review, day, root, commit, candidate)):
             raise ValueError("intraday_stopped_review_source_invalid")
         yield proof
         driver.inspect_stopped_origin()
         if (
             any(_sha(path) != sha for path, sha in sources.items())
+            or not predecessor_review_matches(review, day, root, commit, candidate)
             or consumed.exists()
             or consumed.is_symlink()
         ):
@@ -13940,7 +13965,7 @@ REVIEWED_STORAGE_INTEGRATION_HASHES = {
     **{name: pair[1] for name, pair in
        _preparation_code.REVIEWED_STORAGE_INTEGRATION_TRANSITION.items()},
     "src/engine/infrastructure/startup_validation_code_context.py":
-        "8fd4f67c278a01a4221842d888e7158a882594c94013f0d14bcdc035e0915807",
+        "0b97c7dfd72af9e6fc03ae72df47df4cfd64a595734367f0be251b08dbd5a965",
 }
 REVIEWED_STORAGE_INTEGRATION_PROFILE = {
     **REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE, **REVIEWED_STORAGE_INTEGRATION_HASHES,

@@ -756,7 +756,7 @@ def test_prepare_isolated_then_detects_source_and_release_drift(monkeypatch, tmp
     selection.write_bytes(original_selection)
     # The consumed intraday handoff carries the exact strict bytes under its
     # launch-snapshot role, without a second historical_checklist field.
-    for fault in (None, "role", "target", "source", "hash", "bytes", "missing", "symlink", "shape"):
+    for fault in (None, "role", "target", "source", "hash", "bytes", "missing", "symlink", "shape", "unprepared", "unprepared_unbound"):
         with monkeypatch.context() as preserved_scope:
             selected[0] = "b" * 40
             ref = readiness._read(readiness.PREPARED_DIR / target / "latest.json")
@@ -782,13 +782,21 @@ def test_prepare_isolated_then_detects_source_and_release_drift(monkeypatch, tmp
                 postclose_source_reseal=dict(current_source_receipts=receipts(source,target),
                                             operating_checklist=operating)))
             preserved_scope.setattr(handoff, "verify", lambda *a, **kw: proof)
+            if fault in {"unprepared", "unprepared_unbound"}:
+                from types import SimpleNamespace
+                prior = tmp_path / (fault + "-original-handoff.json")
+                _json(prior, proof["handoff"])
+                review = dict(prepared_observation=dict(unprepared_selected_handoff=dict(predecessor_path=str(prior))))
+                preserved_scope.setattr(handoff, "_PREDECESSOR_REVIEW", SimpleNamespace(get=lambda: review))
+                preserved_scope.setattr(handoff, "predecessor_review_matches", lambda *a: fault == "unprepared")
+                preserved_scope.setattr(handoff, "verify", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("absent selected handoff cannot be verified")))
             preserved_scope.setattr(handoff, "preserve_checklist", lambda day: sealed)
             def strict_receipts(_source, _target, **kwargs):
                 assert kwargs == dict(generation_only=True, checklist_snapshot=snapshot)
                 return receipts(_source, _target)
             preserved_scope.setattr(readiness, "_source_receipts", strict_receipts)
             result = readiness.verify_prepared(target, now=now)
-            assert result["status"] == ("fail" if fault else "pass"), result
+            assert result["status"] == ("pass" if fault in {None, "unprepared"} else "fail"), result
             assert result["actual_pid_consumed"] is result["runtime_effect"] is False
     selected[0] = "a" * 40
     with monkeypatch.context() as bounded:

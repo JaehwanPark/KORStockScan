@@ -6000,8 +6000,9 @@ def test_prepared_validation_handoff_rejects_changed_context(tmp_path, family, f
 
 
 @pytest.mark.parametrize("damage", [None, "changed_source", "consumed", "origin"])
+@pytest.mark.parametrize("unprepared", [False, True])
 def test_stopped_preparation_analysis_preserves_expired_launch_guard(
-    fixture, monkeypatch, damage
+    fixture, monkeypatch, damage, unprepared
 ):
     from types import SimpleNamespace
     from src.engine.automation import ordered_intraday_deploy as D
@@ -6013,6 +6014,10 @@ def test_stopped_preparation_analysis_preserves_expired_launch_guard(
     monkeypatch.setattr(handoff, "_today", lambda *a: expired)
     hp, cp = handoff._paths(DAY, NEW)
     original = hp.read_bytes()
+    predecessor_path = handoff._paths(DAY, OLD)[0]
+    if unprepared:
+        predecessor_path.write_bytes(original)
+        hp.unlink()
     source = data / "original-stopped-proof.json"
     source.write_text("native original")
     driver = SimpleNamespace(
@@ -6030,6 +6035,7 @@ def test_stopped_preparation_analysis_preserves_expired_launch_guard(
         failed_path=source,
         prior_path=source,
         preparation_sources={},
+        failed=dict(failed_phase="selected", error="deployment_validation_failed:src.engine.automation.intraday_release_handoff"),
     )
 
     def inspect():
@@ -6042,7 +6048,8 @@ def test_stopped_preparation_analysis_preserves_expired_launch_guard(
     monkeypatch.setattr(
         D,
         "_stopped_intraday_predecessor",
-        lambda *a: dict(frozen_files={str(source): handoff._sha(source)}),
+        lambda *a: dict(frozen_files={str(source): handoff._sha(source),
+            **({str(predecessor_path): handoff._sha(predecessor_path)} if unprepared else {})}),
     )
     monkeypatch.setattr(R, "git", lambda *a: "c" * 40)
 
@@ -6050,7 +6057,7 @@ def test_stopped_preparation_analysis_preserves_expired_launch_guard(
         assert value["workspace"] == str(workspace)
 
     monkeypatch.setattr(R, "validate_release", validate)
-    assert handoff.verify(DAY, NEW, now=expired)["findings"] == [
+    assert unprepared or handoff.verify(DAY, NEW, now=expired)["findings"] == [
         "intraday_first_launch_window_expired"
     ]
     if damage == "consumed":
@@ -6068,21 +6075,25 @@ def test_stopped_preparation_analysis_preserves_expired_launch_guard(
             with handoff.stopped_preparation_review(DAY) as proof:
                 assert (
                     proof["original_first_launch_before"]
-                    == json.loads(original)["first_launch_before"]
+                    == (None if unprepared else json.loads(original)["first_launch_before"])
                 )
                 assert (
                     proof["actual_pid_consumed"] is False
                     and proof["allowed_runtime_apply"] is False
                 )
-                assert handoff.verify(DAY, NEW, now=expired)["status"] == "pass"
+                if unprepared:
+                    assert proof["unprepared_selected_handoff"]["predecessor_path"] == str(predecessor_path)
+                    assert handoff.verify(DAY, NEW, now=expired)["status"] == "fail"
+                else:
+                    assert handoff.verify(DAY, NEW, now=expired)["status"] == "pass"
                 with pytest.raises(ValueError, match="not_launch_authority"):
                     handoff.consume(DAY, pid=2, now=expired)
                 if damage:
                     source.write_text("changed native generation")
-    assert hp.read_bytes() == original
+    assert not hp.exists() if unprepared else hp.read_bytes() == original
     if damage != "consumed":
         assert not cp.exists()
-        assert handoff.verify(DAY, NEW, now=expired)["findings"] == [
+        assert unprepared or handoff.verify(DAY, NEW, now=expired)["findings"] == [
             "intraday_first_launch_window_expired"
         ]
 

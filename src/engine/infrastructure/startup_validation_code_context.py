@@ -3815,6 +3815,9 @@ REVIEWED_STORAGE_INTEGRATION_TRANSITION = {
     "src/engine/scalping/reversal_code_handoff.py": (
         "21760885de2a28bd7d5c5a021af3eb88c0fd0f31c890855b94be0e81f8b7b93c",
         "df41ee6d93f1842bcd689940c8920d58aec021530e97fff252e4ceb9bb794ff3"),
+    "src/engine/automation/next_preopen_readiness.py": (
+        "c89c5869690c7a17c2f3b631a5a6cb2ca0319b11e4a04b426b09e4a5bd128895",
+        "0ddfad84543a2c31d011cdeb00333806b9de8715332982f649ad143542cc3ff5"),
 }
 REVIEWED_STORAGE_INTEGRATION_PROFILE = {
     **REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE,
