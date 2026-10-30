@@ -1580,6 +1580,7 @@ def test_second_code_handoff_preserves_selector_provenance_without_freezing_tran
     cold_activation=False,
     coordination=False,
     closed_parent=False,
+    closed_calendar_day=None,
 ):
     import json
     from pathlib import Path
@@ -1599,6 +1600,14 @@ def test_second_code_handoff_preserves_selector_provenance_without_freezing_tran
     root.mkdir()
     origin.mkdir()
     day = datetime.now(P.KST).date().isoformat()
+    if closed_calendar_day:
+        class ClosedClock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                value = cls.fromisoformat(closed_calendar_day + "T01:00:00+09:00")
+                return value.astimezone(tz) if tz else value.replace(tzinfo=None)
+        monkeypatch.setattr(H, "datetime", ClosedClock)
+        day = closed_calendar_day
     if cold_activation:
 
         class Clock(datetime):
@@ -1668,7 +1677,7 @@ def test_second_code_handoff_preserves_selector_provenance_without_freezing_tran
         from src.engine.automation import ordered_intraday_deploy as D
         from src.engine.automation import next_preopen_readiness as R
 
-        source_day = (
+        source_day = "2026-10-30" if closed_calendar_day else (
             datetime.fromisoformat(day).date() - timedelta(days=1)
         ).isoformat()
         bundle["target_date"] = source_day
@@ -1713,7 +1722,8 @@ def test_second_code_handoff_preserves_selector_provenance_without_freezing_tran
             }
 
         monkeypatch.setattr(I, "closed_consumption_observation", closure)
-        monkeypatch.setattr(R, "target_after_postclose", lambda _: day)
+        if not closed_calendar_day:
+            monkeypatch.setattr(R, "target_after_postclose", lambda _: day)
         monkeypatch.setattr(
             D, "_main_pids", lambda: [123] if damage == "closed_live" else []
         )
@@ -3221,3 +3231,15 @@ def test_native_activation_rollover_preserves_consumer_and_original_receipt(tmp_
         assert result['activation_rollover']['original_sha256']==P.file_hash(original)
         assert N._read(destination)==result
     assert original.read_bytes()==original_raw
+
+
+@pytest.mark.parametrize("observed", ["2026-10-31", "2026-11-01", "2026-11-02"])
+@pytest.mark.parametrize("damage", [None, "closed_live", "closed_source", "closed_changed", "closed_flags", "closed_hold"])
+def test_closed_friday_parent_custody_uses_native_trading_interval(tmp_path, monkeypatch, observed, damage):
+    test_second_code_handoff_preserves_selector_provenance_without_freezing_transition(
+        tmp_path, monkeypatch, damage, False, closed_parent=True, closed_calendar_day=observed)
+
+
+def test_closed_friday_parent_rejects_observation_after_next_trading_day(tmp_path, monkeypatch):
+    test_second_code_handoff_preserves_selector_provenance_without_freezing_transition(
+        tmp_path, monkeypatch, "expired", False, closed_parent=True, closed_calendar_day="2026-11-03")

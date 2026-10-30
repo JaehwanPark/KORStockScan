@@ -14278,7 +14278,7 @@ for _name, _current in REVIEWED_STORAGE_ADMISSION_HASHES.items():
 REVIEWED_POSTCLOSE_SCHEDULE_HASHES = {
     **{name: pair[1] for name, pair in _preparation_code.REVIEWED_POSTCLOSE_SCHEDULE_TRANSITION.items()},
     "src/engine/infrastructure/startup_validation_code_context.py":
-        "1558f92184cf6714795afafac8da4dbb4c2f63ec84fb0b4ce7727586f2ead92d",
+        "e9f6f94bc8a1bb7fa8f3993aa2972469c4e0704df8febc0d860b6c6fc54ba275",
 }
 REVIEWED_POSTCLOSE_NATIVE_HOLD_DEPENDENCIES = {
     'src/engine/scalping/entry_deadline.py': 'd976f683b52d6235b6fa8739f4123c7f667ae12bcb1a2c54d8bb2b6c606ec819',

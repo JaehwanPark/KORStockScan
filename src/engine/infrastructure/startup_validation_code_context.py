@@ -3896,6 +3896,7 @@ REVIEWED_STORAGE_ADMISSION_PROFILE = {
 # The current artifact reader consumes the native schedule resolver as well as
 # the detector. Require both physical sources; preserve every issued profile.
 REVIEWED_POSTCLOSE_SCHEDULE_TRANSITION = {
+    "src/engine/scalping/reversal_code_handoff.py": ("df41ee6d93f1842bcd689940c8920d58aec021530e97fff252e4ceb9bb794ff3", "734811f8f3fc72610940fbd52aaea6c2a6ce83312de7c9cfa94df11fde79567d"),
     'src/engine/monitoring/runtime_performance.py': (
         '397c11bf4cc06f74b2d904afe187d765284e543c17d27ed1cf92f8bd5b86640a',
         'c2f66441d70493f9ada0cae40a465d167fc6315007365b276fd63e3ecd6ceeaf'),

@@ -1169,7 +1169,10 @@ def issue(
             or closed_parent.get("target_date") != ptr["effective_date"]
             or closed_parent.get("release_commit") != previous
             or closed_parent.get("selection_sha256") != selection_sha
-            or target_after_postclose(ptr["effective_date"]) != day
+            # Code custody follows the closed source-to-next-trading interval,
+            # including weekend observation dates; it grants no market session.
+            or not (ptr["effective_date"] < day
+                    <= target_after_postclose(ptr["effective_date"]))
             or D._main_pids()
             or not D._session_absent()
             or any(
