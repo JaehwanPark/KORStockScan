@@ -5538,6 +5538,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
         "current": handoff.REVIEWED_SUBMISSION_MONITOR_PROFILE,
+        "stop_incident": handoff.REVIEWED_STOP_INCIDENT_PROFILE,
         "scheduled_suffix": handoff.REVIEWED_SCHEDULED_SUFFIX_PROFILE,
         "cron_phase_binding": handoff.REVIEWED_CRON_PHASE_BINDING_PROFILE,
         "causal_item": handoff.REVIEWED_CAUSAL_ITEM_PROFILE,
@@ -5642,7 +5643,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     for name in hashes:
         content = (
             (canonical / name).read_bytes()
-            if generation == "current"
+            if generation in ("current", "stop_incident")
             else subprocess.check_output(
                 [
                     "git",
@@ -5754,6 +5755,11 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
         (root / name).write_bytes(content)
     name = "src/engine/automation/intraday_release_handoff.py"
     (root / name).write_bytes((canonical / name).read_bytes())
+    if generation == "stop_incident":
+        # This report-only implementation is bound by the stop policy's
+        # own inventory, but is not a global startup generation dependency.
+        name = handoff._preparation_code._STOP_INCIDENT_OFFLINE_OWNER
+        (root / name).write_bytes((canonical / name).read_bytes())
     source = dependency
     path = root / source
     if fault == "missing":
@@ -5831,6 +5837,17 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
             handoff._verify_entry_code_delta(root, commit, origin, paths, expected)
     else:
         handoff._verify_entry_code_delta(root, commit, origin, paths, expected)
+
+
+@pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
+@pytest.mark.parametrize("fault", [None, "missing", "dirty", "committed_change", "parent_mix"])
+def test_stop_incident_native_handoff_keeps_complete_generation(tmp_path, family, fault):
+    assert handoff._preparation_code._STOP_INCIDENT_OFFLINE_OWNER not in handoff.REVIEWED_STOP_INCIDENT_PROFILE
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "stop_incident",
+        dependency="src/engine/monitoring/submission_bottleneck_monitor.py",
+        policy_origin="52425f68f",
+    )
 
 
 @pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
