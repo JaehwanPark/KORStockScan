@@ -952,6 +952,28 @@ def test_pre_scoped_owner_and_pre_recheck_parser_migrate_exact_pair(tmp_path):
     )
 
 
+def test_archive_reader_successor_preserves_issued_predecessor_and_suffix(tmp_path):
+    raw, options, manifest, original, _ = predecessor(
+        tmp_path, parser_contract=C.CURRENT_PARSER, buy_owner=C.PRE_ARCHIVE_BUY_OWNER
+    )
+    offset = raw.stat().st_size
+    with raw.open("a") as stream:
+        stream.write(json.dumps(event(2)) + "\n")
+    rows, meta = P.update_and_load_pipeline_event_summaries(**options)
+    assert meta["rebuilt"] is False and meta["start_raw_offset"] == offset
+    assert sum(row["event_count"] for row in rows) == 2
+    assert Path(meta["contract_migration"]["original_manifest_archive"]).read_bytes() == original
+
+
+def test_archive_reader_successor_rejects_unissued_parser_pair(tmp_path):
+    _, options, manifest, original, _ = predecessor(
+        tmp_path, parser_contract=C.PRE_FORMAT_PARSER, buy_owner=C.PRE_ARCHIVE_BUY_OWNER
+    )
+    with pytest.raises(RuntimeError, match="callback_predecessor_unverified"):
+        P.update_and_load_pipeline_event_summaries(**options)
+    assert manifest.read_bytes() == original
+
+
 def test_expanded_producer_stage_profile_cannot_migrate_as_same_profile(tmp_path):
     _, options, manifest, _, _ = predecessor(
         tmp_path, parser_contract=C.PRE_RECHECK_PARSER, buy_owner=C.PRE_FORMAT_BUY_OWNER

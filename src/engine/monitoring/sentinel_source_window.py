@@ -11,6 +11,8 @@ import json
 import math
 import os
 import sqlite3
+import stat
+import types
 import zlib
 from contextlib import closing
 from datetime import datetime
@@ -26,6 +28,47 @@ STAGES = frozenset(
     )
 )
 LIMIT = 32 * 1024 * 1024
+
+# This is the physical issuer of the selected predecessor's source-window
+# generation. Its exact original bytes are retained in content-addressed
+# custody; do not rewrite the issued contract as the successor's code hash.
+_PREDECESSOR_ISSUERS = frozenset({
+    "012d290ace2bd5e6cd16a4e0f8564f8082e03dc55851959a67a0418f010c5737",
+})
+
+
+def _predecessor_issuer(data_root, contract):
+    """Load the exact issued writer, never a caller-provided code location."""
+    if contract not in _PREDECESSOR_ISSUERS:
+        raise ValueError("source_window_predecessor_migration_required")
+    path = Path(data_root) / "runtime/sentinel_event_cache/issuers" / (contract + ".py")
+    if any(parent.is_symlink() for parent in (path, *path.parents)):
+        raise ValueError("source_window_predecessor_issuer_invalid")
+    def identity(value):
+        # Reading legitimately advances atime; the producer identity binds
+        # the physical object and content-relevant metadata instead.
+        return (value.st_dev, value.st_ino, value.st_mode, value.st_nlink,
+                value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        with os.fdopen(fd, "rb") as source:
+            before = os.fstat(source.fileno())
+            if (not stat.S_ISREG(before.st_mode) or before.st_size > 1024 * 1024
+                or before.st_nlink != 1 or before.st_mode & 0o222):
+                raise ValueError("source_window_predecessor_issuer_invalid")
+            raw = source.read(1024 * 1024 + 1)
+            after = os.fstat(source.fileno())
+        if (identity(before) != identity(after) or identity(path.stat()) != identity(before)
+            or hashlib.sha256(raw).hexdigest() != contract):
+            raise ValueError("source_window_predecessor_issuer_invalid")
+    except OSError as exc:
+        raise ValueError("source_window_predecessor_issuer_invalid") from exc
+    issuer = types.ModuleType("_sentinel_source_window_issued_" + contract)
+    issuer.__file__ = str(path)
+    exec(compile(raw, str(path), "exec"), vars(issuer))
+    if issuer._contract() != contract or identity(path.stat()) != identity(before):
+        raise ValueError("source_window_predecessor_issuer_invalid")
+    return issuer
 
 
 def _epoch(value):
@@ -185,6 +228,7 @@ def read(data_root, now, *, lower_epoch, limit=LIMIT):
     partial index is never offered as a complete or zero-event population.
     """
     import fcntl
+    from contextlib import ExitStack
     from src.engine.monitoring.sentinel_compact_store import stamp
 
     data_root = Path(data_root).resolve()
@@ -202,10 +246,19 @@ def read(data_root, now, *, lower_epoch, limit=LIMIT):
     )
     meta_path = cache.with_suffix(".meta.json")
     # The cache writer and its optional time index form one generation.
-    with meta_path.with_suffix(".lock").open("a") as lock:
+    with meta_path.with_suffix(".lock").open("a") as lock, ExitStack() as stack:
         fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
         meta = _metadata(meta_path)
-        generation = stamp(cache)
+        from src.engine.monitoring import sentinel_compact_store as compact
+        archive_receipt = Path(str(cache) + ".archive.json")
+        binding = None
+        if not cache.exists() and (archive_receipt.exists() or archive_receipt.is_symlink()):
+            from src.engine.sentinel_event_cache import archived_cache_binding
+
+            binding = archived_cache_binding(cache, meta)
+        if binding:
+            stack.enter_context(compact._verified_archive(cache, binding))
+        generation = binding["source_generation"] if binding else stamp(cache)
         if (
             meta.get("schema_version") not in (19, 20, 21, 22)
             or meta.get("cache_generation") != generation
@@ -216,6 +269,10 @@ def read(data_root, now, *, lower_epoch, limit=LIMIT):
         raw = data_root / "pipeline_events" / f"pipeline_events_{day}.jsonl"
         if str(raw) != meta.get("raw_path"):
             raise ValueError("source_window_raw_path_mismatch")
+        if binding:
+            from src.engine.sentinel_event_cache import _raw_producer_rotation_lease
+
+            stack.enter_context(_raw_producer_rotation_lease(raw))
         conn = sqlite3.connect(
             f'file:{cache.with_suffix(".compact.sqlite")}?mode=ro',
             uri=True,
@@ -227,9 +284,10 @@ def read(data_root, now, *, lower_epoch, limit=LIMIT):
                 "SELECT body FROM source_window_state WHERE id=1"
             ).fetchone()
             state = _object(record[0]) if record else {}
+            if state.get("contract") != _contract():
+                _predecessor_issuer(data_root, state.get("contract"))
             if (
-                state.get("contract") != _contract()
-                or state.get("generation") != generation
+                state.get("generation") != generation
                 or state != meta.get("source_window_projection")
                 or state.get("raw_offset") != meta.get("raw_offset")
                 or state.get("raw_generation") != meta.get("raw_generation")
@@ -286,28 +344,51 @@ def read(data_root, now, *, lower_epoch, limit=LIMIT):
                 ):
                     raise ValueError("source_window_index_row_invalid")
                 rows.append(row)
-            with raw.open("rb") as source:
-                before = os.fstat(source.fileno())
-                original = state["raw_generation"]
-                offset = state["raw_offset"]
-                if (
-                    (before.st_dev, before.st_ino)
-                    != (original.get("device"), original.get("inode"))
-                    or not 0 <= before.st_size - offset <= limit
-                    or (
-                        before.st_size == original.get("size_bytes")
-                        and (before.st_mtime_ns, before.st_ctime_ns)
-                        != (original.get("mtime_ns"), original.get("ctime_ns"))
-                    )
-                ):
+            original = state["raw_generation"]
+            offset = state["raw_offset"]
+            raw_archive_generation = None
+            try:
+                raw_source = raw.open("rb")
+            except FileNotFoundError:
+                if raw.is_symlink():
                     raise ValueError("source_window_raw_generation_or_budget_changed")
-                source.seek(offset)
-                payload = source.read(before.st_size - offset)
-                after = raw.stat()
+                from src.engine.sentinel_event_cache import _archive_raw_generation_matches, _raw_producer_rotation_lease
+                from src.engine.automation import main_trailing_source_store as trailing
+
+                if not binding:
+                    stack.enter_context(_raw_producer_rotation_lease(raw))
+                raw_archive = Path(str(raw) + ".gz")
+                before = raw_archive.stat()
+                if not _archive_raw_generation_matches(meta, raw_archive, before, cache.parent):
+                    raise ValueError("source_window_raw_archive_generation_changed")
+                raw_archive_generation = trailing._archive_generation(data_root, raw)
+                after = raw_archive.stat()
+                if (after != before or not _archive_raw_generation_matches(meta, raw_archive, after, cache.parent)):
+                    raise ValueError("source_window_raw_archive_generation_changed")
+                payload = b""
+                logical_source_size = original["size_bytes"]
+            else:
+                with raw_source as source:
+                    before = os.fstat(source.fileno())
+                    if (
+                        (before.st_dev, before.st_ino)
+                        != (original.get("device"), original.get("inode"))
+                        or not 0 <= before.st_size - offset <= limit
+                        or (
+                            before.st_size == original.get("size_bytes")
+                            and (before.st_mtime_ns, before.st_ctime_ns)
+                            != (original.get("mtime_ns"), original.get("ctime_ns"))
+                        )
+                    ):
+                        raise ValueError("source_window_raw_generation_or_budget_changed")
+                    source.seek(offset)
+                    payload = source.read(before.st_size - offset)
+                    after = raw.stat()
+                logical_source_size = before.st_size
             if (
                 (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino)
                 or after.st_size < before.st_size
-                or stamp(cache) != generation
+                or (not binding and stamp(cache) != generation)
                 or (
                     after.st_size == before.st_size
                     and (after.st_mtime_ns, after.st_ctime_ns)
@@ -339,7 +420,7 @@ def read(data_root, now, *, lower_epoch, limit=LIMIT):
                 indexed_bytes_read=indexed_bytes,
                 read_count=1,
                 indexed_identity_bytes_read=identity_bytes,
-                source_size=before.st_size,
+                source_size=logical_source_size,
                 source_identity=dict(device=before.st_dev, inode=before.st_ino),
                 coverage_basis="verified_forward_sentinel_source_window_v1",
                 coverage_started_at=datetime.fromtimestamp(
@@ -353,6 +434,8 @@ def read(data_root, now, *, lower_epoch, limit=LIMIT):
                 cache_schema_version=meta["schema_version"],
                 projection_contract=state["contract"],
                 historical_stage_coverage=state["historical_stage_coverage"],
+                **({"cache_archive_binding": binding} if binding else {}),
+                **({"raw_archive_generation": raw_archive_generation} if raw_archive_generation else {}),
             )
         finally:
             conn.close()

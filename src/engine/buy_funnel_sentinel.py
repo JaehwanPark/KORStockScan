@@ -645,6 +645,10 @@ def load_pipeline_events(
 ) -> list[PipelineEvent]:
     path = existing_or_gzip_path(_pipeline_events_path(target_date))
     if not path.exists():
+        if use_cache:
+            from src.engine.sentinel_event_cache import reject_missing_archived_raw
+
+            reject_missing_archived_raw(_event_cache_dir(), EVENT_CACHE_NAME, target_date)
         return []
     if use_cache:
         cache_schema_version = (

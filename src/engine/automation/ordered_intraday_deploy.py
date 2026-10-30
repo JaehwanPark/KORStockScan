@@ -732,6 +732,8 @@ def stopped_preparation_failure_sources(failed, failed_path):
 
 def execute(driver, *, validate_prepared=None):
     """Order is deliberate: no selection or shared document write before drain."""
+    if isinstance(getattr(driver, "auxiliary_repair_path", None), (str, Path)) and validate_prepared is None:
+        raise ValueError("deployment_auxiliary_repair_selected_p5_required")
     with R.scheduled_execution_lease(driver.workspace, exclusive=True):
         try:
             driver.preflight()
@@ -1323,6 +1325,8 @@ class Deployment:
         operator_hold_sha256=None,
         candidate_p5_path=None,
         candidate_p5_sha256=None,
+        auxiliary_repair_path=None,
+        auxiliary_repair_sha256=None,
     ):
         if confirm != CONFIRM:
             raise ValueError("ordered_deployment_explicit_approval_required")
@@ -1353,6 +1357,59 @@ class Deployment:
         self.preserve_editable_checklist = True
         self.candidate_p5_path = candidate_p5_path
         self.candidate_p5_sha256 = candidate_p5_sha256
+        self.auxiliary_repair_path = auxiliary_repair_path
+        self.auxiliary_repair_sha256 = auxiliary_repair_sha256
+
+    def pin_auxiliary_repair(self):
+        """Verify the complete issued successor and incumbent PID before drain."""
+        if getattr(self, "auxiliary_repair_path", None) is None and getattr(self, "auxiliary_repair_sha256", None) is None:
+            return
+        if not self.auxiliary_repair_path or not re.fullmatch(
+            r"[0-9a-f]{64}", self.auxiliary_repair_sha256 or ""
+        ):
+            raise ValueError("deployment_auxiliary_repair_reference_invalid")
+        from src.engine.scalping import reversal_auxiliary_intraday as auxiliary
+        from src.engine.scalping import mechanistic_entry_runtime_policy as native
+
+        path = Path(self.auxiliary_repair_path)
+        manifest, raw, _ = _owned_metadata(path)
+        if _digest(raw) != self.auxiliary_repair_sha256 or auxiliary.read(path) != manifest:
+            raise ValueError("deployment_auxiliary_repair_reference_changed")
+        data = self.workspace / "data"
+        bundle = native.load_effective(data_root=data, target_date=self.day)
+        parent = auxiliary.current(data, bundle, day=self.day)
+        prepared_at = datetime.fromisoformat(manifest["prepared_at"])
+        if prepared_at.tzinfo is None or prepared_at > datetime.now(H.KST):
+            raise ValueError("deployment_auxiliary_repair_clock_invalid")
+        original = auxiliary.prepare_contract_repair(
+            data, bundle, expected_parent=(parent or {}).get("artifact_content_sha256"),
+            now=prepared_at,
+        )
+        if original != manifest or manifest.get("day") != self.day:
+            raise ValueError("deployment_auxiliary_repair_preparation_changed")
+        consumption = auxiliary.read(
+            auxiliary.root(data) / "consumed" / self.day / (str(self.identity["pid"]) + ".json")
+        )
+        if (consumption.get("actual_pid_consumed") is not True
+            or consumption.get("day") != self.day
+            or consumption.get("pid_identity") != self.identity
+            or consumption.get("release_commit") != self.previous_commit
+            or consumption.get("base_bundle_sha256") != manifest["base_bundle_sha256"]
+            or consumption.get("overlay_sha256") != manifest["expected_parent"]
+            or consumption.get("code_hashes") != auxiliary.code_hashes()
+            or consumption.get("bindings") != manifest["old_bindings"]):
+            raise ValueError("deployment_auxiliary_repair_incumbent_binding_invalid")
+        for mutable in (auxiliary.root(data) / "current.json",
+                        auxiliary.root(data) / "days" / self.day / (bundle["bundle_sha256"] + ".json")):
+            if str(mutable) in self.frozen:
+                raise ValueError("deployment_auxiliary_repair_pointer_frozen")
+        additions = {str(path): _digest(raw), **manifest["source_hashes"]}
+        if any(name in self.frozen and self.frozen[name] != sha for name, sha in additions.items()):
+            raise ValueError("deployment_auxiliary_repair_frozen_source_conflict")
+        self.frozen.update(additions)
+        self.auxiliary_repair = manifest
+        self.state["auxiliary_repair_preflight"] = dict(path=str(path), sha256=_digest(raw),
+            manifest_sha256=manifest["artifact_content_sha256"], base_bundle_sha256=manifest["base_bundle_sha256"])
 
     def pin_candidate_p5(self):
         self.candidate_p5 = verify_candidate_p5(
@@ -1631,6 +1688,7 @@ class Deployment:
         self.frozen.pop(str(self.selection), None)
         self.frozen[active_check["receipt_path"]] = active_check["receipt_sha256"]
         self.frozen[active_check["pointer_path"]] = active_check["pointer_sha256"]
+        self.pin_auxiliary_repair()
         self.checklist = (
             self.workspace
             / "docs/checklists"
@@ -2126,6 +2184,20 @@ class Deployment:
                 getattr(self, "prepared_delay_check", {}),
             )
             self.assert_unchanged()
+            if getattr(self, "auxiliary_repair", None) is not None:
+                from src.engine.scalping import reversal_auxiliary_intraday as auxiliary
+
+                overlay = auxiliary.publish_contract_repair(
+                    self.workspace / "data", self.auxiliary_repair,
+                    expected_parent=self.auxiliary_repair["expected_parent"],
+                    confirm=auxiliary.CONTRACT_REPAIR_AUTHORITY,
+                )
+                if (overlay.get("bindings") != self.auxiliary_repair["new_bindings"]
+                    or overlay.get("contract_repair_manifest_sha256") != self.auxiliary_repair["artifact_content_sha256"]):
+                    raise ValueError("deployment_auxiliary_repair_publication_invalid")
+                self.auxiliary_overlay = overlay
+                self.checkpoint("drained", auxiliary_repair_published=overlay["artifact_content_sha256"])
+                self.assert_unchanged()
             _atomic(self.selection, self.published)
             if getattr(self, "preserve_editable_checklist", False):
                 self.document_after = self.checklist.read_bytes()
@@ -2220,6 +2292,7 @@ class Deployment:
         self.checkpoint("starting")
 
     def attest(self):
+        attestation_started = time.monotonic()
         def consumed():
             value = H._read(self.selection)
             if value.get("git_commit") != self.commit:
@@ -2261,6 +2334,27 @@ class Deployment:
             or H._read(self.selection) != value
         ):
             raise ValueError("deployment_successor_changed_during_attestation")
+        if getattr(self, "auxiliary_repair", None) is not None:
+            from src.engine.scalping import reversal_auxiliary_intraday as auxiliary
+
+            receipt_path = auxiliary.root(self.workspace / "data") / "consumed" / self.day / (str(identity["pid"]) + ".json")
+            if not receipt_path.exists() and not receipt_path.is_symlink():
+                remaining = R.STARTUP_CONSUMPTION_TIMEOUT_SEC - (time.monotonic() - attestation_started)
+                if remaining <= 0:
+                    raise ValueError("deployment_auxiliary_repair_pid_consumption_timeout")
+                _wait(lambda: receipt_path.exists() or receipt_path.is_symlink(), remaining,
+                      "deployment_auxiliary_repair_pid_consumption_timeout")
+            receipt = auxiliary.read(receipt_path)
+            if (receipt.get("actual_pid_consumed") is not True
+                or receipt.get("day") != self.day
+                or receipt.get("pid_identity") != identity
+                or receipt.get("release_commit") != self.commit
+                or receipt.get("base_bundle_sha256") != self.auxiliary_repair["base_bundle_sha256"]
+                or receipt.get("overlay_sha256") != self.auxiliary_overlay["artifact_content_sha256"]
+                or receipt.get("code_hashes") != auxiliary.code_hashes()
+                or receipt.get("bindings") != self.auxiliary_repair["new_bindings"]):
+                raise ValueError("deployment_auxiliary_repair_pid_consumption_invalid")
+            self.state["auxiliary_repair_pid_consumption"] = dict(path=str(receipt_path), sha256=H._sha(receipt_path))
         if any(
             H._sha(path) != sha
             for path, sha in self.frozen.items()
@@ -2276,6 +2370,31 @@ class Deployment:
         # hold, or force-stop a child. Preserve the exact phase for recovery.
         if not hasattr(self, "state"):
             return
+        if (getattr(self, "auxiliary_repair", None) is not None
+            and self.phase == "drained" and not _main_pids()):
+            try:
+                self.assert_hold()
+                if self.selection.read_bytes() == self.before:
+                    from src.engine.scalping import reversal_auxiliary_intraday as auxiliary
+                    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+
+                    data = self.workspace / "data"
+                    bundle = native.load_effective(data_root=data, target_date=self.day)
+                    overlay = auxiliary.current(data, bundle, day=self.day)
+                    if (overlay and overlay.get("contract_repair_manifest_sha256")
+                        == self.auxiliary_repair["artifact_content_sha256"]):
+                        reverted = auxiliary.rollback(
+                            data, expected_parent=overlay["artifact_content_sha256"],
+                            reason="ordered_deployment_failed_before_selection",
+                            confirm=auxiliary.AUTHORITY,
+                        )
+                        if reverted.get("bindings") != self.auxiliary_repair["old_bindings"]:
+                            raise ValueError("deployment_auxiliary_rollback_binding_invalid")
+                        self.state["auxiliary_repair_unwind"] = dict(
+                            status="rolled_back", overlay_sha256=reverted["artifact_content_sha256"])
+            except Exception as unwind:
+                self.state["auxiliary_repair_unwind"] = dict(
+                    status="failed", error=type(unwind).__name__ + ":" + str(unwind))
         if self.phase in {"prepared", "starting"} and self.hold_bytes is not None:
             try:
                 with self.hold.open("xb") as out:
@@ -2908,6 +3027,53 @@ def stop_after_eod(workspace, day, confirm, *, now=None):
             raise
 
 
+def validate_selected_p5(driver):
+    """Run the native startup reader after selected preparation, before launch."""
+    from src.engine.automation import main_startup_validation
+
+    driver.assert_hold()
+    if (driver.phase != "prepared" or driver.selection.read_bytes() != driver.published
+        or _main_pids()):
+        raise ValueError("selected_p5_generation_changed")
+    result, path = main_startup_validation.run_validation(
+        workspace=driver.workspace,
+        target_date=driver.day,
+        execution_root=driver.candidate,
+        candidate=False,
+    )
+    path = Path(path)
+    if result.get("status") != "passed":
+        raise ValueError("selected_p5_failed:" + str(path))
+    run_id = result.get("run_id")
+    expected_parent = driver.workspace / "data/report/main_startup_validation" / driver.day
+    if (not isinstance(run_id, str) or re.fullmatch(r"[0-9a-f]{32}", run_id) is None
+        or path != expected_parent / run_id / "final.json"
+        or any(parent.is_symlink() for parent in (path, path.parent, expected_parent))):
+        raise ValueError("selected_p5_receipt_path_invalid")
+    persisted, raw, _ = _owned_metadata(path)
+    if (persisted != result
+        or result.get("schema") != "main_policy_load_exit_validation_v1"
+        or result.get("target_date") != driver.day
+        or result.get("execution_release_root") != str(driver.candidate)
+        or result.get("execution_release_commit") != driver.commit
+        or result.get("selected_release_root") != str(driver.candidate)
+        or result.get("selected_release_commit") != driver.commit
+        or result.get("findings")
+        or result.get("child_terminated") is not True
+        or result.get("child_exit_code") != 0
+        or result.get("load_check_passed") is not True
+        or result.get("protected_sources_unchanged") is not True
+        or result.get("failure_phase") is not None
+        or result.get("actual_pid_consumed") is not False
+        or result.get("runtime_effect") is not False
+        or result.get("allowed_runtime_apply") is not False):
+        raise ValueError("selected_p5_receipt_invalid")
+    driver.assert_hold()
+    if driver.selection.read_bytes() != driver.published or _main_pids():
+        raise ValueError("selected_p5_generation_changed")
+    driver.checkpoint("prepared", selected_p5=dict(path=str(path), sha256=_digest(raw)))
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace", type=Path, default=H.DATA_DIR.parent)
@@ -2916,10 +3082,16 @@ def main(argv=None):
     parser.add_argument("--target-date", required=True)
     parser.add_argument("--candidate-p5-path", type=Path)
     parser.add_argument("--candidate-p5-sha256")
+    parser.add_argument("--auxiliary-repair-path", type=Path)
+    parser.add_argument("--auxiliary-repair-sha256")
     parser.add_argument("--confirm", required=True)
     args = parser.parse_args(argv)
     if not args.stop_after_eod and not all((args.release_root, args.candidate_p5_path, args.candidate_p5_sha256)):
         parser.error("deployment requires release root and exact candidate P5")
+    if bool(args.auxiliary_repair_path) != bool(args.auxiliary_repair_sha256):
+        parser.error("auxiliary repair requires both its manifest path and SHA-256")
+    if args.stop_after_eod and args.auxiliary_repair_path:
+        parser.error("postclose stop cannot publish an auxiliary repair")
     try:
         with R.runtime_release_set_lock(args.workspace):
             with detector_transition_lock(args.workspace):
@@ -2931,7 +3103,9 @@ def main(argv=None):
                         args.confirm,
                         candidate_p5_path=args.candidate_p5_path,
                         candidate_p5_sha256=args.candidate_p5_sha256,
-                    )
+                        auxiliary_repair_path=args.auxiliary_repair_path,
+                        auxiliary_repair_sha256=args.auxiliary_repair_sha256,
+                    ), validate_prepared=validate_selected_p5
                 )
     except (
         OSError,

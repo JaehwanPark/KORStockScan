@@ -1016,6 +1016,9 @@ def build_report(
     until: str | None = None,
     generated_at: str | None = None,
 ) -> dict[str, Any]:
+    archive_binding = None
+    logical_archive = None
+    archive_raw_path = None
     if event_cache_path is None:
         event_cache_path = _default_event_cache_path(target_date)
         # This optional cache has no sealed logical-content hash in its native
@@ -1027,7 +1030,17 @@ def build_report(
             and not event_cache_path.is_symlink()
             and Path(str(event_cache_path) + ".gz").exists()
         ):
-            raise ValueError("sentinel_archive_generation_unverified")
+            from src.engine.sentinel_event_cache import archived_cache_binding
+
+            logical_archive = event_cache_path
+            meta_path = logical_archive.with_suffix(".meta.json")
+            try:
+                archive_meta = json.loads(meta_path.read_bytes())
+                archive_binding = archived_cache_binding(logical_archive, archive_meta)
+                archive_raw_path = Path(archive_meta["raw_path"])
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                raise ValueError("sentinel_archive_generation_unverified") from exc
+            event_cache_path = Path(str(logical_archive) + ".gz")
     else:
         # Explicit paths use the established sibling fallback. This reports
         # the physical file read; it is not proof of a prior cache generation.
@@ -1112,7 +1125,33 @@ def build_report(
         }
     )
 
-    for row in _read_jsonl(event_cache_path):
+    if archive_binding is not None:
+        from src.engine.monitoring.sentinel_compact_store import _verified_archive
+        from src.engine.sentinel_event_cache import (
+            _archive_raw_generation_matches,
+            _raw_producer_rotation_lease,
+            archived_cache_binding,
+        )
+        import fcntl
+
+        meta_path = logical_archive.with_suffix(".meta.json")
+        with meta_path.with_suffix(".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            with _raw_producer_rotation_lease(archive_raw_path), _verified_archive(logical_archive, archive_binding):
+                meta = json.loads(meta_path.read_bytes())
+                raw = existing_or_gzip_path(archive_raw_path)
+                before = raw.stat()
+                if (archived_cache_binding(logical_archive, meta) != archive_binding
+                    or not _archive_raw_generation_matches(meta, raw, before, logical_archive.parent)):
+                    raise ValueError("sentinel_archive_generation_unverified")
+                source_rows = _read_jsonl(event_cache_path)
+                if (archived_cache_binding(logical_archive, json.loads(meta_path.read_bytes())) != archive_binding
+                    or raw.stat() != before
+                    or not _archive_raw_generation_matches(meta, raw, before, logical_archive.parent)):
+                    raise ValueError("sentinel_archive_generation_unverified")
+    else:
+        source_rows = _read_jsonl(event_cache_path)
+    for row in source_rows:
         ts = _parse_ts(row.get("emitted_at"))
         fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
         code = str(row.get("stock_code") or "").strip()

@@ -408,6 +408,27 @@ The approved B0–B4 repair uses exact original PREOPEN-to-candidate pairs in `i
 
 The auxiliary common-support repair is issued by `reversal_auxiliary_intraday.prepare_contract_repair` and `publish_contract_repair`, using `APPROVED_REVIEWED_COMMON_SUPPORT_CONTRACT_REPAIR`. Preparation is read-only. Publication, after the incumbent has drained, uses the existing auxiliary and native publisher locks, parent/pointer/code CAS and a sealed full-scope manifest. Only the exact English ASCII clarification is appended to immutable successor prompts. Validator, projector, input/schema, provider/model/options, machine bundle/family/membership and original PREOPEN/env/manifest bytes remain bound. Issue exact-source reader compatibility from the preserved original readers and complete binding parity before the candidate reads those sources. Preserve confirmation-time selection for historical claims; invalid historical PASS output remains invalid. Rollback restores the prior bindings through the existing owner and retains the repair manifest as historical evidence.
 
+For an explicitly authorized repair in an ordered deployment, provide both
+`--auxiliary-repair-path` and `--auxiliary-repair-sha256`, with the latter
+binding the manifest's actual file bytes. Before acquiring the hold the owner
+verifies the native prepared manifest, unchanged parent and original sources,
+and all incumbent PID bindings. After drain it invokes the native publisher;
+the selected preparation and native P5 then validate the resulting generation
+before launch. Attestation checks the successor PID's complete auxiliary
+binding receipt. A preselection failure rolls back a published repair only with
+the original selector, owned hold and no live Main; later failures retain their
+selected generation and hold for native recovery. No prompt publication is
+implicit when the two repair arguments are absent.
+
+When an existing sentinel source-window index is bound to a reviewed predecessor
+issuer, keep that issuer's exact original bytes in the content-addressed
+`data/runtime/sentinel_event_cache/issuers` custody directory. The successor
+continues the original writer and independently validates the indexed source;
+it does not relabel the existing index with its own code digest. Missing,
+writable, linked, changed or unreviewed issuer files fail before cache writes.
+Preserve the issuer through the final historical and rollback reader, and
+include it in portable provenance while either reader still requires it.
+
 Raw response evidence is diagnostic, bounded and captured before frozen validation. Receiving a raw PASS, passing the response contract and remaining executable at Main are separate stages. Signature-bound digest reuse skips only previously verified file hashing; semantic/source/identity checks run each time, and prepare/publication force full hashing. Missing or conflicting evidence remains source gap. Code fixtures and PID consumption do not establish natural latency or economics. See the [implementation review](audits/main-nonfixed-submit-bottleneck-implementation-review-2026-10-14.md).
 
 ## Ordered intraday deployment

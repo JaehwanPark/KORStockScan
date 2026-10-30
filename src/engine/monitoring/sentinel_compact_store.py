@@ -8,9 +8,11 @@ only by consumers that request them; every original field and row survives.
 from __future__ import annotations
 
 import hashlib
+import gzip
 import json
 import sqlite3
 import os
+import stat
 import tempfile
 import subprocess
 import zlib
@@ -18,6 +20,14 @@ from collections.abc import Mapping
 from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
+from contextlib import contextmanager
+
+
+# Previous issuer code generations are added here only after the successor has
+# been reviewed against their original receipt and reader contracts.  Keeping
+# this registry outside the issuer avoids embedding a self-referential hash.
+REVIEWED_ARCHIVE_ISSUERS = frozenset()
+
 
 # Fields read on every population/scope pass. All other fields remain available.
 HOT_KEYS = frozenset(
@@ -248,7 +258,64 @@ def fields_identity(fields):
     return _FieldIdentity(body, hashlib.sha256(body).hexdigest())
 
 
-def indexed_rows(cache_path, *, previous_stamp, expected_count):
+@contextmanager
+def _verified_archive(cache_path, binding):
+    """Open one explicitly bound gzip successor, never impersonating its source.
+
+    The caller owns proof that this is a closed cache and that the binding was
+    issued for its original generation. This helper verifies the representation;
+    it does not authorize deleting a cache or altering an historical receipt.
+    """
+    archive = Path(str(cache_path) + ".gz")
+    if cache_path.exists() or cache_path.is_symlink() or archive.is_symlink():
+        raise ValueError("sentinel_archive_namespace_changed")
+    required = {"source_generation", "logical_sha256", "logical_size", "archive_sha256", "archive_generation"}
+    if not isinstance(binding, dict) or set(binding) != required:
+        raise ValueError("sentinel_archive_binding_invalid")
+    original = binding["source_generation"]
+    generation = binding["archive_generation"]
+    if (
+        not isinstance(original, list) or len(original) != 5
+        or not all(type(v) is int and v >= 0 for v in original)
+        or not isinstance(generation, list) or len(generation) != 5
+        or not all(type(v) is int and v >= 0 for v in generation)
+        or type(binding["logical_size"]) is not int
+        or binding["logical_size"] != original[2]
+        or any(not isinstance(binding[k], str) or len(binding[k]) != 64
+               or any(c not in "0123456789abcdef" for c in binding[k])
+               for k in ("logical_sha256", "archive_sha256"))
+    ):
+        raise ValueError("sentinel_archive_binding_invalid")
+    if any(parent.is_symlink() for parent in archive.parents):
+        raise ValueError("sentinel_archive_namespace_changed")
+    fd = os.open(archive, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    with os.fdopen(fd, "rb") as physical:
+        s = os.fstat(physical.fileno())
+        if not stat.S_ISREG(s.st_mode) or s.st_nlink != 1:
+            raise ValueError("sentinel_archive_not_single_regular")
+        opened = [s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns]
+        if opened != generation or stamp(archive) != generation:
+            raise ValueError("sentinel_archive_generation_changed")
+        # Use the existing invocation-scoped owner when present. Native callers
+        # without an explicit session perform a full cold digest rather than
+        # changing their availability contract or trusting metadata alone.
+        from src.engine.infrastructure.validation_digest_session import reused_digest
+        digest = reused_digest(archive)
+        if digest is None:
+            digest = hashlib.file_digest(physical, "sha256").hexdigest()
+        if digest != binding["archive_sha256"]:
+            raise ValueError("sentinel_archive_digest_mismatch")
+        if stamp(archive) != generation:
+            raise ValueError("sentinel_archive_generation_changed")
+        physical.seek(0)
+        yield physical, archive, generation
+        after = os.fstat(physical.fileno())
+        if (stamp(archive) != generation or cache_path.exists()
+                or [after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns] != generation):
+            raise ValueError("sentinel_archive_generation_changed")
+
+
+def indexed_rows(cache_path, *, previous_stamp, expected_count, archive_binding=None):
     """Append verified new cache rows, otherwise replace the optional index.
 
     Call under the source-cache writer lock. Missing/corrupt index metadata
@@ -256,8 +323,22 @@ def indexed_rows(cache_path, *, previous_stamp, expected_count):
     its own complete generation; failed transactions leave the old generation.
     """
     cache_path = Path(cache_path)
-    index_path = cache_path.with_suffix(".compact.sqlite")
-    generation = stamp(cache_path)
+    archived = archive_binding is not None
+    if archived and previous_stamp is not None:
+        raise ValueError("sentinel_archive_append_forbidden")
+    index_path = (Path(str(cache_path) + ".gz.compact.sqlite") if archived
+                  else cache_path.with_suffix(".compact.sqlite"))
+    from contextlib import nullcontext
+    scope = _verified_archive(cache_path, archive_binding) if archived else nullcontext(None)
+    with scope as source:
+        yield from _indexed_rows_impl(cache_path, index_path, previous_stamp, expected_count,
+                                     archive_binding, source)
+
+
+def _indexed_rows_impl(cache_path, index_path, previous_stamp, expected_count, archive_binding, source):
+    archived = archive_binding is not None
+    generation = source[2] if archived else stamp(cache_path)
+    size = archive_binding["logical_size"] if archived else generation[2]
     contract = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     connection = sqlite3.connect(index_path, timeout=5)
     from src.engine.sentinel_event_cache import _cache_object_decoder
@@ -283,9 +364,10 @@ def indexed_rows(cache_path, *, previous_stamp, expected_count):
         except (TypeError, ValueError):
             state = {}
         same_contract = state.get("contract") == contract
-        unchanged = same_contract and state.get("generation") == generation
+        unchanged = (same_contract and state.get("generation") == generation
+                     and (not archived or state.get("archive_binding") == archive_binding))
         append = (
-            same_contract
+            not archived and same_contract
             and previous_stamp is not None
             and state.get("generation") == previous_stamp
             and state.get("offset") == previous_stamp[2]
@@ -298,11 +380,15 @@ def indexed_rows(cache_path, *, previous_stamp, expected_count):
                     connection.execute("DELETE FROM rows")
                     connection.execute("DELETE FROM payloads")
                 offset = state["offset"] if append else 0
-                with cache_path.open("rb") as source:
-                    source.seek(offset)
-                    while source.tell() < generation[2]:
-                        line = source.readline()
-                        if not line.endswith(b"\n") or source.tell() > generation[2]:
+                cache_stream = gzip.GzipFile(fileobj=source[0], mode="rb") if archived else cache_path.open("rb")
+                logical_hash = hashlib.sha256() if archived else None
+                with cache_stream as cache_file:
+                    cache_file.seek(offset)
+                    while cache_file.tell() < size:
+                        line = cache_file.readline()
+                        if logical_hash is not None:
+                            logical_hash.update(line)
+                        if not line.endswith(b"\n") or cache_file.tell() > size:
                             raise ValueError("sentinel_cache_partial_index_source")
                         try:
                             row = json.loads(line)
@@ -314,18 +400,20 @@ def indexed_rows(cache_path, *, previous_stamp, expected_count):
                         sha = hashlib.sha256(body.encode()).hexdigest()
                         connection.execute(
                             "INSERT INTO rows VALUES (?, ?, ?)",
-                            (source.tell(), zlib.compress(body.encode(), 1), sha),
+                            (cache_file.tell(), zlib.compress(body.encode(), 1), sha),
                         )
                         connection.execute(
                             "INSERT INTO payloads VALUES (?, ?)",
-                            (source.tell(), payload),
+                            (cache_file.tell(), payload),
                         )
+                    if archived and (cache_file.read(1) or logical_hash.hexdigest() != archive_binding["logical_sha256"]):
+                        raise ValueError("sentinel_archive_logical_digest_mismatch")
             count = (
                 state.get("count")
                 if unchanged
                 else connection.execute("SELECT count(*) FROM rows").fetchone()[0]
             )
-            if count != expected_count or stamp(cache_path) != generation:
+            if count != expected_count or stamp(source[1] if archived else cache_path) != generation:
                 raise ValueError("sentinel_index_generation_or_population_changed")
             connection.execute(
                 "INSERT OR REPLACE INTO state VALUES (1, ?)",
@@ -334,8 +422,9 @@ def indexed_rows(cache_path, *, previous_stamp, expected_count):
                         dict(
                             contract=contract,
                             generation=generation,
-                            offset=generation[2],
+                            offset=size,
                             count=count,
+                            **({"archive_binding": archive_binding} if archived else {}),
                         )
                     ),
                 ),

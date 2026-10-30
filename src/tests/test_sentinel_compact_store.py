@@ -1,5 +1,6 @@
 import hashlib
 import json
+import gzip
 from datetime import datetime, timedelta
 
 import pytest
@@ -149,3 +150,133 @@ def test_slim_projection_cannot_publish_or_return_mixed_generation(tmp_path):
     with pytest.raises(ValueError, match="source_changed_during_read"):
         owner.slim_summary_projection(path, race, contract="strict-v1")
     assert not path.with_name(path.name + ".sentinel-slim.json").exists()
+
+
+def _archive_fixture(tmp_path):
+    cache = tmp_path / "events.jsonl"
+    rows = [
+        {"stage": "one", "fields": {"venue": "KRX", "reason": "한글" * 50}},
+        {"stage": "two", "fields": {"venue": "NXT", "reason": "second"}},
+    ]
+    raw = b"".join((json.dumps(row, ensure_ascii=False) + "\n").encode() for row in rows)
+    cache.write_bytes(raw)
+    original = store.stamp(cache)
+    plain = list(store.indexed_rows(cache, previous_stamp=None, expected_count=len(rows)))
+    expected = [(r["stage"], dict(r["fields"].items())) for r in plain]
+    archive = tmp_path / "events.jsonl.gz"
+    archive.write_bytes(gzip.compress(raw, mtime=0))
+    binding = dict(source_generation=original, logical_sha256=hashlib.sha256(raw).hexdigest(),
+                   logical_size=len(raw), archive_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+                   archive_generation=store.stamp(archive))
+    return cache, archive, binding, expected
+
+
+def test_archived_successor_reuses_logical_offsets_and_preserves_plain_index(tmp_path):
+    import sqlite3
+    cache, archive, binding, expected = _archive_fixture(tmp_path)
+    original_index = cache.with_suffix(".compact.sqlite")
+    original_bytes = original_index.read_bytes()
+    cache.unlink()  # Isolated fixture only; production retention remains separate.
+    result = list(store.indexed_rows(cache, previous_stamp=None, expected_count=2,
+                                     archive_binding=binding))
+    assert [(r["stage"], dict(r["fields"].items())) for r in result] == expected
+    assert original_index.read_bytes() == original_bytes
+    index = tmp_path / "events.jsonl.gz.compact.sqlite"
+    with sqlite3.connect(index) as db:
+        state = json.loads(db.execute("SELECT body FROM state").fetchone()[0])
+        offsets = [x[0] for x in db.execute("SELECT offset FROM rows ORDER BY offset")]
+    assert state["generation"] == binding["archive_generation"]
+    assert state["archive_binding"]["source_generation"] == binding["source_generation"]
+    assert state["offset"] == binding["logical_size"] == offsets[-1]
+    second = list(store.indexed_rows(cache, previous_stamp=None, expected_count=2,
+                                     archive_binding=binding))
+    assert [(r["stage"], dict(r["fields"].items())) for r in second] == expected
+
+
+def test_archive_failed_reindex_rolls_back_previous_index(tmp_path):
+    import sqlite3
+
+    cache, archive, binding, _ = _archive_fixture(tmp_path)
+    cache.unlink()
+    list(store.indexed_rows(cache, previous_stamp=None, expected_count=2,
+                            archive_binding=binding))
+    index = tmp_path / "events.jsonl.gz.compact.sqlite"
+    with sqlite3.connect(index) as db:
+        old_state = db.execute("SELECT body FROM state").fetchone()
+        old_rows = db.execute("SELECT offset, body, sha FROM rows ORDER BY offset").fetchall()
+    damaged = bytearray(archive.read_bytes())
+    damaged[-8] ^= 1
+    archive.write_bytes(damaged)
+    changed = dict(binding, archive_sha256=hashlib.sha256(damaged).hexdigest(),
+                   archive_generation=store.stamp(archive))
+    with pytest.raises((ValueError, OSError, EOFError)):
+        list(store.indexed_rows(cache, previous_stamp=None, expected_count=2,
+                                archive_binding=changed))
+    with sqlite3.connect(index) as db:
+        assert db.execute("SELECT body FROM state").fetchone() == old_state
+        assert db.execute("SELECT offset, body, sha FROM rows ORDER BY offset").fetchall() == old_rows
+
+
+@pytest.mark.parametrize("damage", ["archive_sha", "logical_sha", "size", "crc", "generation", "append"])
+def test_archived_successor_rejects_mixed_or_corrupt_generation(tmp_path, damage):
+    cache, archive, binding, _ = _archive_fixture(tmp_path)
+    cache.unlink()
+    if damage == "archive_sha":
+        binding["archive_sha256"] = "0" * 64
+    elif damage == "logical_sha":
+        binding["logical_sha256"] = "0" * 64
+    elif damage == "size":
+        binding["logical_size"] += 1
+    elif damage == "crc":
+        broken = bytearray(archive.read_bytes()); broken[-8] ^= 1; archive.write_bytes(broken)
+        binding["archive_sha256"] = hashlib.sha256(broken).hexdigest()
+        binding["archive_generation"] = store.stamp(archive)
+    elif damage == "generation":
+        binding["archive_generation"][1] += 1
+    previous = binding["source_generation"] if damage == "append" else None
+    with pytest.raises((ValueError, OSError, EOFError)):
+        list(store.indexed_rows(cache, previous_stamp=previous, expected_count=2,
+                                archive_binding=binding))
+
+
+def test_archived_successor_rejects_reappearing_plain_generation(tmp_path):
+    cache, archive, binding, _ = _archive_fixture(tmp_path)
+    with pytest.raises(ValueError, match="namespace_changed"):
+        list(store.indexed_rows(cache, previous_stamp=None, expected_count=2,
+                                archive_binding=binding))
+
+
+def test_archived_successor_reuses_native_invocation_digest(tmp_path, monkeypatch):
+    from src.engine.infrastructure import validation_digest_session as digest_owner
+
+    cache, archive, binding, expected = _archive_fixture(tmp_path)
+    cache.unlink()
+    monkeypatch.setattr(digest_owner, "MIN_BYTES", 1)
+    cold = list(store.indexed_rows(cache, previous_stamp=None, expected_count=2,
+                                   archive_binding=binding))
+    assert [(r["stage"], dict(r["fields"].items())) for r in cold] == expected
+    with digest_owner.postclose_session(tmp_path, "2026-10-28") as session:
+        for _ in range(2):
+            rows = list(store.indexed_rows(cache, previous_stamp=None, expected_count=2,
+                                           archive_binding=binding))
+            assert [(r["stage"], dict(r["fields"].items())) for r in rows] == expected
+        assert session.stats["full_reads"] == 1
+        assert session.stats["reused_reads"] == 1
+        archive.write_bytes(archive.read_bytes() + b"changed")
+        with pytest.raises(ValueError, match="generation_changed"):
+            list(store.indexed_rows(cache, previous_stamp=None, expected_count=2,
+                                    archive_binding=binding))
+
+
+def test_archived_successor_uses_resolved_shared_mount_and_rejects_alias(tmp_path):
+    physical = tmp_path / "physical"; physical.mkdir()
+    cache, archive, binding, expected = _archive_fixture(physical)
+    cache.unlink()
+    alias = tmp_path / "release-data"; alias.symlink_to(physical, target_is_directory=True)
+    with pytest.raises(ValueError, match="namespace_changed"):
+        list(store.indexed_rows(alias / cache.name, previous_stamp=None, expected_count=2,
+                                archive_binding=binding))
+    resolved = (alias / cache.name).resolve()
+    rows = list(store.indexed_rows(resolved, previous_stamp=None, expected_count=2,
+                                   archive_binding=binding))
+    assert [(r["stage"], dict(r["fields"].items())) for r in rows] == expected

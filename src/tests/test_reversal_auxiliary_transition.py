@@ -236,6 +236,82 @@ def test_prompt_contract_repair_keeps_mixed_incumbents_and_cas(prepared, monkeyp
         I.prepare_contract_repair(root, bundle, expected_parent=None, now=clock)
 
 
+@pytest.mark.parametrize("fail_selection", [False, True])
+def test_ordered_owner_uses_native_prompt_publisher_and_native_unwind(prepared, monkeypatch, fail_selection):
+    import json
+    from src.engine.automation import ordered_intraday_deploy as D
+
+    root, bundle, _, _, _, _ = prepared
+    operating = bundle["continuous_reversal"]["operating_manifest"]
+    operating.update(scopes=[V.scope_id(k, r) for k, r in V.scopes()], definitions={})
+    N._atomic_write_json(N.root(root) / "current.json", {"bundle_sha256": bundle["bundle_sha256"]})
+    P.write(N.root(root) / "generations" / (bundle["bundle_sha256"] + ".json"), bundle)
+    refs = I.effective_bindings(root, bundle, day="2026-10-08")
+    report = P.seal(dict(auxiliary_registry_bindings=refs, auxiliary_reader_code_hashes=I.code_hashes()))
+    source = N.root(root) / "sources" / ("reversal-" + bundle["continuous_reversal"]["auxiliary_report_sha256"] + ".json")
+    P.write(source, report)
+    bundle["continuous_reversal"]["report_file_sha256"]["auxiliary"] = P.file_hash(source)
+    P.write(N.root(root) / "generations" / (bundle["bundle_sha256"] + ".json"), bundle)
+    monkeypatch.setattr(N, "validate", lambda *args, **kwargs: None)
+    clock = datetime(2026, 10, 8, 15, 1, tzinfo=I.K.KST)
+    repair = I.prepare_contract_repair(root, bundle, expected_parent=None, now=clock)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return clock if tz else clock.replace(tzinfo=None)
+
+    monkeypatch.setattr(I, "datetime", Clock)
+    d = object.__new__(D.Deployment)
+    d.workspace = root / "workspace"
+    d.workspace.mkdir()
+    d.day = "2026-10-08"
+    d.selection = d.workspace / "selection.json"
+    d.old = dict(actual_pid_receipt={"pid": 123}, actual_pid_consumed=True)
+    d.before = D._json_bytes(d.old)
+    d.selection.write_bytes(d.before)
+    d.previous, d.previous_commit = root / "old", "a" * 40
+    d.candidate, d.commit = root / "candidate", "b" * 40
+    d.identity = dict(pid=123, start_ticks="123", cwd=str(d.previous / "src"))
+    d.candidate_p5 = dict(path=str(root / "p5.json"), sha256="e" * 64)
+    d.directory = d.workspace / "transition"
+    d.directory.mkdir()
+    d.checklist = d.workspace / "checklist.md"
+    d.checklist.write_text("original")
+    d.document_after = b"original"
+    d.hold = d.workspace / "hold.json"
+    d.hold_bytes = b"hold"
+    d.hold.write_bytes(d.hold_bytes)
+    d.state, d.phase, d.auxiliary_repair = {}, "drained", repair
+    monkeypatch.setattr(d, "assert_hold", lambda: None)
+    monkeypatch.setattr(d, "assert_unchanged", lambda: None)
+    monkeypatch.setattr(D, "_main_pids", lambda: [])
+    monkeypatch.setattr(D, "_predecessor_observer", lambda *args: {})
+    monkeypatch.setattr(D, "inherit_prepared_delay_code", lambda *args: None)
+    (d.workspace / "data/runtime").mkdir(parents=True)
+    native_publish, native_current, native_rollback = I.publish_contract_repair, I.current, I.rollback
+    monkeypatch.setattr(I, "publish_contract_repair", lambda _data, *args, **kwargs: native_publish(root, *args, **kwargs))
+    monkeypatch.setattr(I, "current", lambda _data, *args, **kwargs: native_current(root, *args, **kwargs))
+    monkeypatch.setattr(I, "rollback", lambda _data, **kwargs: native_rollback(root, **kwargs))
+    if fail_selection:
+        atomic = D._atomic
+        def fail_selected(path, value):
+            if Path(path) == d.selection:
+                raise OSError("selection failure")
+            return atomic(path, value)
+        monkeypatch.setattr(D, "_atomic", fail_selected)
+        with pytest.raises(OSError, match="selection failure") as failure:
+            d.publish()
+        d.fail(failure.value)
+        assert d.selection.read_bytes() == d.before
+        assert d.state["auxiliary_repair_unwind"]["status"] == "rolled_back"
+        assert I.current(root, bundle, day=d.day)["bindings"] == refs
+    else:
+        d.publish()
+        assert json.loads(d.selection.read_text())["git_commit"] == d.commit
+        assert I.current(root, bundle, day=d.day)["bindings"] == repair["new_bindings"]
+
+
 def test_wire_contract_repair_preserves_incumbent_policy_and_frozen_prompt_history(
     wire_repair_prepared,
 ):

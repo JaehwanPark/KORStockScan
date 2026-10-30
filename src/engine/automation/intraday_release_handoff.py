@@ -13916,6 +13916,26 @@ REVIEWED_P5_CONSUMER_UNION_PAIRS = {
     name: {(REVIEWED_INTERRUPTED_CUSTODY_PROFILE[name], current)}
     for name, current in REVIEWED_P5_CONSUMER_UNION_HASHES.items()
 }
+REVIEWED_STORAGE_INTEGRATION_HASHES = {
+    **{name: pair[1] for name, pair in
+       _preparation_code.REVIEWED_STORAGE_INTEGRATION_TRANSITION.items()},
+    "src/engine/infrastructure/startup_validation_code_context.py":
+        "074c07ee3ead746277a20ee7fc7bfb0e1acf167428840ad37f7c581ec5234a85",
+}
+REVIEWED_STORAGE_INTEGRATION_PROFILE = {
+    **REVIEWED_P5_CONSUMER_UNION_PROFILE, **REVIEWED_STORAGE_INTEGRATION_HASHES,
+}
+REVIEWED_STORAGE_INTEGRATION_PAIRS = {
+    name: {pair} for name, pair in
+    _preparation_code.REVIEWED_STORAGE_INTEGRATION_TRANSITION.items()
+}
+REVIEWED_STORAGE_INTEGRATION_PAIRS[
+    "src/engine/infrastructure/startup_validation_code_context.py"
+] = {(REVIEWED_P5_CONSUMER_UNION_HASHES[
+    "src/engine/infrastructure/startup_validation_code_context.py"
+], REVIEWED_STORAGE_INTEGRATION_HASHES[
+    "src/engine/infrastructure/startup_validation_code_context.py"
+])}
 REVIEWED_INTERRUPTED_CUSTODY_PRIOR_HASHES = {
     "src/engine/automation/ordered_intraday_deploy.py":
         "d048ed30b231a1076abaaaa79d85f4b655044307c201760ac067cb3e747375b6",
@@ -13969,6 +13989,20 @@ REVIEWED_P5_CONSUMER_UNION_VARIANTS = {
             for origin, members in value["contract_extensions"].items()},
     }
     for key, value in REVIEWED_INTERRUPTED_CUSTODY_VARIANTS.items()
+}
+REVIEWED_STORAGE_INTEGRATION_VARIANTS = {
+    (key[0], REVIEWED_STORAGE_INTEGRATION_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_sha256": REVIEWED_STORAGE_INTEGRATION_HASHES.get(
+            value["selector_path"], value["selector_sha256"]),
+        "dependencies": {name: REVIEWED_STORAGE_INTEGRATION_HASHES.get(name, sha)
+                         for name, sha in value["dependencies"].items()},
+        "contract_extensions": {
+            origin: {name: REVIEWED_STORAGE_INTEGRATION_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in members.items()}
+            for origin, members in value["contract_extensions"].items()},
+    }
+    for key, value in REVIEWED_P5_CONSUMER_UNION_VARIANTS.items()
 }
 REVIEWED_INTERRUPTED_CUSTODY_PAIRS = {
     name: {(origin, current) for origin in (
@@ -15190,12 +15224,17 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         (source := candidate_bytes("src/engine/automation/ordered_intraday_deploy.py", optional=True)) is not None
         and hashlib.sha256(source).hexdigest() == REVIEWED_INTERRUPTED_CUSTODY_PRIOR_HASHES["src/engine/automation/ordered_intraday_deploy.py"]
     )
+    storage_integration_present = any(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == pair[1]
+        for name, pair in _preparation_code.REVIEWED_STORAGE_INTEGRATION_TRANSITION.items()
+    )
     p5_union_present = any(
         (source := candidate_bytes(name, optional=True)) is not None
         and hashlib.sha256(source).hexdigest() == pair[1]
         for name, pair in _preparation_code.REVIEWED_P5_CONSUMER_UNION_TRANSITION.items()
     )
-    if p5_union_present or interrupted_custody_present or interrupted_custody_prior_present or common_support_present or stop_incident_present or prior_monitor_present or any(
+    if storage_integration_present or p5_union_present or interrupted_custody_present or interrupted_custody_prior_present or common_support_present or stop_incident_present or prior_monitor_present or any(
         (source := candidate_bytes(name, optional=True)) is not None
         and hashlib.sha256(source).hexdigest() == sha
         for name, sha in REVIEWED_SUBMISSION_MONITOR_HASHES.items()
@@ -15204,7 +15243,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         # original contract omits one of the historical dependency triggers.
         # A new/partial consumer inventory must not silently skip the census.
         for name, sha in (
-            REVIEWED_P5_CONSUMER_UNION_PROFILE if p5_union_present
+            REVIEWED_STORAGE_INTEGRATION_PROFILE if storage_integration_present
+            else REVIEWED_P5_CONSUMER_UNION_PROFILE if p5_union_present
             else REVIEWED_INTERRUPTED_CUSTODY_PROFILE if interrupted_custody_present
             else REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PROFILE if interrupted_custody_prior_present
             else REVIEWED_COMMON_SUPPORT_PROFILE if common_support_present
@@ -15217,14 +15257,16 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                 raise ValueError("entry_consumer_reviewed_dependency_unreviewed:" + name)
             if source != revision_bytes(commit, name):
                 raise ValueError("entry_consumer_reviewed_dependency_dirty:" + name)
-        prepared_hashes = (REVIEWED_P5_CONSUMER_UNION_PROFILE if p5_union_present
+        prepared_hashes = (REVIEWED_STORAGE_INTEGRATION_PROFILE if storage_integration_present
+                           else REVIEWED_P5_CONSUMER_UNION_PROFILE if p5_union_present
                            else REVIEWED_INTERRUPTED_CUSTODY_PROFILE if interrupted_custody_present
                            else REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PROFILE if interrupted_custody_prior_present
                            else REVIEWED_COMMON_SUPPORT_PROFILE if common_support_present
                            else REVIEWED_STOP_INCIDENT_PROFILE if stop_incident_present
                            else REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE if prior_monitor_present
                            else REVIEWED_SUBMISSION_MONITOR_PROFILE)
-        prepared_variants = (REVIEWED_P5_CONSUMER_UNION_VARIANTS if p5_union_present
+        prepared_variants = (REVIEWED_STORAGE_INTEGRATION_VARIANTS if storage_integration_present
+                             else REVIEWED_P5_CONSUMER_UNION_VARIANTS if p5_union_present
                              else REVIEWED_INTERRUPTED_CUSTODY_VARIANTS if interrupted_custody_present
                              else REVIEWED_INTERRUPTED_CUSTODY_PRIOR_VARIANTS if interrupted_custody_prior_present
                              else REVIEWED_COMMON_SUPPORT_VARIANTS if common_support_present
@@ -15668,7 +15710,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
         if (
-            (p5_union_present and pair in REVIEWED_P5_CONSUMER_UNION_PAIRS.get(repository_name(name), ()))
+            (storage_integration_present and pair in REVIEWED_STORAGE_INTEGRATION_PAIRS.get(repository_name(name), ()))
+            or (p5_union_present and pair in REVIEWED_P5_CONSUMER_UNION_PAIRS.get(repository_name(name), ()))
             or pair in REVIEWED_INTERRUPTED_CUSTODY_PAIRS.get(repository_name(name), ())
             or pair in REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PAIRS.get(repository_name(name), ())
             or pair in REVIEWED_COMMON_SUPPORT_PAIRS.get(repository_name(name), ())

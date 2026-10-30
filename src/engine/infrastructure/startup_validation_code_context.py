@@ -3789,6 +3789,24 @@ REVIEWED_P5_CONSUMER_UNION_PROFILE = {
     **REVIEWED_INTERRUPTED_CUSTODY_PROFILE,
     **{name: pair[1] for name, pair in REVIEWED_P5_CONSUMER_UNION_TRANSITION.items()},
 }
+# One change-scoped registration for both independent preparation and ordered
+# handoff.  Include transitive archive readers even where the previous profile
+# did not enumerate them. Issued predecessor profiles remain unchanged.
+REVIEWED_STORAGE_INTEGRATION_TRANSITION = {
+    "src/engine/automation/ordered_intraday_deploy.py": ("914d5a48c783b3afdd6537a796cd5e8ca120aea03ea60c705cffff76f3148374", "3ca1a2ae39d43019570c42b95e90ddd238a0ab7f5980a1e5322ea3f0d638c240"),
+    "src/engine/monitoring/submission_bottleneck_monitor.py": ("f3a09a8c7890b3946a3c28fa3465056ae41dfd0bd2e149be77e7ae3bdf33eaae", "858db84b920533dc4fa39430a5ea70468dae92c0552924582624e20154b2f240"),
+    "src/engine/buy_funnel_sentinel.py": ("680ba5cce5ecff77d573457141e604051fb6bdc2216f9f649353693e4ccaf510", "117360cda23c8afab8a0ed4a606fd74d879b312ed2a8a26e0cdaf82ae7cda014"),
+    "src/engine/holding_exit_sentinel.py": ("e2bb53a00436e5574ec9117d2514deba798baf675d500b44e7a31eafa2d4dd93", "0c618b5c5852e294765a3c42aa1f82adb379e7b6994384b2f8d634dacc42dab1"),
+    "src/engine/monitoring/intraday_entry_flow_report.py": ("546a76bf36773b055fab4e13939ea7701af1890fd01141dd5851a9bb8ba05a30", "f0f053a55691529517a43b5ae744633296c74dfec34981939089831805d9829a"),
+    "src/engine/monitoring/sentinel_compact_store.py": ("70de438ae92ed50e3ab63666f3f49aee906f7394333acdea48a0ac8234d64320", "a2bcf7fb53929a9f40f3acd567ec3f0d40a285a8c5e8d5d6ede187bd63c36383"),
+    "src/engine/monitoring/sentinel_source_window.py": ("012d290ace2bd5e6cd16a4e0f8564f8082e03dc55851959a67a0418f010c5737", "14d3cf303f8c3aa9b36c1b72d9bd03b37fa1e2382d6613cb6e4a8d1258f0a174"),
+    "src/engine/monitoring/sentinel_summary_contract.py": ("44a81aea08b43a5be7a1b33aea70a231fd8b4e445d3cee6e0f8b930cb1fe41fd", "73160cbc1239ce787e23e53cc797dc88b8a3717114ace5376ffcd0b307b81beb"),
+    "src/engine/sentinel_event_cache.py": ("2a9adf8c6936718163c9a57af112d7f0fe5edefec65248e58a76a9487caef70b", "92c4eacc2bfa5be319ea0c72bedba22a079afa9fd296b9eb3e553366de6cdc69"),
+}
+REVIEWED_STORAGE_INTEGRATION_PROFILE = {
+    **REVIEWED_P5_CONSUMER_UNION_PROFILE,
+    **{name: pair[1] for name, pair in REVIEWED_STORAGE_INTEGRATION_TRANSITION.items()},
+}
 REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PROFILE = {
     **REVIEWED_COMMON_SUPPORT_PROFILE,
     "src/engine/automation/ordered_intraday_deploy.py":
@@ -3802,6 +3820,23 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
     comparison_root = ROOT if root is None else Path(root)
     if not comparison_root.is_absolute() or comparison_root.resolve() != comparison_root:
         return False
+    storage_generation = any(
+        (comparison_root / name).is_file()
+        and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == pair[1]
+        for name, pair in REVIEWED_STORAGE_INTEGRATION_TRANSITION.items()
+    )
+    if storage_generation:
+        if any(
+            (comparison_root / name).is_symlink()
+            or not (comparison_root / name).is_file()
+            or _sha(comparison_root / name) != expected
+            for name, expected in REVIEWED_STORAGE_INTEGRATION_PROFILE.items()
+        ):
+            return False
+        transition = REVIEWED_STORAGE_INTEGRATION_TRANSITION.get(relative)
+        if transition is not None:
+            return (old, current) == transition
     union_generation = any(
         (comparison_root / name).is_file()
         and not (comparison_root / name).is_symlink()
@@ -3813,13 +3848,15 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
             (comparison_root / name).is_symlink()
             or not (comparison_root / name).is_file()
             or _sha(comparison_root / name) != expected
-            for name, expected in REVIEWED_P5_CONSUMER_UNION_PROFILE.items()
+            for name, expected in (REVIEWED_STORAGE_INTEGRATION_PROFILE if storage_generation
+                                   else REVIEWED_P5_CONSUMER_UNION_PROFILE).items()
         ):
             return False
         transition = REVIEWED_P5_CONSUMER_UNION_TRANSITION.get(relative)
         if transition is not None:
             return current == transition[1] and old == transition[0]
-    interrupted_profile = (REVIEWED_P5_CONSUMER_UNION_PROFILE if union_generation
+    interrupted_profile = (REVIEWED_STORAGE_INTEGRATION_PROFILE if storage_generation
+                           else REVIEWED_P5_CONSUMER_UNION_PROFILE if union_generation
                            else REVIEWED_INTERRUPTED_CUSTODY_PROFILE)
     prior_owner = "src/engine/automation/ordered_intraday_deploy.py"
     interrupted_prior = (
@@ -3869,7 +3906,8 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
             (comparison_root / name).is_symlink()
             or not (comparison_root / name).is_file()
             or _sha(comparison_root / name) != expected
-            for name, expected in (interrupted_profile if interrupted_generation
+            for name, expected in (REVIEWED_STORAGE_INTEGRATION_PROFILE if storage_generation
+                                   else interrupted_profile if interrupted_generation
                                    else REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PROFILE if interrupted_prior
                                    else REVIEWED_COMMON_SUPPORT_PROFILE).items()
         ):
@@ -3889,7 +3927,8 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
             or not (comparison_root / name).is_file()
             or _sha(comparison_root / name) != expected
             for name, expected in (
-                interrupted_profile if interrupted_generation
+                REVIEWED_STORAGE_INTEGRATION_PROFILE if storage_generation
+                else interrupted_profile if interrupted_generation
                 else REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PROFILE if interrupted_prior
                 else REVIEWED_COMMON_SUPPORT_PROFILE if support_generation
                 else REVIEWED_STOP_INCIDENT_PROFILE
@@ -3917,7 +3956,7 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
         # Authenticate a complete issued generation before interpreting a pair.
         # The current reader may compare a genuine earlier selected generation;
         # an overlapping source trigger cannot turn it into the latest profile.
-        for profile in (REVIEWED_P5_CONSUMER_UNION_PROFILE, REVIEWED_INTERRUPTED_CUSTODY_PROFILE, REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PROFILE, REVIEWED_COMMON_SUPPORT_PROFILE,
+        for profile in (REVIEWED_STORAGE_INTEGRATION_PROFILE, REVIEWED_P5_CONSUMER_UNION_PROFILE, REVIEWED_INTERRUPTED_CUSTODY_PROFILE, REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PROFILE, REVIEWED_COMMON_SUPPORT_PROFILE,
                         REVIEWED_STOP_INCIDENT_PROFILE,
                         REVIEWED_SUBMISSION_MONITOR_PROFILE,
                         REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE):

@@ -624,6 +624,10 @@ def test_cli_holds_detector_lock_through_attestation_and_failure(
             return step
 
     monkeypatch.setattr(D, "Deployment", lambda *args, **kw: Driver())
+    def selected_p5(_driver):
+        _assert_detector_lock_held(tmp_path)
+        calls.append("selected_p5")
+    monkeypatch.setattr(D, "validate_selected_p5", selected_p5)
     rc = D.main(
         [
             "--workspace",
@@ -642,6 +646,8 @@ def test_cli_holds_detector_lock_through_attestation_and_failure(
     )
     assert rc == (1 if failure else 0)
     assert calls[-1] == ("fail" if failure else "attest")
+    if not failure or failure == "attest":
+        assert calls.index("prepare") < calls.index("selected_p5") < calls.index("start")
     with D.detector_transition_lock(tmp_path, timeout=0):
         _assert_detector_lock_held(tmp_path)
 
@@ -4388,7 +4394,7 @@ def test_selected_p5_callback_checks_native_profile_after_real_hold_and_publicat
         selected = json.loads(driver.selection.read_bytes())
         assert selected["git_commit"] == driver.commit and selected["actual_pid_consumed"] is False
         relative = "src/engine/automation/ordered_intraday_deploy.py"
-        old_hash, new_hash = C.REVIEWED_INTERRUPTED_CUSTODY_TRANSITION[relative]
+        old_hash, new_hash = C.REVIEWED_STORAGE_INTEGRATION_TRANSITION[relative]
         assert C.reviewed_preparation_pair(relative, old_hash, new_hash, root=driver.candidate)
         if reject: raise ValueError("native selected P5 failed")
     if reject:
@@ -4398,3 +4404,183 @@ def test_selected_p5_callback_checks_native_profile_after_real_hold_and_publicat
     else:
         assert D.execute(d, validate_prepared=selected_p5)["status"] == "pass"
         assert calls == ["start"]
+
+
+@pytest.mark.parametrize("fault", [None, "failed", "wrong_commit", "selection_changed", "live_main", "path", "child_exit", "source_changed"])
+def test_cli_selected_p5_uses_native_prepared_generation(driver, monkeypatch, fault):
+    from src.engine.automation import main_startup_validation as native
+
+    d = driver
+    d.phase = "prepared"
+    d.hold_bytes = b"owned hold"
+    d.hold.write_bytes(d.hold_bytes)
+    d.published = D._json_bytes(dict(release_root=str(d.candidate), git_commit=d.commit))
+    d.selection.write_bytes(d.published)
+    monkeypatch.setattr(D, "_main_pids", lambda: [999] if fault == "live_main" else [])
+    directory = d.workspace / "data/report/main_startup_validation" / d.day / ("a" * 32)
+    directory.mkdir(parents=True)
+    path = directory / "final.json"
+    result = dict(schema="main_policy_load_exit_validation_v1", status="passed",
+                  run_id="a" * 32, child_exit_code=0, protected_sources_unchanged=True,
+                  failure_phase=None,
+                  target_date=d.day, execution_release_root=str(d.candidate),
+                  execution_release_commit=d.commit, selected_release_root=str(d.candidate),
+                  selected_release_commit=d.commit, findings=[], child_terminated=True,
+                  load_check_passed=True, actual_pid_consumed=False,
+                  runtime_effect=False, allowed_runtime_apply=False)
+    if fault == "failed": result["status"] = "failed"
+    if fault == "wrong_commit": result["selected_release_commit"] = "f" * 40
+    if fault == "child_exit": result["child_exit_code"] = 1
+    if fault == "source_changed": result["protected_sources_unchanged"] = False
+    if fault == "path": path = d.workspace / "selected-p5.json"
+    path.write_bytes(D._json_bytes(result))
+    calls = []
+    def run_validation(**kwargs):
+        calls.append(kwargs)
+        if fault == "selection_changed": d.selection.write_text("{}")
+        return result, path
+    monkeypatch.setattr(native, "run_validation", run_validation)
+    if fault:
+        with pytest.raises(ValueError, match="selected_p5_"):
+            D.validate_selected_p5(d)
+        assert d.hold.read_bytes() == d.hold_bytes
+    else:
+        D.validate_selected_p5(d)
+        assert calls == [dict(workspace=d.workspace, target_date=d.day,
+                              execution_root=d.candidate, candidate=False)]
+        assert d.state["selected_p5"]["sha256"] == D.H._sha(path)
+
+
+@pytest.mark.parametrize("fault", [None, "manifest", "pid", "parent", "frozen", "day", "code"])
+def test_auxiliary_repair_preflight_binds_exact_incumbent_before_hold(driver, monkeypatch, fault):
+    from datetime import datetime
+    from src.engine.scalping import reversal_auxiliary_intraday as auxiliary
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+
+    d = driver
+    source = d.workspace / "auxiliary-source.json"
+    source.write_text("original source")
+    old = {"scope": "old"}
+    manifest = dict(prepared_at=datetime.now(D.H.KST).isoformat(), day=d.day,
+                    artifact_content_sha256="a" * 64, base_bundle_sha256="b" * 64,
+                    expected_parent=None, old_bindings=old, new_bindings={"scope": "new"},
+                    source_hashes={str(source): D.H._sha(source)})
+    path = d.workspace / "review.json"
+    path.write_bytes(D._json_bytes(manifest))
+    d.auxiliary_repair_path = path
+    d.auxiliary_repair_sha256 = D.H._sha(path)
+    consumed = dict(actual_pid_consumed=True, day=d.day, pid_identity=d.identity,
+                    release_commit=d.previous_commit, base_bundle_sha256="b" * 64,
+                    overlay_sha256=None, code_hashes=auxiliary.code_hashes(), bindings=old)
+    if fault == "manifest": d.auxiliary_repair_sha256 = "0" * 64
+    if fault == "pid": consumed["pid_identity"] = {**d.identity, "start_ticks": "wrong"}
+    if fault == "day": consumed["day"] = "2026-10-11"
+    if fault == "code": consumed["code_hashes"] = {}
+    if fault == "frozen": d.frozen[str(source)] = "f" * 64
+    bundle = dict(bundle_sha256="b" * 64)
+    monkeypatch.setattr(native, "load_effective", lambda **kwargs: bundle)
+    monkeypatch.setattr(auxiliary, "current", lambda *args, **kwargs: None)
+    monkeypatch.setattr(auxiliary, "read", lambda p: manifest if Path(p) == path else consumed)
+    monkeypatch.setattr(auxiliary, "prepare_contract_repair", lambda *args, **kwargs:
+                        {**manifest, "expected_parent": "other"} if fault == "parent" else manifest)
+    monkeypatch.setattr(auxiliary, "publish_contract_repair", lambda *args, **kwargs: pytest.fail("preflight published"))
+    before = d.selection.read_bytes()
+    if fault:
+        with pytest.raises(ValueError, match="deployment_auxiliary_repair_"):
+            d.pin_auxiliary_repair()
+        assert not d.hold.exists() and d.selection.read_bytes() == before
+    else:
+        d.pin_auxiliary_repair()
+        assert d.auxiliary_repair == manifest and d.frozen[str(source)] == D.H._sha(source)
+        assert not d.hold.exists() and d.selection.read_bytes() == before
+
+
+def test_auxiliary_repair_refuses_transition_without_selected_p5_before_preflight(driver, monkeypatch):
+    driver.auxiliary_repair_path = driver.workspace / "review.json"
+    monkeypatch.setattr(driver, "preflight", lambda: pytest.fail("preflight must not run"))
+    with pytest.raises(ValueError, match="deployment_auxiliary_repair_selected_p5_required"):
+        D.execute(driver)
+    assert not driver.hold.exists()
+
+
+@pytest.mark.parametrize("selector_failure", [False, True])
+def test_auxiliary_repair_publication_is_drained_and_unwinds_before_selection(driver, monkeypatch, selector_failure):
+    from src.engine.scalping import reversal_auxiliary_intraday as auxiliary
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+
+    d = driver
+    d.acquire_hold()
+    d.phase = "drained"
+    monkeypatch.setattr(D, "_main_pids", lambda: [])
+    d.auxiliary_repair = dict(expected_parent=None, artifact_content_sha256="a" * 64,
+                              old_bindings={"scope": "old"}, new_bindings={"scope": "new"})
+    overlay = dict(artifact_content_sha256="b" * 64, bindings={"scope": "new"},
+                   contract_repair_manifest_sha256="a" * 64)
+    calls = []
+    def publish(data, manifest, **kwargs):
+        assert d.phase == "drained" and d.selection.read_bytes() == d.before
+        assert d.hold.read_bytes() == d.hold_bytes
+        calls.append(("publish", kwargs))
+        return overlay
+    monkeypatch.setattr(auxiliary, "publish_contract_repair", publish)
+    monkeypatch.setattr(native, "load_effective", lambda **kwargs: {"bundle_sha256": "c" * 64})
+    monkeypatch.setattr(auxiliary, "current", lambda *args, **kwargs: overlay)
+    def rollback(data, **kwargs):
+        calls.append(("rollback", kwargs))
+        return dict(bindings={"scope": "old"}, artifact_content_sha256="d" * 64)
+    monkeypatch.setattr(auxiliary, "rollback", rollback)
+    if selector_failure:
+        original = D._atomic
+        def fail_selection(path, raw):
+            if Path(path) == d.selection:
+                raise OSError("selector write failed")
+            return original(path, raw)
+        monkeypatch.setattr(D, "_atomic", fail_selection)
+        with pytest.raises(OSError, match="selector write failed") as failure:
+            d.publish()
+        d.fail(failure.value)
+        assert d.selection.read_bytes() == d.before
+        assert d.state["auxiliary_repair_unwind"]["status"] == "rolled_back"
+        assert [name for name, _ in calls] == ["publish", "rollback"]
+        assert calls[-1][1]["expected_parent"] == overlay["artifact_content_sha256"]
+    else:
+        d.publish()
+        assert d.phase == "selected" and [name for name, _ in calls] == ["publish"]
+        assert d.state["auxiliary_repair_published"] == overlay["artifact_content_sha256"]
+
+
+@pytest.mark.parametrize("fault", [None, "pid", "binding", "overlay", "release", "day", "code"])
+def test_auxiliary_repair_attestation_requires_successor_pid_binding(driver, monkeypatch, fault):
+    from src.engine.scalping import reversal_auxiliary_intraday as auxiliary
+    from src.engine.scalping import continuous_reversal_postclose as proof
+
+    d = driver
+    d.phase = "starting"
+    identity = dict(pid=456, start_ticks="456", cwd=str(d.candidate / "src"))
+    d.selection.write_text(json.dumps(dict(git_commit=d.commit, actual_pid_consumed=True,
+                                           actual_pid_receipt={"pid": 456})))
+    monkeypatch.setattr(D.H, "_identity", lambda _: dict(identity))
+    monkeypatch.setattr(D, "_main_pids", lambda: [456])
+    d.run_json = lambda *args, **kwargs: {"status": "pass"}
+    monkeypatch.setattr(d, "observe_report_consumers", lambda *_: None)
+    d.auxiliary_repair = dict(base_bundle_sha256="b" * 64, new_bindings={"scope": "new"})
+    d.auxiliary_overlay = dict(artifact_content_sha256="c" * 64)
+    receipt = dict(schema=auxiliary.SCHEMA, day=d.day, actual_pid_consumed=True, pid_identity=identity,
+                   release_commit=d.commit, base_bundle_sha256="b" * 64,
+                   overlay_sha256="c" * 64, code_hashes=auxiliary.code_hashes(), bindings={"scope": "new"})
+    if fault == "pid": receipt["pid_identity"] = {**identity, "start_ticks": "other"}
+    if fault == "binding": receipt["bindings"] = {"scope": "old"}
+    if fault == "overlay": receipt["overlay_sha256"] = "d" * 64
+    if fault == "release": receipt["release_commit"] = "e" * 40
+    if fault == "day": receipt["day"] = "2026-10-11"
+    if fault == "code": receipt["code_hashes"] = {}
+    path = auxiliary.root(d.workspace / "data") / "consumed" / d.day / "456.json"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(D._json_bytes(proof.seal(receipt)))
+    if fault:
+        with pytest.raises(ValueError, match="deployment_auxiliary_repair_pid_consumption_invalid"):
+            d.attest()
+        assert d.phase != "complete"
+    else:
+        assert d.attest()["status"] == "pass"
+        assert d.state["auxiliary_repair_pid_consumption"]["sha256"] == D.H._sha(path)

@@ -4637,7 +4637,7 @@ def test_p5_consumer_union_requires_complete_current_generation(tmp_path, fault)
     for name, expected in C.REVIEWED_P5_CONSUMER_UNION_PROFILE.items():
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes((ROOT / name).read_bytes())
+        path.write_bytes(subprocess.check_output(["git", "-C", str(ROOT), "show", "85ede0d11:" + name]))
         assert C._sha(path) == expected
     name, (old, current) = next(iter(C.REVIEWED_P5_CONSUMER_UNION_TRANSITION.items()))
     dependency = tmp_path / "src/engine/scalping/reversal_auxiliary_intraday.py"
@@ -4654,25 +4654,47 @@ def test_p5_consumer_union_requires_complete_current_generation(tmp_path, fault)
     assert C.reviewed_preparation_pair(name, old, current, root=tmp_path) is (fault is None)
 
 
-def test_p5_consumer_union_registered_for_both_native_readers():
+def test_storage_integration_registered_for_both_native_readers():
     """A future profile drift fails before candidate admission, not at launch."""
-    assert set(C.REVIEWED_P5_CONSUMER_UNION_PROFILE) <= set(
-        H.REVIEWED_P5_CONSUMER_UNION_PROFILE
+    assert set(C.REVIEWED_STORAGE_INTEGRATION_PROFILE) <= set(
+        H.REVIEWED_STORAGE_INTEGRATION_PROFILE
     )
-    for name, expected in C.REVIEWED_P5_CONSUMER_UNION_PROFILE.items():
+    for name, expected in C.REVIEWED_STORAGE_INTEGRATION_PROFILE.items():
         raw = (ROOT / name).read_bytes()
         assert hashlib.sha256(raw).hexdigest() == expected, name
         compared = H.reviewed_formatting_source(name, raw)
-        assert hashlib.sha256(compared).hexdigest() == H.REVIEWED_P5_CONSUMER_UNION_PROFILE[name], name
+        assert hashlib.sha256(compared).hexdigest() == H.REVIEWED_STORAGE_INTEGRATION_PROFILE[name], name
     context = "src/engine/infrastructure/startup_validation_code_context.py"
-    assert C._sha(ROOT / context) == H.REVIEWED_P5_CONSUMER_UNION_PROFILE[context]
-    for (name, digest), variant in H.REVIEWED_P5_CONSUMER_UNION_VARIANTS.items():
-        if name in H.REVIEWED_P5_CONSUMER_UNION_PROFILE:
-            assert digest == H.REVIEWED_P5_CONSUMER_UNION_PROFILE[name]
-        assert variant["selector_sha256"] == H.REVIEWED_P5_CONSUMER_UNION_PROFILE[variant["selector_path"]]
+    assert C._sha(ROOT / context) == H.REVIEWED_STORAGE_INTEGRATION_PROFILE[context]
+    for (name, digest), variant in H.REVIEWED_STORAGE_INTEGRATION_VARIANTS.items():
+        if name in H.REVIEWED_STORAGE_INTEGRATION_PROFILE:
+            assert digest == H.REVIEWED_STORAGE_INTEGRATION_PROFILE[name]
+        assert variant["selector_sha256"] == H.REVIEWED_STORAGE_INTEGRATION_PROFILE[variant["selector_path"]]
         for name, digest in variant["dependencies"].items():
-            if name in H.REVIEWED_P5_CONSUMER_UNION_PROFILE:
-                assert digest == H.REVIEWED_P5_CONSUMER_UNION_PROFILE[name], name
+            if name in H.REVIEWED_STORAGE_INTEGRATION_PROFILE:
+                assert digest == H.REVIEWED_STORAGE_INTEGRATION_PROFILE[name], name
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "mixed", "origin", "future"])
+def test_storage_integration_requires_complete_profile(tmp_path, fault):
+    for name, expected in C.REVIEWED_STORAGE_INTEGRATION_PROFILE.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((ROOT / name).read_bytes())
+        assert C._sha(path) == expected
+    name, (old, current) = next(iter(C.REVIEWED_STORAGE_INTEGRATION_TRANSITION.items()))
+    dependency = tmp_path / "src/engine/monitoring/sentinel_source_window.py"
+    if fault == "missing":
+        dependency.unlink()
+    elif fault == "mixed":
+        dependency.write_bytes(subprocess.check_output([
+            "git", "-C", str(ROOT), "show", "23fbecf28:src/engine/monitoring/sentinel_source_window.py"
+        ]))
+    elif fault == "origin":
+        old = "0" * 64
+    elif fault == "future":
+        current = "f" * 64
+    assert C.reviewed_preparation_pair(name, old, current, root=tmp_path) is (fault is None)
 
 @pytest.mark.parametrize("fault", [None, "missing", "mixed"])
 def test_interrupted_prior_selected_generation_retains_native_reader(tmp_path, fault):

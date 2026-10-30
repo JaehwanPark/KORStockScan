@@ -52,7 +52,8 @@ PRE_FORMAT_BUY_OWNER = (
 # summary parser and its callback definitions remain unchanged.
 PRE_CALL_FINISH_BUY_OWNER = "a02d6c28e6ecf32ac67f99a60188d2c61bcb6cfc22f037022fa669be0ca46dd2"
 PRE_STARTUP_SOURCE_BUY_OWNER = "72ed2bf11dcab9ce6b3527ca1f5b8502452ec9af8bdd3c9ac4ce5b3d5bdf1455"
-CURRENT_BUY_OWNER = "680ba5cce5ecff77d573457141e604051fb6bdc2216f9f649353693e4ccaf510"
+PRE_ARCHIVE_BUY_OWNER = "680ba5cce5ecff77d573457141e604051fb6bdc2216f9f649353693e4ccaf510"
+CURRENT_BUY_OWNER = "117360cda23c8afab8a0ed4a606fd74d879b312ed2a8a26e0cdaf82ae7cda014"
 LIMIT = 32 * 1024 * 1024
 SUMMARY_LIMIT = 128 * 1024 * 1024
 DEFINITIONS = {
@@ -166,7 +167,7 @@ def _callback_predecessors(callbacks, parser_path):
         funnel_pre_liquidity,
     ) = ([], [], [], [])
     funnel_pre_terminal, funnel_pre_scope_extraction, funnel_pre_call_finish = [], [], []
-    funnel_pre_startup_source = []
+    funnel_pre_startup_source, funnel_pre_archive = [], []
     funnel = tuple(getattr(f, "__name__", None) for f in callbacks) == (
         "_blocker_label_from_stage_fields",
         "_is_ignored_event",
@@ -237,6 +238,9 @@ def _callback_predecessors(callbacks, parser_path):
         funnel_pre_startup_source.extend(
             (source, PRE_STARTUP_SOURCE_BUY_OWNER if funnel else prior_owner)
         )
+        funnel_pre_archive.extend(
+            (source, PRE_ARCHIVE_BUY_OWNER if funnel else prior_owner)
+        )
     digest = lambda parts: hashlib.sha256("\n".join(parts).encode()).hexdigest()
     if funnel:
         # These are reviewed parser/owner pairs, not independent allowlists.
@@ -255,6 +259,7 @@ def _callback_predecessors(callbacks, parser_path):
             (PRE_FORMAT_PARSER, digest(funnel_pre_scope_extraction)),
             (CURRENT_PARSER, digest(funnel_pre_call_finish)),
             (CURRENT_PARSER, digest(funnel_pre_startup_source)),
+            (CURRENT_PARSER, digest(funnel_pre_archive)),
         }
     else:
         # Preserve the existing parser-only migration for unchanged external

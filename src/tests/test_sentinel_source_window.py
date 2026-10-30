@@ -104,6 +104,96 @@ def test_forward_window_exact_clock_census_raw_delta_and_original_types(
     )
 
 
+def test_changed_issuer_never_discards_or_appends_to_old_window(tmp_path, monkeypatch):
+    raw, args, cache = _prepared(tmp_path, monkeypatch)
+    _append(raw, _event(10))
+    _, before = update_and_load_cached_event_rows(**args)
+    assert before["source_window_projection"]["row_count"] == 1
+    meta = cache.with_suffix(".meta.json")
+    database = cache.with_suffix(".compact.sqlite")
+    source_before, meta_before, database_before = (
+        cache.read_bytes(), meta.read_bytes(), database.read_bytes()
+    )
+    _append(raw, _event(20))
+    monkeypatch.setattr(window, "_contract", lambda: "changed-issuer")
+    with pytest.raises(ValueError, match="source_window_predecessor_migration_required"):
+        update_and_load_cached_event_rows(**args)
+    assert cache.read_bytes() == source_before
+    assert meta.read_bytes() == meta_before
+    assert database.read_bytes() == database_before
+
+
+@pytest.mark.parametrize("damage", [None, "atime", "missing", "changed", "foreign", "hardlink", "symlink"])
+def test_original_issuer_continues_exact_window_for_successor_and_rollback(tmp_path, monkeypatch, damage):
+    import hashlib
+    import subprocess
+
+    source = subprocess.check_output([
+        "git", "-C", str(Path(__file__).resolve().parents[2]), "show",
+        "23fbecf28:src/engine/monitoring/sentinel_source_window.py",
+    ])
+    contract = hashlib.sha256(source).hexdigest()
+    assert contract in window._PREDECESSOR_ISSUERS
+    path = tmp_path / "runtime/sentinel_event_cache/issuers" / (contract + ".py")
+    path.parent.mkdir(parents=True)
+    path.write_bytes(source)
+    path.chmod(0o444)
+    if damage == "atime":
+        import os
+        current = path.stat()
+        os.utime(path, ns=(1, current.st_mtime_ns))
+    issuer = window._predecessor_issuer(tmp_path, contract)
+    original_contract, original_maintain = window._contract, window.maintain
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return AT if tz else AT.replace(tzinfo=None)
+
+    monkeypatch.setattr(issuer, "datetime", Clock)
+    monkeypatch.setattr(window, "_contract", issuer._contract)
+    monkeypatch.setattr(window, "maintain", issuer.maintain)
+    raw, args, cache = _prepared(tmp_path, monkeypatch)
+    _append(raw, _event(10))
+    _, before = update_and_load_cached_event_rows(**args)
+    assert before["source_window_projection"]["row_count"] == 1
+    monkeypatch.setattr(window, "_contract", original_contract)
+    monkeypatch.setattr(window, "maintain", original_maintain)
+    meta = cache.with_suffix(".meta.json")
+    database = cache.with_suffix(".compact.sqlite")
+    originals = cache.read_bytes(), meta.read_bytes(), database.read_bytes()
+    _append(raw, _event(20))
+    if damage == "missing":
+        path.unlink()
+    elif damage == "changed":
+        path.chmod(0o644)
+        path.write_bytes(source + b"\n# changed\n")
+    elif damage == "hardlink":
+        import os
+        os.link(path, path.with_name("extra-link.py"))
+    elif damage == "symlink":
+        other = path.with_name("other.py")
+        path.rename(other)
+        path.symlink_to(other)
+    elif damage == "foreign":
+        data = json.loads(meta.read_bytes())
+        data["source_window_projection"]["contract"] = "f" * 64
+        meta.write_text(json.dumps(data))
+        originals = cache.read_bytes(), meta.read_bytes(), database.read_bytes()
+    if damage not in (None, "atime"):
+        with pytest.raises(ValueError, match="source_window_predecessor_"):
+            update_and_load_cached_event_rows(**args)
+        assert (cache.read_bytes(), meta.read_bytes(), database.read_bytes()) == originals
+        return
+    _, after = update_and_load_cached_event_rows(**args)
+    assert after["source_window_projection"]["contract"] == contract
+    assert after["source_window_projection"]["row_count"] == 2
+    current, current_receipt = window.read(tmp_path, AT + timedelta(seconds=30), lower_epoch=AT.timestamp())
+    previous, previous_receipt = issuer.read(tmp_path, AT + timedelta(seconds=30), lower_epoch=AT.timestamp())
+    assert current == previous and len(current) == 2
+    assert current_receipt == previous_receipt
+
+
 def test_preparation_does_not_backfill_and_pid_birth_may_bound_first_window(
     tmp_path, monkeypatch
 ):
@@ -118,6 +208,60 @@ def test_preparation_does_not_backfill_and_pid_birth_may_bound_first_window(
         tmp_path, AT + timedelta(seconds=30), lower_epoch=AT.timestamp() + 1
     )
     assert len(rows) == 1 and receipt["coverage_started_at"] == AT.isoformat()
+
+
+@pytest.mark.parametrize("rotate_raw", [False, True])
+def test_archived_cache_preserves_native_source_window_and_rejects_corruption(tmp_path, monkeypatch, rotate_raw):
+    from src.engine import sentinel_event_cache as cache_owner
+    from src.engine.automation import postclose_done_controller, next_preopen_readiness
+    from src.engine.infrastructure import log_retention
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return AT if tz else AT.replace(tzinfo=None)
+
+    monkeypatch.setattr(cache_owner, "datetime", Clock)
+    raw, args, cache = _prepared(tmp_path, monkeypatch)
+    _append(raw, _event(10))
+    update_and_load_cached_event_rows(**args)
+    rows, receipt = window.read(tmp_path, AT + timedelta(seconds=30), lower_epoch=AT.timestamp())
+    assert len(rows) == 1 and receipt["window_covered"]
+    monkeypatch.setattr(postclose_done_controller, "done_terminal_receipt_issues", lambda *a, **kw: [])
+    monkeypatch.setattr(next_preopen_readiness, "target_after_postclose", lambda *a, **kw: "2026-10-14")
+    monkeypatch.setattr(log_retention, "DocumentReferences", lambda *_: type("Docs", (), {"require_unreferenced": lambda self, names: None})())
+    monkeypatch.setattr(log_retention, "open_owned_inodes", lambda: set())
+    cache_owner.archive_closed_cache(tmp_path, buy.EVENT_CACHE_NAME, "2026-10-14", now=AT + timedelta(days=3))
+    assert not cache.exists() and raw.exists()
+    after, archived_receipt = window.read(tmp_path, AT + timedelta(seconds=30), lower_epoch=AT.timestamp())
+    assert after == rows
+    binding = archived_receipt.pop("cache_archive_binding")
+    assert binding["source_generation"] == receipt["cache_generation"]
+    assert binding["archive_generation"] != binding["source_generation"]
+    assert archived_receipt == receipt
+    if rotate_raw:
+        from src.engine import compress_db_backfilled_files as raw_archiver
+        from src.engine.automation import main_trailing_source_store as trailing
+
+        old = raw.stat()
+        assert trailing.build_step(tmp_path, raw)["complete"]
+        assert raw_archiver._gzip_file_with_jsonl_generation_lock(raw, dry_run=False)[0]
+        rotated_rows, rotated_receipt = window.read(tmp_path, AT + timedelta(seconds=30), lower_epoch=AT.timestamp())
+        assert rotated_rows == rows and rotated_receipt["bytes_read"] == 0
+        assert rotated_receipt["raw_archive_generation"]["source_stat"] == [
+            old.st_dev, old.st_ino, old.st_size, old.st_mtime_ns, old.st_ctime_ns]
+        raw_receipt = Path(str(raw) + ".gz.archive_receipt.json")
+        raw_receipt.write_text("{}")
+        with pytest.raises(ValueError):
+            window.read(tmp_path, AT + timedelta(seconds=30), lower_epoch=AT.timestamp())
+        return
+    _append(raw, _event(20, "entry_async_disposition"))
+    with_suffix, suffix_receipt = window.read(tmp_path, AT + timedelta(seconds=30), lower_epoch=AT.timestamp())
+    assert len(with_suffix) == 2 and suffix_receipt["bytes_read"] > 0
+    archive = Path(str(cache) + ".gz")
+    archive.write_bytes(archive.read_bytes() + b"changed")
+    with pytest.raises(ValueError, match="sentinel_archive_generation_changed"):
+        window.read(tmp_path, AT + timedelta(seconds=30), lower_epoch=AT.timestamp())
 
 
 def test_immutable_release_data_mount_uses_canonical_source_owner(

@@ -257,6 +257,10 @@ def load_pipeline_events(
 ) -> list[PipelineEvent]:
     path = existing_or_gzip_path(_pipeline_events_path(target_date))
     if not path.exists():
+        if use_cache:
+            from src.engine.sentinel_event_cache import reject_missing_archived_raw
+
+            reject_missing_archived_raw(_event_cache_dir(), EVENT_CACHE_NAME, target_date)
         return []
     if use_cache:
         rows, receipt = update_and_load_cached_event_rows(
@@ -278,8 +282,15 @@ def load_pipeline_events(
             with meta_path.with_suffix(".lock").open("a") as lock:
                 fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
                 expected = receipt["cache_generation"]
-                if store.stamp(cache_path) != expected:
+                archive_binding = receipt.get("archive_binding")
+                if archive_binding is None and store.stamp(cache_path) != expected:
                     raise ValueError("holding_baseline_cache_generation_changed")
+                if archive_binding is not None:
+                    from src.engine.sentinel_event_cache import archived_cache_binding
+
+                    if archived_cache_binding(cache_path, json.loads(meta_path.read_bytes())) != archive_binding:
+                        raise ValueError("holding_baseline_archive_generation_changed")
+                physical_path = Path(str(cache_path) + ".gz") if archive_binding else cache_path
                 columns = (
                     "emitted_at",
                     "pipeline",
@@ -299,7 +310,7 @@ def load_pipeline_events(
                                 if key in BASELINE_SUMMARY_FIELDS
                             },
                         ]
-                        for row in iter_jsonl(cache_path)
+                        for row in iter_jsonl(physical_path)
                     ]
 
                 contract = {
@@ -312,11 +323,15 @@ def load_pipeline_events(
                     "fields": sorted(BASELINE_SUMMARY_FIELDS),
                     "columns": list(columns),
                 }
-                rows = store.slim_summary_projection(
-                    cache_path, project_rows, contract=contract
-                )
+                if archive_binding is not None:
+                    from src.engine.sentinel_event_cache import _raw_producer_rotation_lease
+
+                    with _raw_producer_rotation_lease(Path(receipt["raw_path"])), store._verified_archive(cache_path, archive_binding):
+                        rows = store.slim_summary_projection(physical_path, project_rows, contract=contract)
+                else:
+                    rows = store.slim_summary_projection(cache_path, project_rows, contract=contract)
                 if (
-                    store.stamp(cache_path) != expected
+                    (archive_binding is None and store.stamp(cache_path) != expected)
                     or len(rows) != receipt["cache_event_count"]
                     or any(
                         not isinstance(row, list)
