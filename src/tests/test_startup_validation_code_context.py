@@ -4787,7 +4787,8 @@ def test_reviewed_predecessor_composition_keeps_unknown_and_disconnected_edges_o
 
 @pytest.mark.parametrize("fault", [None, "missing", "mixed", "origin", "future"])
 @pytest.mark.parametrize("generation", ["prior", "integrated", "current"])
-def test_storage_integration_requires_complete_profile(tmp_path, fault, generation):
+@pytest.mark.parametrize("consumer", ["changed", "unchanged_native"])
+def test_storage_integration_requires_complete_profile(tmp_path, fault, generation, consumer):
     profile = (C.REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE if generation == "prior"
                else C.REVIEWED_STORAGE_INTEGRATION_PROFILE if generation == "integrated"
                else C.REVIEWED_STORAGE_HEALTH_PROFILE)
@@ -4802,6 +4803,10 @@ def test_storage_integration_requires_complete_profile(tmp_path, fault, generati
                   else C.REVIEWED_STORAGE_INTEGRATION_TRANSITION if generation == "integrated"
                   else C.REVIEWED_STORAGE_HEALTH_TRANSITION)
     name, (old, current) = next(iter(transition.items()))
+    if consumer == "unchanged_native":
+        name="src/engine/scalping/continuous_reversal_policy_v6.py"
+        old=hashlib.sha256(subprocess.check_output(["git","-C",str(ROOT),"show","52425f68f:"+name])).hexdigest()
+        current=profile[name]
     dependency = tmp_path / "src/engine/monitoring/sentinel_source_window.py"
     if fault == "missing":
         dependency.unlink()

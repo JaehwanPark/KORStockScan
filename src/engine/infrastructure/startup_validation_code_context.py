@@ -3897,7 +3897,7 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
         and _sha(comparison_root / name) == pair[1]
         for name, pair in REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION.items()
     )
-    storage_generation = storage_latest or storage_prior
+    storage_generation = storage_latest or storage_prior or storage_health
     storage_profile = (REVIEWED_STORAGE_HEALTH_PROFILE if storage_health else
                        REVIEWED_STORAGE_INTEGRATION_PROFILE if storage_latest
                        else REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE)
@@ -4028,12 +4028,14 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
                             REVIEWED_SUBMISSION_MONITOR_PRIOR_TRANSITION)
         for name, pair in transitions.items()
     )
-    monitor_profile = None
-    if monitor_generation:
+    # Reuse the complete storage census already authenticated above. Keeping
+    # another dated storage-profile list here omitted otherwise valid successors.
+    monitor_profile = storage_profile if storage_generation else None
+    if monitor_generation and monitor_profile is None:
         # Authenticate a complete issued generation before interpreting a pair.
         # The current reader may compare a genuine earlier selected generation;
         # an overlapping source trigger cannot turn it into the latest profile.
-        for profile in (REVIEWED_STORAGE_INTEGRATION_PROFILE, REVIEWED_P5_CONSUMER_UNION_PROFILE, REVIEWED_INTERRUPTED_CUSTODY_PROFILE, REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PROFILE, REVIEWED_COMMON_SUPPORT_PROFILE,
+        for profile in (REVIEWED_P5_CONSUMER_UNION_PROFILE, REVIEWED_INTERRUPTED_CUSTODY_PROFILE, REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PROFILE, REVIEWED_COMMON_SUPPORT_PROFILE,
                         REVIEWED_STOP_INCIDENT_PROFILE,
                         REVIEWED_SUBMISSION_MONITOR_PROFILE,
                         REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE):
@@ -4043,6 +4045,7 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
                    for name, expected in profile.items()):
                 monitor_profile = profile
                 break
+    if monitor_generation:
         if monitor_profile is None:
             return False
         endpoint = comparison_root / relative
