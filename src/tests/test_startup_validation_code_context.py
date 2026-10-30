@@ -4556,7 +4556,12 @@ def test_stop_incident_generation_reaches_independent_reader(tmp_path, fault):
     for name, expected in C.REVIEWED_STOP_INCIDENT_PROFILE.items():
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes((ROOT / name).read_bytes())
+        raw = (ROOT / name).read_bytes()
+        if hashlib.sha256(raw).hexdigest() != expected:
+            raw = subprocess.check_output([
+                "git", "-C", str(ROOT), "show", "3e3d5da2c:" + name
+            ])
+        path.write_bytes(raw)
         assert C._sha(path) == expected
     relative = "src/engine/sniper_state_handlers.py"
     old, current = C.REVIEWED_STOP_INCIDENT_TRANSITION[relative]
@@ -4577,4 +4582,30 @@ def test_stop_incident_generation_reaches_independent_reader(tmp_path, fault):
         current = "f" * 64
     elif fault == "unregistered":
         relative = "src/engine/scalping/unknown_generation.py"
+    assert C.reviewed_preparation_pair(relative, old, current, root=tmp_path) is (fault is None)
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "mixed", "alias", "origin", "future"])
+def test_common_support_successor_requires_complete_preparation_generation(tmp_path, fault):
+    for name, expected in C.REVIEWED_COMMON_SUPPORT_PROFILE.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((ROOT / name).read_bytes())
+        assert C._sha(path) == expected
+    relative, (old, current) = next(iter(C.REVIEWED_COMMON_SUPPORT_TRANSITION.items()))
+    dependency = tmp_path / "src/engine/scalping/main_stop_quantity_source.py"
+    if fault == "missing":
+        dependency.unlink()
+    elif fault == "mixed":
+        dependency.write_bytes(subprocess.check_output([
+            "git", "-C", str(ROOT), "show", "af07f6f6a:src/engine/scalping/main_stop_quantity_source.py"
+        ]))
+    elif fault == "alias":
+        original = dependency.with_suffix(".original")
+        dependency.rename(original)
+        dependency.symlink_to(original)
+    elif fault == "origin":
+        old = "0" * 64
+    elif fault == "future":
+        current = "f" * 64
     assert C.reviewed_preparation_pair(relative, old, current, root=tmp_path) is (fault is None)

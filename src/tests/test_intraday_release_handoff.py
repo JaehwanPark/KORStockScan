@@ -5467,12 +5467,36 @@ def test_monitor_and_p5_recheck_share_complete_final_candidate_profile():
         | (set(handoff._preparation_code.REVIEWED_STOP_INCIDENT_TRANSITION)
            - {handoff._preparation_code._STOP_INCIDENT_OFFLINE_OWNER}))
     for name, expected in handoff.REVIEWED_STOP_INCIDENT_PROFILE.items():
-        raw = (root / name).read_bytes()
+        raw = subprocess.check_output([
+            "git", "-C", str(root), "show", "3e3d5da2c:" + name
+        ])
         projected = handoff.reviewed_formatting_source(name, raw, review=review)
         assert hashlib.sha256(projected).hexdigest() == expected, name
         if name not in {**handoff.REVIEWED_SUBMISSION_MONITOR_HASHES, **handoff.REVIEWED_STOP_INCIDENT_HASHES}:
             assert raw == subprocess.check_output([
                 "git", "-C", str(root), "show", "003865007:" + name
+            ]), name
+
+
+def test_common_support_profile_preserves_the_complete_stop_parent():
+    import hashlib
+    import subprocess
+
+    root = Path(handoff.__file__).resolve().parents[3]
+    old = handoff.REVIEWED_STOP_INCIDENT_PROFILE
+    new = handoff.REVIEWED_COMMON_SUPPORT_PROFILE
+    assert set(new) == set(old)
+    assert set(handoff.REVIEWED_COMMON_SUPPORT_HASHES) == {
+        "src/engine/scalping/reversal_auxiliary_intraday.py",
+        "src/engine/infrastructure/startup_validation_code_context.py",
+    }
+    for name, expected in new.items():
+        raw = (root / name).read_bytes()
+        compared = handoff.reviewed_formatting_source(name, raw)
+        assert hashlib.sha256(compared).hexdigest() == expected, name
+        if name not in handoff.REVIEWED_COMMON_SUPPORT_HASHES:
+            assert raw == subprocess.check_output([
+                "git", "-C", str(root), "show", "3e3d5da2c:" + name
             ]), name
 
 
