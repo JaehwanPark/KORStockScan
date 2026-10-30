@@ -256,6 +256,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## 미완료 원천 진단 인계
 
 - [ ] `[PrePostcloseStorageSequencing] 오늘 Main 종료 후 정리와 장후 순서 검증` (`Due: 2026-10-30`, `Slot: POSTCLOSE`, `TimeWindow: 20:00~20:30`, `Track: RuntimeStability`)
+  - 17:36 fbaa 전환은 정기 센티널(17:35:01→17:36:52)과의 예약 경합으로 hold/종료/선택 전에 실패했다. Main1354721/f59 유지·원 실패 보존. 기존 execute의 예약을 사전 검증 앞으로 옮겨 원60초 한도/잠금 unwind/DB epoch를 유지했고572회귀·8실제flock/실패 검사 PASS. 코드/plan이 같은4계열 fixture·수량 proof는 재계산 없이 재검증하고, 새 후보/P5/실제PID/health 뒤 검증된 삭제를 이어간다.
   - 17:18 f59cdc78e/PID1354721 기동 완료. 원본/현재 plan의 시간 경계 negative에서 과거 영수증에 최신 plan을 적용하는 오거절을 추가 수리했고1804 PASS. 원본 영수증은 원래 계약으로, 신규 발행만 현재 plan으로 검증한다. 기존 Main을 유지하면서 이 마지막 원본-reader 보완의4fixture·후보/선택P5·실제PID/현재health를 확인한다. 미래 장후·자연 수용과 과거 실패는 같은 owner에 보존한다.
   - 16:58 후속0ac79ed31/PID1264804의 정책·프롬프트·첫 source/observer 및 네 계열 검증 소비 확인. 네 policy_generation 경고는 해소됐고 현재 bounded source 관측대기·과거 지연 이력은 보존한다. 추가 negative에서 과거 plan을 새 주소에 복사하면 native report 생성기만 수용하는 비일치를 재현·수리했고1804회귀 PASS. 마지막 native predicate 보완을 새 clean 후보의 original-report review/4fixture·P5/실제PID/health로 확인한 뒤 배포 수용을 종료한다.
   - 16:32 통합3deb89f38/PID1164213 실제 기동·정책·수리 프롬프트128개 소비, 후보/선택P5, 첫 source/observer 및16:33 건강5PASS/2WARNING/0FAIL 확인. source-window 오류는 해소됐다. 전체 건강 소비의 새 검증-plan 충돌(코드가 같아도 시험 계획이 달라 기존 영수증 재사용 불가)을 원본 보존 후 기존 publisher/reader에서 수리한다. 현재 Main을 유지하며 원 보고서→새 코드 review·4계열 native fixture·후속 선택/PID/health까지 OPEN; 과거 장후 지연·null/자연 수용은 별도 보존한다.

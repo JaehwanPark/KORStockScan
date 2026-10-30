@@ -786,17 +786,21 @@ def execute(driver, *, validate_prepared=None):
         raise ValueError("deployment_auxiliary_repair_selected_p5_required")
     with R.scheduled_execution_lease(driver.workspace, exclusive=True):
         try:
-            driver.preflight()
-            with _source_database_epoch(driver.workspace, driver.day):
-                with sentinel_preparation_lock(driver):
+            # Reserve before preflight so a periodic producer cannot enter
+            # during expensive validation. Release before selected P5/start.
+            with ExitStack() as preparation:
+                preparation.enter_context(sentinel_preparation_lock(driver))
+                driver.preflight()
+                with _source_database_epoch(driver.workspace, driver.day):
                     driver.acquire_hold()
                     driver.drain()
                     driver.publish()
                     driver.prepare()
-                if validate_prepared is not None:
-                    validate_prepared(driver)
-                driver.start()
-                return driver.attest()
+                    preparation.close()
+                    if validate_prepared is not None:
+                        validate_prepared(driver)
+                    driver.start()
+                    return driver.attest()
         except BaseException as exc:
             driver.fail(exc)
             raise

@@ -7652,7 +7652,7 @@ def test_interrupted_custody_delta_checks_complete_combined_candidate(tmp_path, 
 
 
 @pytest.mark.parametrize("fault", [None, "missing", "mixed", "dirty", "unknown", "suppressed_triggers", "variant_valid", "variant_missing", "variant_unknown", "variant_new_missing"])
-@pytest.mark.parametrize("generation", ["issued_p5", "issued_storage", "issued_health", "issued_mount", "issued_capability", "issued_native_plan", "storage_integration"])
+@pytest.mark.parametrize("generation", ["issued_p5", "issued_storage", "issued_health", "issued_mount", "issued_capability", "issued_native_plan", "issued_plan_history", "storage_integration"])
 def test_p5_consumer_union_delta_checks_exact_complete_candidate(tmp_path, fault, monkeypatch, generation):
     import hashlib, json, subprocess
     from src.engine.infrastructure import startup_validation_code_context as C
@@ -7665,7 +7665,8 @@ def test_p5_consumer_union_delta_checks_exact_complete_candidate(tmp_path, fault
                 "2fe611daacb263a8d9acb28efa7eba858329db46" if generation == "issued_health" else
                 "3deb89f385e3dc93cbd021c97bde7dbeb4622c7f" if generation == "issued_mount" else
                 "0ac79ed316e1468d75467183af25ff45478e7e0f" if generation == "issued_capability" else
-                "f59cdc78e10d9dc18023abe71c871861788b3796" if generation == "issued_native_plan" else "HEAD")
+                "f59cdc78e10d9dc18023abe71c871861788b3796" if generation == "issued_native_plan" else
+                "fbaa1d2fff0bb99212a4c8be15aefb9bb150c477" if generation == "issued_plan_history" else "HEAD")
     commit = subprocess.check_output(["git", "-C", str(source), "rev-parse", revision], text=True).strip()
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "--detach", commit], check=True)
     origin = "23fbecf2874e618680883ccf8fd4c0947a52f6a0"
@@ -7717,14 +7718,16 @@ def test_p5_consumer_union_delta_checks_exact_complete_candidate(tmp_path, fault
                     handoff.REVIEWED_STORAGE_MOUNT_VARIANTS if generation == "issued_mount" else
                     handoff.REVIEWED_STORAGE_CAPABILITY_VARIANTS if generation == "issued_capability" else
                     handoff.REVIEWED_STORAGE_NATIVE_PLAN_VARIANTS if generation == "issued_native_plan" else
-                    handoff.REVIEWED_STORAGE_PLAN_HISTORY_VARIANTS)
+                    handoff.REVIEWED_STORAGE_PLAN_HISTORY_VARIANTS if generation == "issued_plan_history" else
+                    handoff.REVIEWED_STORAGE_ADMISSION_VARIANTS)
         profile = (handoff.REVIEWED_P5_CONSUMER_UNION_PROFILE if generation == "issued_p5" else
                    handoff.REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE if generation == "issued_storage" else
                    handoff.REVIEWED_STORAGE_HEALTH_PROFILE if generation == "issued_health" else
                    handoff.REVIEWED_STORAGE_MOUNT_PROFILE if generation == "issued_mount" else
                    handoff.REVIEWED_STORAGE_CAPABILITY_PROFILE if generation == "issued_capability" else
                    handoff.REVIEWED_STORAGE_NATIVE_PLAN_PROFILE if generation == "issued_native_plan" else
-                   handoff.REVIEWED_STORAGE_PLAN_HISTORY_PROFILE)
+                   handoff.REVIEWED_STORAGE_PLAN_HISTORY_PROFILE if generation == "issued_plan_history" else
+                   handoff.REVIEWED_STORAGE_ADMISSION_PROFILE)
         trigger, variant = next(iter(variants.items()))
         if fault == "variant_new_missing":
             monkeypatch.setitem(variant["dependencies"], "src/engine/new_missing_consumer.py", "0" * 64)

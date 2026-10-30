@@ -3338,11 +3338,12 @@ def test_owned_closed_collector_uses_native_actor_without_legacy_ws_frame(
     assert not (tmp_path / "data/runtime/operator_startup_hold.json").exists()
 
 
-@pytest.mark.parametrize("failure", [None, "prepare"])
+@pytest.mark.parametrize("failure", [None, "preflight", "prepare"])
 def test_execute_reserves_sentinel_before_drain_releases_before_start(
     tmp_path, failure
 ):
     (tmp_path / "data").mkdir()
+    (tmp_path / "tmp").mkdir()
     calls = []
 
     class Driver:
@@ -3352,11 +3353,11 @@ def test_execute_reserves_sentinel_before_drain_releases_before_start(
         def __getattr__(self, name):
             def step(*args):
                 calls.append(name)
-                if name in ("drain", "publish", "prepare", "start", "attest"):
+                if name in ("preflight", "drain", "publish", "prepare", "start", "attest"):
                     with (tmp_path / "tmp/run_buy_funnel_sentinel.lock").open(
                         "a"
                     ) as lock:
-                        if name in ("drain", "publish", "prepare"):
+                        if name in ("preflight", "drain", "publish", "prepare"):
                             with pytest.raises(BlockingIOError):
                                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                         else:
@@ -4396,7 +4397,7 @@ def test_selected_p5_callback_checks_native_profile_after_real_hold_and_publicat
         selected = json.loads(driver.selection.read_bytes())
         assert selected["git_commit"] == driver.commit and selected["actual_pid_consumed"] is False
         relative = "src/engine/automation/ordered_intraday_deploy.py"
-        old_hash, new_hash = C.REVIEWED_STORAGE_CAPABILITY_TRANSITION[relative]
+        old_hash, new_hash = C.REVIEWED_STORAGE_ADMISSION_TRANSITION[relative]
         assert C.reviewed_preparation_pair(relative, old_hash, new_hash, root=driver.candidate)
         if reject: raise ValueError("native selected P5 failed")
     if reject:
@@ -4696,3 +4697,67 @@ def test_stopped_recovery_inherits_published_auxiliary_without_republication(dri
         assert d.state["auxiliary_repair_reused"]["overlay_sha256"] == D.H._sha(generation)
         assert "auxiliary_repair_published" not in d.state
         assert d.selection.read_bytes() == d.published
+
+
+@pytest.mark.parametrize("available", [False, True])
+def test_reserved_admission_observes_worker_then_pins_fresh_source(driver, monkeypatch, available):
+    d = driver
+    lockpath = d.workspace / "tmp/run_buy_funnel_sentinel.lock"
+    lockpath.parent.mkdir(parents=True, exist_ok=True)
+    original = d.selection.read_bytes()
+    calls = []
+    epoch = ["before"]
+    with lockpath.open("a") as worker:
+        fcntl.flock(worker, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        def wait(predicate, limit, reason, **kwargs):
+            assert limit == 60 and reason == "deployment_sentinel_preparation_owner_busy"
+            assert predicate() is False
+            if not available:
+                raise ValueError(reason)
+            epoch[0] = "completed"
+            fcntl.flock(worker, fcntl.LOCK_UN)
+            assert predicate() is True
+        monkeypatch.setattr(D, "_wait", wait)
+        def preflight():
+            assert epoch[0] == "completed"
+            calls.append("preflight")
+        monkeypatch.setattr(d, "preflight", preflight)
+        for name in ("acquire_hold", "drain", "publish", "prepare", "start"):
+            monkeypatch.setattr(d, name, lambda name=name: calls.append(name))
+        monkeypatch.setattr(d, "attest", lambda: dict(status="pass"))
+        if available:
+            assert D.execute(d)["status"] == "pass"
+            assert calls[0] == "preflight"
+        else:
+            with pytest.raises(ValueError, match="deployment_sentinel_preparation_owner_busy"):
+                D.execute(d)
+            assert calls == []
+            assert d.state["failed_phase"] == "preflight"
+    assert d.selection.read_bytes() == original
+    assert not d.hold.exists()
+    with lockpath.open("a") as probe:
+        fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def test_selected_validation_retains_database_epoch_and_releases_producer(driver, monkeypatch):
+    from contextlib import contextmanager
+    d = driver
+    active = [False]
+    @contextmanager
+    def database(*args):
+        active[0] = True
+        try:
+            yield
+        finally:
+            active[0] = False
+    monkeypatch.setattr(D, "_source_database_epoch", database)
+    for name in ("preflight", "acquire_hold", "drain", "publish", "prepare"):
+        monkeypatch.setattr(d, name, lambda: None)
+    def unowned():
+        assert active[0] is True
+        with (d.workspace / "tmp/run_buy_funnel_sentinel.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    monkeypatch.setattr(d, "start", unowned)
+    monkeypatch.setattr(d, "attest", lambda: dict(status="pass"))
+    assert D.execute(d, validate_prepared=lambda _: unowned())["status"] == "pass"
+    assert active[0] is False
