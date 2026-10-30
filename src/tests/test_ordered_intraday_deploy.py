@@ -4396,7 +4396,7 @@ def test_selected_p5_callback_checks_native_profile_after_real_hold_and_publicat
         selected = json.loads(driver.selection.read_bytes())
         assert selected["git_commit"] == driver.commit and selected["actual_pid_consumed"] is False
         relative = "src/engine/automation/ordered_intraday_deploy.py"
-        old_hash, new_hash = C.REVIEWED_STORAGE_INTEGRATION_TRANSITION[relative]
+        old_hash, new_hash = C.REVIEWED_STORAGE_CAPABILITY_TRANSITION[relative]
         assert C.reviewed_preparation_pair(relative, old_hash, new_hash, root=driver.candidate)
         if reject: raise ValueError("native selected P5 failed")
     if reject:
