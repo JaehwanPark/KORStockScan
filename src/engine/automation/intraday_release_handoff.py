@@ -13727,12 +13727,24 @@ REVIEWED_SUBMISSION_MONITOR_HASHES = {
     **{name: pair[1] for name, pair in
        _preparation_code.REVIEWED_SUBMISSION_MONITOR_TRANSITION.items()},
     "src/engine/infrastructure/startup_validation_code_context.py":
-        "a226417c33fe440dbfe9dc0a8022831b4ebe37f4012a60511d32716b9cd2c880",
+        "cf777886a34f16ea7f7615700b7435d33e6ce91b7587467e8a4009115f53d431",
 }
 REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE = {
     **REVIEWED_P5_RECHECK_PROFILE,
     **{name: pair[1] for name, pair in _preparation_code.REVIEWED_SUBMISSION_MONITOR_PRIOR_TRANSITION.items()},
     "src/engine/infrastructure/startup_validation_code_context.py": "39adcc61fd9093a945b11c946052c259a70f1040bd8c35f31b96dca7c1f84708",
+}
+REVIEWED_SUBMISSION_MONITOR_PRIOR_VARIANTS = _holding_history_variants({
+    **REVIEWED_P5_RECHECK_HASHES,
+    **{name: pair[1] for name, pair in _preparation_code.REVIEWED_SUBMISSION_MONITOR_PRIOR_TRANSITION.items()},
+    "src/engine/infrastructure/startup_validation_code_context.py": "39adcc61fd9093a945b11c946052c259a70f1040bd8c35f31b96dca7c1f84708",
+})
+REVIEWED_SUBMISSION_MONITOR_PRIOR_PAIRS = {
+    name: {(origin, current) for origin in (
+        {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_P5_RECHECK_PROFILE[name]}
+    ) if origin != current}
+    for name, current in REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE.items()
 }
 REVIEWED_SUBMISSION_MONITOR_PROFILE = {
     **REVIEWED_P5_RECHECK_PROFILE,
@@ -13760,7 +13772,7 @@ REVIEWED_STOP_INCIDENT_HASHES = {
     **{name: pair[1] for name, pair in
        _preparation_code.REVIEWED_STOP_INCIDENT_TRANSITION.items()},
     "src/engine/infrastructure/startup_validation_code_context.py":
-        "a226417c33fe440dbfe9dc0a8022831b4ebe37f4012a60511d32716b9cd2c880",
+        "cf777886a34f16ea7f7615700b7435d33e6ce91b7587467e8a4009115f53d431",
 }
 REVIEWED_STOP_INCIDENT_PROFILE = {
     **REVIEWED_SUBMISSION_MONITOR_PROFILE,
@@ -13786,8 +13798,14 @@ REVIEWED_STOP_INCIDENT_VARIANTS = {
     for key, value in REVIEWED_SUBMISSION_MONITOR_VARIANTS.items()
 }
 REVIEWED_STOP_INCIDENT_PAIRS = {
-    name: {pair} for name, pair in
-    _preparation_code.REVIEWED_STOP_INCIDENT_TRANSITION.items()
+    name: {(origin, pair[1]) for origin in (
+        {pair[0]}
+        | {value for historical in REVIEWED_ENTRY_COST_PAIRS.get(name, ())
+           for value in historical}
+        | ({REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE[name]}
+           if name in REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE else set())
+    ) if origin != pair[1]}
+    for name, pair in _preparation_code.REVIEWED_STOP_INCIDENT_TRANSITION.items()
 }
 # The sealed stop contract used reviewed formatting projections for these
 # predecessor bytes. Their physical originals remain independently verified.
@@ -14990,13 +15008,19 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     if p5_recheck_present:
         prepared_hashes = REVIEWED_P5_RECHECK_PROFILE
         prepared_variants = REVIEWED_P5_RECHECK_VARIANTS
+    prior_monitor_present = any(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == sha
+        for name, sha in REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE.items()
+        if sha != REVIEWED_P5_RECHECK_PROFILE.get(name)
+    )
     stop_incident_present = any(
         (source := candidate_bytes(name, optional=True)) is not None
         and hashlib.sha256(source).hexdigest() == sha
         for name, sha in REVIEWED_STOP_INCIDENT_HASHES.items()
         if name != _preparation_code._STOP_INCIDENT_OFFLINE_OWNER
     )
-    if stop_incident_present or any(
+    if stop_incident_present or prior_monitor_present or any(
         (source := candidate_bytes(name, optional=True)) is not None
         and hashlib.sha256(source).hexdigest() == sha
         for name, sha in REVIEWED_SUBMISSION_MONITOR_HASHES.items()
@@ -15006,6 +15030,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         # A new/partial consumer inventory must not silently skip the census.
         for name, sha in (
             REVIEWED_STOP_INCIDENT_PROFILE if stop_incident_present
+            else REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE if prior_monitor_present
             else REVIEWED_SUBMISSION_MONITOR_PROFILE
         ).items():
             source = candidate_bytes(name)
@@ -15014,8 +15039,10 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             if source != revision_bytes(commit, name):
                 raise ValueError("entry_consumer_reviewed_dependency_dirty:" + name)
         prepared_hashes = (REVIEWED_STOP_INCIDENT_PROFILE if stop_incident_present
+                           else REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE if prior_monitor_present
                            else REVIEWED_SUBMISSION_MONITOR_PROFILE)
         prepared_variants = (REVIEWED_STOP_INCIDENT_VARIANTS if stop_incident_present
+                             else REVIEWED_SUBMISSION_MONITOR_PRIOR_VARIANTS if prior_monitor_present
                              else REVIEWED_SUBMISSION_MONITOR_VARIANTS)
     entry_cost_hashes = (
         prepared_hashes
@@ -15456,6 +15483,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         if (
             pair in REVIEWED_STOP_INCIDENT_PAIRS.get(repository_name(name), ())
             or pair in REVIEWED_SUBMISSION_MONITOR_PAIRS.get(repository_name(name), ())
+            or pair in REVIEWED_SUBMISSION_MONITOR_PRIOR_PAIRS.get(repository_name(name), ())
             or pair in REVIEWED_OPERATOR_MARKET_PAIRS.get(repository_name(name), ())
             or pair in REVIEWED_POST_SELL_SOURCE_PAIRS.get(repository_name(name), ())
             or pair in REVIEWED_HOLDING_INPUT_PAIRS.get(repository_name(name), ())

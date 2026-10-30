@@ -71,6 +71,10 @@ and physical-byte versus reviewed-formatting comparison contract. The handoff
 checks the entire successor profile even when a caller's original contract has
 no historical dependency trigger. Missing, dirty, aliased, mixed or newly added
 unreviewed consumers fail before drain; legacy issued profiles remain immutable.
+The native canonical-JSON prompt/input identities remain distinct from provider UTF-8 byte hashes, including non-ASCII inputs. Register transitive trace writers and stop source extensions in their actual native roles, and authenticate a complete issued predecessor independently from the merged successor. Unknown origins, missing members and mixed generations remain invalid.
+
+Startup daily-report reads and conditional regeneration run through the existing named scheduler job after engine startup. A valid dated saved report retains its original as-of and is not rewritten as freshly validated input; absent/corrupt reports use the existing builder. Scheduled/explicit refresh and the MarketRegime avg_bull consumer retain their existing behavior. Atomic publication preserves the previous report on failure and prevents partial JSON consumption. The optional report is not a new startup admission gate.
+
 This code compatibility does not make incomplete monitor observations valid.
 Predecessor manifest-reader comparisons pass their authenticated selected origin
 explicitly to the preparation predicate; candidate comparisons retain the

@@ -5410,7 +5410,7 @@ def test_submission_monitor_full_census_is_required_for_partial_contract(tmp_pat
 
     # First exercise a real policy-family caller and committed successor.
     test_entry_cost_handoff_keeps_exact_complete_generation(
-        tmp_path, "pre_submit_delay", None, "current"
+        tmp_path, "pre_submit_delay", None, "stop_incident"
     )
     root = tmp_path / "candidate"
     commit = subprocess.check_output(
@@ -5462,7 +5462,10 @@ def test_monitor_and_p5_recheck_share_complete_final_candidate_profile():
 
     root = Path(handoff.__file__).resolve().parents[3]
     review = handoff._formatting_review()
-    assert set(handoff.REVIEWED_P5_RECHECK_PROFILE) == set(handoff.REVIEWED_STOP_INCIDENT_PROFILE)
+    assert set(handoff.REVIEWED_STOP_INCIDENT_PROFILE) == (
+        set(handoff.REVIEWED_P5_RECHECK_PROFILE)
+        | (set(handoff._preparation_code.REVIEWED_STOP_INCIDENT_TRANSITION)
+           - {handoff._preparation_code._STOP_INCIDENT_OFFLINE_OWNER}))
     for name, expected in handoff.REVIEWED_STOP_INCIDENT_PROFILE.items():
         raw = (root / name).read_bytes()
         projected = handoff.reviewed_formatting_source(name, raw, review=review)

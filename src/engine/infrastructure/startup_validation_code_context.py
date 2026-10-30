@@ -3820,7 +3820,8 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
         ) if relative in values and values[relative][1] == current]
         if transitions:
             origins = {pair[0] for pair in transitions}
-            if monitor_profile is not REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE:
+            if (monitor_profile is not REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE
+                    and relative in REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE):
                 origins.add(REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE[relative])
             from src.engine.automation.intraday_release_handoff import reviewed_formatting_predecessor
             origin = reviewed_formatting_predecessor(relative, old)
