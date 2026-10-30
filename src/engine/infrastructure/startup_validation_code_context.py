@@ -3896,6 +3896,9 @@ REVIEWED_STORAGE_ADMISSION_PROFILE = {
 # The current artifact reader consumes the native schedule resolver as well as
 # the detector. Require both physical sources; preserve every issued profile.
 REVIEWED_POSTCLOSE_SCHEDULE_TRANSITION = {
+    "src/engine/automation/ordered_intraday_deploy.py": (
+        "1585a3085529d6ab3c86fcac108e2bddb24b1c524aa5f62c62e83e0fbe98dddc",
+        "0170cd63bbc0b62e7a83e78845d527226a24ecc6a32be99eda1371fe680abae4"),
     "src/engine/error_detectors/artifact_freshness.py": (
         "840aa5dc54849a6db50e244a8767285da4296bb5efe78c206642022ae17337cd",
         "afc36fbac8302137b9eb0caa0fd5d3e659a2154d8fe813e2b13e71900a861efc"),
@@ -3946,6 +3949,7 @@ def reviewed_storage_origins(relative, *, prior=False, health=False, mount=False
                      REVIEWED_STORAGE_CAPABILITY_TRANSITION,
                      REVIEWED_STORAGE_NATIVE_PLAN_TRANSITION,
                      REVIEWED_STORAGE_PLAN_HISTORY_TRANSITION,
+                     REVIEWED_STORAGE_ADMISSION_TRANSITION,
                      REVIEWED_POSTCLOSE_SCHEDULE_TRANSITION):
         if relative in registry:
             edges.add(registry[relative])

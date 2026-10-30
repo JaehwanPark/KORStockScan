@@ -217,6 +217,8 @@ before calculation. Foreign holds, changed sources, unclosed writers or failed
 cleanup block calculation. The one-day delay restores its stop-only row together
 with the exact owned schedule rows; normal next-session PREOPEN stays separate.
 
+When the scheduled calculation and dedicated stop request overlap, only the same authenticated native stop for the unchanged source date, selected code and EOD may be observed. The existing admission deadline also bounds the following detector-lock wait; do not reset it. Recheck the actual kernel lock holder, PID/start/cwd and supported native arguments while waiting, then require its source-bound cleanup-complete receipt before calculation. An unknown or changed owner, changed selection/EOD, timeout or failed closure remains an error; ordinary deployment contention still rejects immediately. Consuming a completed prefix must not issue another drain or repeat cleanup.
+
 Read-only checks from the canonical workspace:
 
 ```bash

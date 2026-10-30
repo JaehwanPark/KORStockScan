@@ -11,6 +11,211 @@ import pytest
 from src.engine.automation import ordered_intraday_deploy as D
 
 
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "owner",
+        "owner_changed",
+        "selection",
+        "eod",
+        "failed",
+        "timeout",
+        "released",
+    ],
+)
+def test_postclose_stop_admission_observes_only_same_native_completed_prefix(
+    tmp_path, monkeypatch, fault
+):
+    from contextlib import contextmanager
+
+    workspace = tmp_path
+    runtime = workspace / "data/runtime"
+    directory = runtime / "postclose_stop/2026-10-30"
+    directory.mkdir(parents=True)
+    selection = runtime / "runtime_release_selection.json"
+    selection.write_text('{"selected":"original"}')
+    eod = runtime / "update_kospi_status/update_kospi_2026-10-30.json"
+    eod.parent.mkdir()
+    eod.write_text('{"status":"completed"}')
+    root = tmp_path / "release"
+    root.mkdir()
+    monkeypatch.setattr(D.R, "selected_release", lambda _: (root, "c" * 40))
+    clock = [0.0]
+    monkeypatch.setattr(D.time, "monotonic", lambda: clock[0])
+    calls = []
+
+    @contextmanager
+    def release_lock(_):
+        calls.append("admit")
+        if len(calls) == 1 or fault in {"timeout", "owner_changed"}:
+            raise ValueError("runtime_release_transition_in_progress")
+        yield
+
+    monkeypatch.setattr(D.R, "runtime_release_set_lock", release_lock)
+    monkeypatch.setattr(
+        D,
+        "_native_postclose_stop_holder",
+        lambda *a: (
+            None
+            if fault == "owner"
+            else (
+                dict(released=True)
+                if fault == "released"
+                else dict(pid=42 + (fault == "owner_changed" and len(calls) > 1), start_ticks="123", cwd=str(root))
+            )
+        ),
+    )
+    state = dict(
+        status="pass",
+        phase="cleanup_complete",
+        source_date="2026-10-30",
+        release_root=str(root),
+        git_commit="c" * 40,
+        selection_sha256=D._digest(selection.read_bytes()),
+        eod_sha256=D._digest(eod.read_bytes()),
+    )
+
+    if fault == "released":
+        (directory / "status.json").write_bytes(D._json_bytes(state))
+
+    def advance(seconds):
+        clock[0] += seconds
+        if fault == "selection":
+            selection.write_text('{"selected":"changed"}')
+        if fault == "eod":
+            eod.write_text('{"status":"changed"}')
+        (directory / "status.json").write_bytes(
+            D._json_bytes(dict(state, status="failed") if fault == "failed" else state)
+        )
+
+    monkeypatch.setattr(D.time, "sleep", advance)
+    errors = {
+        "owner": "unverified_or_changed_owner",
+        "owner_changed": "unverified_or_changed_owner",
+        "selection": "sources_changed",
+        "eod": "sources_changed",
+        "failed": "owner_not_completed",
+        "timeout": "admission_timeout",
+    }
+    if fault in errors:
+        with pytest.raises(ValueError, match=errors[fault]):
+            with D.postclose_stop_admission(workspace, "2026-10-30", timeout=1):
+                pytest.fail("invalid admission reached execution")
+    else:
+        with D.postclose_stop_admission(workspace, "2026-10-30", timeout=1) as deadline:
+            assert deadline == 1 and clock[0] == (0 if fault == "released" else 0.25)
+        assert calls == ["admit", "admit"]
+    assert not (workspace / "restart.flag").exists()
+
+
+@pytest.mark.parametrize(
+    "fault", [None, "module", "date", "authority", "cwd", "unheld"]
+)
+def test_postclose_stop_holder_uses_actual_kernel_and_process_identity(tmp_path, fault):
+    workspace = tmp_path / "workspace"
+    lock = workspace / "data/runtime" / D.R.RELEASE_SET_LOCK
+    lock.parent.mkdir(parents=True)
+    lock.touch()
+    root = tmp_path / "release"
+    executable = root / ".venv/bin/python"
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+    proc = tmp_path / "proc"
+    actor = proc / "42"
+    actor.mkdir(parents=True)
+    actor.joinpath("cwd").symlink_to(
+        workspace if fault == "cwd" else root, target_is_directory=True
+    )
+    actor.joinpath("exe").symlink_to(executable)
+    actor.joinpath("stat").write_text(
+        "42 (python) " + " ".join(["S", *(["0"] * 18), "123"])
+    )
+    argv = [
+        str(executable),
+        "-B",
+        "-m",
+        (
+            "unknown"
+            if fault == "module"
+            else "src.engine.automation.ordered_intraday_deploy"
+        ),
+        "--workspace",
+        str(workspace),
+        "--target-date",
+        "2026-10-29" if fault == "date" else "2026-10-30",
+        "--stop-after-eod",
+        "--confirm",
+        "invalid" if fault == "authority" else D.CONFIRM,
+    ]
+    actor.joinpath("cmdline").write_bytes("\0".join(argv).encode() + b"\0")
+    info = lock.stat()
+    proc.joinpath("locks").write_text(
+        ""
+        if fault == "unheld"
+        else f"1: FLOCK ADVISORY WRITE 42 {os.major(info.st_dev):x}:{os.minor(info.st_dev):x}:{info.st_ino} 0 EOF\n"
+    )
+    result = D._native_postclose_stop_holder(
+        workspace, "2026-10-30", root, proc_root=proc
+    )
+    if fault is None:
+        assert result == dict(pid=42, start_ticks="123", cwd=str(root))
+    elif fault == "unheld":
+        assert result == dict(released=True)
+    else:
+        assert result is None
+
+
+@pytest.mark.parametrize("remaining", [0.25, 0])
+def test_stop_cli_shares_original_admission_deadline_with_detector_lock(
+    tmp_path, monkeypatch, remaining
+):
+    from contextlib import contextmanager
+
+    calls = []
+    monkeypatch.setattr(D.time, "monotonic", lambda: 10.0)
+
+    @contextmanager
+    def admission(workspace, day):
+        calls.append(("admission", workspace, day))
+        yield 10.0 + remaining
+
+    @contextmanager
+    def detector(workspace, timeout):
+        calls.append(("detector", timeout))
+        yield
+
+    monkeypatch.setattr(D, "postclose_stop_admission", admission)
+    monkeypatch.setattr(D, "detector_transition_lock", detector)
+    monkeypatch.setattr(
+        D,
+        "stop_after_eod",
+        lambda *a: calls.append(("consume_completed",)) or {"status": "pass"},
+    )
+    rc = D.main(
+        [
+            "--workspace",
+            str(tmp_path),
+            "--target-date",
+            "2026-10-30",
+            "--stop-after-eod",
+            "--confirm",
+            D.CONFIRM,
+        ]
+    )
+    assert rc == (0 if remaining else 1)
+    assert (
+        ("detector", remaining) in calls
+        if remaining
+        else not any(c[0] == "detector" for c in calls)
+    )
+    assert (
+        ("consume_completed",) in calls
+        if remaining
+        else ("consume_completed",) not in calls
+    )
+
+
 @pytest.mark.parametrize("damage", [None, "selector", "eod", "hold", "consumer", "cleanup", "clock"])
 def test_postclose_stop_resumes_only_exact_closed_actor_before_cleanup(tmp_path, monkeypatch, damage):
     from datetime import datetime
@@ -4397,7 +4602,8 @@ def test_selected_p5_callback_checks_native_profile_after_real_hold_and_publicat
         selected = json.loads(driver.selection.read_bytes())
         assert selected["git_commit"] == driver.commit and selected["actual_pid_consumed"] is False
         relative = "src/engine/automation/ordered_intraday_deploy.py"
-        old_hash, new_hash = C.REVIEWED_STORAGE_ADMISSION_TRANSITION[relative]
+        old_hash = C.REVIEWED_STORAGE_ADMISSION_TRANSITION[relative][0]
+        new_hash = C.REVIEWED_POSTCLOSE_SCHEDULE_PROFILE[relative]
         assert C.reviewed_preparation_pair(relative, old_hash, new_hash, root=driver.candidate)
         if reject: raise ValueError("native selected P5 failed")
     if reject:

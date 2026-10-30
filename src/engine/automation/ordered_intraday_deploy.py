@@ -27,6 +27,7 @@ from src.engine.automation import intraday_release_handoff as H
 from src.engine.infrastructure import runtime_release_router as R
 
 CONFIRM = "APPROVED_ORDERED_INTRADAY_DEPLOY_AND_RESTART"
+DETECTOR_TRANSITION_WAIT_SEC = 60
 
 # Before selector publication the original selected release remains the native
 # policy reader. Keep its own source validation instead of impersonating that
@@ -152,7 +153,7 @@ def inherit_prepared_delay_code(workspace, day, candidate, check):
 
 
 @contextmanager
-def detector_transition_lock(workspace, timeout=60):
+def detector_transition_lock(workspace, timeout=DETECTOR_TRANSITION_WAIT_SEC):
     """Drain the existing detector before any deployment mutation.
 
     Share the wrapper's inode, including publication/notification time. Never
@@ -172,6 +173,146 @@ def detector_transition_lock(workspace, timeout=60):
 
         _wait(acquire, timeout, "deployment_error_detector_drain_timeout")
         yield
+
+
+def _native_postclose_stop_holder(workspace, day, root, *, proc_root=Path("/proc")):
+    """Authenticate the current flock holder, including before state publication."""
+    path = Path(workspace) / "data/runtime" / R.RELEASE_SET_LOCK
+    before = path.lstat()
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise ValueError("postclose_stop_lock_identity_invalid")
+    key = (os.major(before.st_dev), os.minor(before.st_dev), before.st_ino)
+
+    def holders():
+        found = []
+        for line in (proc_root / "locks").read_text().splitlines():
+            words = line.split()
+            if len(words) != 8 or words[1:4] != ["FLOCK", "ADVISORY", "WRITE"]:
+                continue
+            major, minor, inode = words[5].split(":")
+            if (int(major, 16), int(minor, 16), int(inode)) == key:
+                found.append(int(words[4]))
+        return found
+
+    pids = holders()
+    if not pids:
+        return dict(released=True)
+    if len(pids) != 1:
+        return None
+    pid = pids[0]
+    proc = proc_root / str(pid)
+
+    def actor_identity():
+        raw_stat = (proc / "stat").read_text().rsplit(")", 1)[1].split()
+        if len(raw_stat) < 20 or raw_stat[0] == "Z":
+            return None
+        ticks = raw_stat[19]
+        argv = (proc / "cmdline").read_bytes().decode().strip("\0").split("\0")
+        if argv.count("-m") != 1:
+            return None
+        module_index = argv.index("-m")
+        if argv[module_index + 1 : module_index + 2] != [
+            "src.engine.automation.ordered_intraday_deploy"
+        ] or any(arg not in {"-B", "-I", "-u", "-s"} for arg in argv[1:module_index]):
+            return None
+        arguments = argv[module_index + 2 :]
+        expected = {
+            "--workspace": str(workspace),
+            "--target-date": day,
+            "--confirm": CONFIRM,
+        }
+        if arguments.count("--stop-after-eod") != 1:
+            return None
+        arguments.remove("--stop-after-eod")
+        if len(arguments) != 2 * len(expected):
+            return None
+        pairs = list(zip(arguments[::2], arguments[1::2]))
+        if len(dict(pairs)) != len(pairs) or dict(pairs) != expected:
+            return None
+        last = path.lstat()
+        current_holders = holders()
+        if not current_holders:
+            return dict(released=True)
+        if (
+            (proc / "cwd").resolve(strict=True) != root
+            or (proc / "exe").resolve(strict=True)
+            != (root / ".venv/bin/python").resolve(strict=True)
+            or (proc / "stat").read_text().rsplit(")", 1)[1].split()[19] != ticks
+            or current_holders != pids
+            or (last.st_dev, last.st_ino) != (before.st_dev, before.st_ino)
+            or not stat.S_ISREG(last.st_mode)
+        ):
+            return None
+        return dict(pid=pid, start_ticks=ticks, cwd=str(root))
+
+    try:
+        return actor_identity()
+    except OSError:
+        if not holders():
+            return dict(released=True)
+        raise
+
+
+@contextmanager
+def postclose_stop_admission(workspace, day, *, timeout=DETECTOR_TRANSITION_WAIT_SEC):
+    """Observe the same native stop; never send a second drain after waiting."""
+    workspace = Path(workspace).resolve(strict=True)
+    if datetime.fromisoformat(day).date().isoformat() != day:
+        raise ValueError("postclose_stop_source_date_invalid")
+    deadline = time.monotonic() + timeout
+    root, commit = R.selected_release(workspace)
+    selection = workspace / "data/runtime/runtime_release_selection.json"
+    eod = (
+        workspace
+        / "data/runtime/update_kospi_status"
+        / ("update_kospi_" + day + ".json")
+    )
+    originals = {p: _owned_metadata(p)[1] for p in (selection, eod)}
+    owner = None
+    contended = False
+    while True:
+        if time.monotonic() >= deadline:
+            raise ValueError("postclose_stop_admission_timeout")
+        with ExitStack() as admission:
+            try:
+                admission.enter_context(R.runtime_release_set_lock(workspace))
+            except ValueError as exc:
+                if str(exc) != "runtime_release_transition_in_progress":
+                    raise
+                contended = True
+                held = _native_postclose_stop_holder(workspace, day, root)
+                if held is not None and held.get("released") is True:
+                    continue
+                if held is None or (owner is not None and held != owner):
+                    raise ValueError(
+                        "postclose_stop_unverified_or_changed_owner"
+                    ) from exc
+                owner = held
+                if any(_owned_metadata(p)[1] != raw for p, raw in originals.items()):
+                    raise ValueError("postclose_stop_admission_sources_changed")
+            else:
+                if any(_owned_metadata(p)[1] != raw for p, raw in originals.items()):
+                    raise ValueError("postclose_stop_admission_sources_changed")
+                if contended:
+                    state, _, _ = _owned_metadata(
+                        workspace / "data/runtime/postclose_stop" / day / "status.json"
+                    )
+                    if (
+                        state.get("status") != "pass"
+                        or state.get("phase") != "cleanup_complete"
+                        or state.get("source_date") != day
+                        or state.get("release_root") != str(root)
+                        or state.get("git_commit") != commit
+                        or state.get("selection_sha256")
+                        != _digest(originals[selection])
+                        or state.get("eod_sha256") != _digest(originals[eod])
+                    ):
+                        raise ValueError("postclose_stop_owner_not_completed")
+                if time.monotonic() >= deadline:
+                    raise ValueError("postclose_stop_admission_timeout")
+                yield deadline
+                return
+        time.sleep(min(0.25, max(0, deadline - time.monotonic())))
 
 
 def _digest(raw):
@@ -3231,19 +3372,37 @@ def main(argv=None):
     if args.stop_after_eod and args.auxiliary_repair_path:
         parser.error("postclose stop cannot publish an auxiliary repair")
     try:
-        with R.runtime_release_set_lock(args.workspace):
-            with detector_transition_lock(args.workspace):
-                result = stop_after_eod(args.workspace, args.target_date, args.confirm) if args.stop_after_eod else execute(
-                    Deployment(
-                        args.workspace,
-                        args.release_root,
-                        args.target_date,
-                        args.confirm,
-                        candidate_p5_path=args.candidate_p5_path,
-                        candidate_p5_sha256=args.candidate_p5_sha256,
-                        auxiliary_repair_path=args.auxiliary_repair_path,
-                        auxiliary_repair_sha256=args.auxiliary_repair_sha256,
-                    ), validate_prepared=validate_selected_p5
+        if args.stop_after_eod and args.confirm != CONFIRM:
+            raise ValueError("postclose_stop_market_or_authority_invalid")
+        with (
+            postclose_stop_admission(args.workspace, args.target_date)
+            if args.stop_after_eod
+            else R.runtime_release_set_lock(args.workspace)
+        ) as admission_deadline:
+            remaining = (
+                max(0, admission_deadline - time.monotonic())
+                if args.stop_after_eod
+                else DETECTOR_TRANSITION_WAIT_SEC
+            )
+            if args.stop_after_eod and remaining <= 0:
+                raise ValueError("postclose_stop_admission_timeout")
+            with detector_transition_lock(args.workspace, timeout=remaining):
+                result = (
+                    stop_after_eod(args.workspace, args.target_date, args.confirm)
+                    if args.stop_after_eod
+                    else execute(
+                        Deployment(
+                            args.workspace,
+                            args.release_root,
+                            args.target_date,
+                            args.confirm,
+                            candidate_p5_path=args.candidate_p5_path,
+                            candidate_p5_sha256=args.candidate_p5_sha256,
+                            auxiliary_repair_path=args.auxiliary_repair_path,
+                            auxiliary_repair_sha256=args.auxiliary_repair_sha256,
+                        ),
+                        validate_prepared=validate_selected_p5,
+                    )
                 )
     except (
         OSError,

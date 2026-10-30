@@ -4774,7 +4774,7 @@ def test_storage_integration_registered_for_both_native_readers():
 
 @pytest.mark.parametrize(
     "fault",
-    [None, "missing", "unknown", "mixed", "detector_prior", "both_unknown", "origin"],
+    [None, "missing", "unknown", "mixed", "detector_prior", "both_unknown", "origin", "ordered_prior", "ordered_unknown"],
 )
 def test_postclose_schedule_dependency_reaches_both_actual_readers(current_releases, fault):
     """The new direct consumer is required even for an older caller inventory."""
@@ -4782,7 +4782,8 @@ def test_postclose_schedule_dependency_reaches_both_actual_readers(current_relea
     root = release["root"]
     detector = "src/engine/error_detectors/artifact_freshness.py"
     resolver = "src/engine/error_detectors/schedule_contract.py"
-    originals = {name: (root / name).read_bytes() for name in (detector, resolver)}
+    ordered = "src/engine/automation/ordered_intraday_deploy.py"
+    originals = {name: (root / name).read_bytes() for name in (detector, resolver, ordered)}
     old, current = C.REVIEWED_POSTCLOSE_SCHEDULE_TRANSITION[detector]
     try:
         if fault == "missing":
@@ -4794,6 +4795,12 @@ def test_postclose_schedule_dependency_reaches_both_actual_readers(current_relea
             (root / name).write_bytes(subprocess.check_output([
                 "git", "-C", str(ROOT), "show", "b6d598120:" + name
             ]))
+        elif fault == "ordered_prior":
+            (root / ordered).write_bytes(subprocess.check_output([
+                "git", "-C", str(ROOT), "show", "b6d598120:" + ordered
+            ]))
+        elif fault == "ordered_unknown":
+            (root / ordered).write_bytes(b"unreviewed stop admission\n")
         elif fault == "both_unknown":
             for name in originals:
                 (root / name).write_bytes(b"unknown candidate generation\n")
