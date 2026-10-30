@@ -46,15 +46,25 @@ def _commit(root, message):
     return _git(root, "rev-parse", "HEAD")
 
 
-@pytest.fixture(scope="module")
-def releases(tmp_path_factory):
+def _native_releases(tmp_path_factory, *, current=False):
     base = tmp_path_factory.mktemp("native-code-context")
     root, selected = base / "candidate", base / "selected"
     _source_copy(root)
+    # This fixture exercises the issued generic AST/docstring admission, not
+    # the later exact monitor profile. Keep its native readers together with
+    # that original monitor; the new profile has separate native-family tests.
+    for relative in (() if current else (
+        "src/engine/monitoring/submission_bottleneck_monitor.py",
+        "src/engine/infrastructure/startup_validation_code_context.py",
+        "src/engine/automation/intraday_release_handoff.py",
+    )):
+        (root / relative).write_bytes(subprocess.check_output(
+            ["git", "-C", str(ROOT), "show", "52425f68f:" + relative]
+        ))
     # Independent preparation profiles include their real shell dispatchers.
     # A Python-only copy cannot exercise a complete candidate generation.
     for relative in dict.fromkeys(("src/run_bot.sh", *(
-        name for name in C.REVIEWED_CRON_PHASE_BINDING_PROFILE if name.endswith(".sh")
+        name for name in H.REVIEWED_SUBMISSION_MONITOR_PROFILE if name.endswith(".sh")
     ))):
         target = root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -62,16 +72,18 @@ def releases(tmp_path_factory):
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     original_commit = _commit(root, "genuine source origin")
     _git(root, "worktree", "add", "--detach", str(selected), original_commit)
-    path = root / RELATIVE
-    old = path.read_text()
-    changed = old.replace(
-        "Preserve only a sealed same-day policy through the reviewed entry repair.",
-        "Preserve only a sealed same-day policy through this reviewed entry repair.",
-        1,
-    )
-    assert changed != old
-    path.write_text(changed)
-    commit = _commit(root, "behavior-preserving native accepted docstring change")
+    commit = original_commit
+    if not current:
+        path = root / RELATIVE
+        old = path.read_text()
+        changed = old.replace(
+            "Preserve only a sealed same-day policy through the reviewed entry repair.",
+            "Preserve only a sealed same-day policy through this reviewed entry repair.",
+            1,
+        )
+        assert changed != old
+        path.write_text(changed)
+        commit = _commit(root, "behavior-preserving native accepted docstring change")
     paths = {RELATIVE: RELATIVE}
     expected = C._digest({RELATIVE: C._sha(selected / RELATIVE)})
     actual = C._digest({RELATIVE: C._sha(root / RELATIVE)})
@@ -79,7 +91,7 @@ def releases(tmp_path_factory):
     # source identity and its allowed AST projection. No fake proof evaluator.
     assert H._verify_entry_code_delta(
         root, commit, original_commit, paths, expected
-    ) == [RELATIVE]
+    ) == ([] if current else [RELATIVE])
     return dict(
         root=root,
         selected=selected,
@@ -91,8 +103,17 @@ def releases(tmp_path_factory):
     )
 
 
-@pytest.fixture
-def request_fixture(tmp_path, releases):
+@pytest.fixture(scope="module")
+def releases(tmp_path_factory):
+    return _native_releases(tmp_path_factory)
+
+
+@pytest.fixture(scope="module")
+def current_releases(tmp_path_factory):
+    return _native_releases(tmp_path_factory, current=True)
+
+
+def _native_request(tmp_path, releases):
     run = tmp_path / uuid.uuid4().hex
     run.mkdir(mode=0o700)
     data = tmp_path / "fixture-data"
@@ -176,6 +197,16 @@ def request_fixture(tmp_path, releases):
     path = run / "request.json"
     path.write_text(json.dumps(request))
     return dict(run=run, path=path, request=request, **releases)
+
+
+@pytest.fixture
+def request_fixture(tmp_path, releases):
+    return _native_request(tmp_path, releases)
+
+
+@pytest.fixture
+def current_request_fixture(tmp_path, current_releases):
+    return _native_request(tmp_path, current_releases)
 
 
 def _write_request(fixture, request):
@@ -830,7 +861,19 @@ def test_main_preparation_rejects_changed_generation_without_full_read(
     assert "startup_" in result.stderr, result.stderr
 
 
-def test_reviewed_main_code_pairs_are_exact_and_origin_is_not_relabelled():
+def test_reviewed_main_code_pairs_are_exact_and_origin_is_not_relabelled(tmp_path, monkeypatch):
+    import io
+    import tarfile
+
+    # This assertion belongs to the issued cold-preparation generation.
+    # A later exact runtime profile must not stand in for that original reader.
+    archive = subprocess.check_output([
+        "git", "-C", str(ROOT), "archive", "8940ea4ad0d3b64d30f67f986a75715ee24c1d95",
+        "src", "deploy",
+    ])
+    with tarfile.open(fileobj=io.BytesIO(archive)) as source:
+        source.extractall(tmp_path, filter="data")
+    monkeypatch.setattr(C, "ROOT", tmp_path)
     assert len(C.REVIEWED_PREPARATION_SOURCES) >= 13
     for path, (old, new) in C.REVIEWED_PREPARATION_SOURCES.items():
         # The cold-preparation registration belongs to this immutable parent;
@@ -972,8 +1015,9 @@ def test_batched_anchor_check_preserves_identity_and_shared_parent_bounds(
     [None, "missing_shard", "corrupt_shard", "membership", "selection", "unobserved"],
 )
 def test_native_sharded_delay_preparation_delegates_observed_rebuild_in_real_isolation(
-    request_fixture, monkeypatch, damage
+    current_request_fixture, monkeypatch, damage
 ):
+    request_fixture = current_request_fixture
     from src.engine.automation import pre_submit_delay_partitioned_research as P
     from src.engine.scalping import pre_submit_delay_initial_policy as I
     from src.tests.test_pre_submit_delay_partitioned_research import fixture
@@ -1456,9 +1500,22 @@ def test_nested_native_inventories_keep_distinct_git_origins(
     # This test reviews one private fixture edit, not a production successor.
     # Keep the complete fixture inventory while substituting that exact Git
     # endpoint; real missing/dirty/mixed profile tests use the unchanged table.
+    original_profile = C.REVIEWED_CRON_PHASE_BINDING_PROFILE
     monkeypatch.setattr(C, "REVIEWED_CRON_PHASE_BINDING_PROFILE", {
-        **C.REVIEWED_CRON_PHASE_BINDING_PROFILE, owner: new,
+        **original_profile, owner: new,
     })
+    native_pair = C.reviewed_preparation_pair
+
+    def private_fixture_pair(relative, before, after, *, root=None):
+        # Preserve both complete private generations. Select only profile
+        # facts here; the real native predicate still verifies every byte,
+        # endpoint and explicit predecessor/candidate comparison root.
+        with monkeypatch.context() as phase:
+            if root == r["selected"]:
+                phase.setattr(C, "REVIEWED_CRON_PHASE_BINDING_PROFILE", original_profile)
+            return native_pair(relative, before, after, root=root)
+
+    monkeypatch.setattr(C, "reviewed_preparation_pair", private_fixture_pair)
     parent = fixture["bundle"]
     bundle = dict(
         bundle_sha256="d" * 64,
@@ -4263,7 +4320,7 @@ def test_startup_storage_independent_reader_keeps_exact_complete_generation(tmp_
     assert C.reviewed_preparation_pair(relative, old, C.REVIEWED_STARTUP_STORAGE_CHANGED[relative]) is (fault is None)
 
 
-@pytest.mark.parametrize("profile,commit", [("STARTUP_SCOPED", "fda0b109c"), ("STARTUP_SCOPED_AUX", "4b69dfc05"), ("LIFETIME_SOURCE_PHASE", "c6d3f010b"), ("DATED_REPORT_PARENT", "a1ef8c897"), ("CANCEL_STATE_STORAGE", "a5904ac8f"), ("CANCEL_STORAGE_REVIEW", "0dc6b0393"), ("CAUSAL_ITEM", "b97ff1b99"), ("PREFIX_COST_CONTEXT", "0f3ce4ebf"), ("PREFIX_COST_HANDOFF", "4846f2b2e"), ("CRON_PHASE_BINDING", None)])
+@pytest.mark.parametrize("profile,commit", [("STARTUP_SCOPED", "fda0b109c"), ("STARTUP_SCOPED_AUX", "4b69dfc05"), ("LIFETIME_SOURCE_PHASE", "c6d3f010b"), ("DATED_REPORT_PARENT", "a1ef8c897"), ("CANCEL_STATE_STORAGE", "a5904ac8f"), ("CANCEL_STORAGE_REVIEW", "0dc6b0393"), ("CAUSAL_ITEM", "b97ff1b99"), ("PREFIX_COST_CONTEXT", "0f3ce4ebf"), ("PREFIX_COST_HANDOFF", "4846f2b2e"), ("CRON_PHASE_BINDING", "52425f68f")])
 @pytest.mark.parametrize("fault", [None, "missing", "mixed", "origin", "unknown", "future"])
 def test_combined_startup_scoped_independent_exact_generation(tmp_path, monkeypatch, fault, profile, commit):
     hashes = getattr(C, "REVIEWED_" + profile + "_PROFILE")
@@ -4294,3 +4351,60 @@ def test_combined_startup_scoped_independent_exact_generation(tmp_path, monkeypa
                     else C.REVIEWED_CRON_PHASE_BINDING_CHANGED[relative])
     monkeypatch.setattr(C, "ROOT", tmp_path)
     assert C.reviewed_preparation_pair(relative, old, endpoint) is (fault is None)
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "mixed", "alias", "origin", "future", "unregistered"])
+def test_submission_monitor_registration_reaches_independent_native_reader(
+    tmp_path, monkeypatch, fault
+):
+    for name, expected in C.REVIEWED_SUBMISSION_MONITOR_PROFILE.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((ROOT / name).read_bytes())
+        assert C._sha(path) == expected
+    relative, (old, current) = next(iter(C.REVIEWED_SUBMISSION_MONITOR_TRANSITION.items()))
+    dependency = tmp_path / "src/engine/infrastructure/validation_digest_session.py"
+    if fault == "missing":
+        dependency.unlink()
+    elif fault == "mixed":
+        dependency.write_bytes(dependency.read_bytes() + b"\n# changed generation\n")
+    elif fault == "alias":
+        real = dependency.with_suffix(".original")
+        dependency.rename(real)
+        dependency.symlink_to(real)
+    elif fault == "origin":
+        old = "f" * 64
+    elif fault == "future":
+        current = "f" * 64
+    elif fault == "unregistered":
+        relative = "src/engine/monitoring/new_consumer.py"
+        path = tmp_path / relative
+        path.write_bytes(b"# unregistered consumer\n")
+        current = C._sha(path)
+    monkeypatch.setattr(C, "ROOT", tmp_path)
+    if fault is None:
+        C._pairs({relative: old}, {relative: current})
+    else:
+        with pytest.raises(ValueError, match="startup_main_code_pair_unreviewed"):
+            C._pairs({relative: old}, {relative: current})
+
+
+@pytest.mark.parametrize("phase", ["candidate", "predecessor", "alias", "missing"])
+def test_submission_monitor_pair_keeps_explicit_comparison_root(tmp_path, phase):
+    candidate = tmp_path / "candidate"
+    for name in C.REVIEWED_SUBMISSION_MONITOR_PROFILE:
+        path = candidate / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((ROOT / name).read_bytes())
+    relative, pair = next(iter(C.REVIEWED_SUBMISSION_MONITOR_TRANSITION.items()))
+    comparison = candidate
+    if phase == "predecessor":
+        (candidate / relative).write_bytes(subprocess.check_output([
+            "git", "-C", str(ROOT), "show", "52425f68f:" + relative
+        ]))
+    elif phase == "alias":
+        comparison = tmp_path / "alias"
+        comparison.symlink_to(candidate, target_is_directory=True)
+    elif phase == "missing":
+        comparison = tmp_path / "missing"
+    assert C.reviewed_preparation_pair(relative, *pair, root=comparison) is (phase == "candidate")

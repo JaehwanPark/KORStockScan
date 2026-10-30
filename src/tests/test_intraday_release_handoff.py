@@ -5378,6 +5378,54 @@ def test_scheduled_suffix_handoff_rejects_each_changed_consumer(tmp_path, depend
     )
 
 
+@pytest.mark.parametrize("family", ["pre_submit_delay", "main_stop", "holding_vote"])
+@pytest.mark.parametrize("fault", [None, "missing", "dirty", "committed_change", "parent_mix"])
+def test_submission_monitor_shared_registration_reaches_native_family_readers(
+    tmp_path, family, fault
+):
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, family, fault, "current",
+        "src/engine/infrastructure/startup_validation_code_context.py",
+    )
+
+
+@pytest.mark.parametrize("fault", [None, "unreferenced_missing", "unreferenced_dirty", "new_consumer"])
+def test_submission_monitor_full_census_is_required_for_partial_contract(tmp_path, fault):
+    import hashlib
+    import subprocess
+
+    # First exercise a real policy-family caller and committed successor.
+    test_entry_cost_handoff_keeps_exact_complete_generation(
+        tmp_path, "pre_submit_delay", None, "current"
+    )
+    root = tmp_path / "candidate"
+    commit = subprocess.check_output(
+        ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+    ).strip()
+    origin = "52425f68fa5796887d2d7c1c65f51016042c938c"
+    monitor = next(iter(handoff._preparation_code.REVIEWED_SUBMISSION_MONITOR_TRANSITION))
+    paths = {monitor: monitor}
+    if fault == "new_consumer":
+        extra = "src/engine/monitoring/new_consumer.py"
+        (root / extra).write_text("# new consumer without an original contract\n")
+        paths[extra] = extra
+    dependency = root / "src/engine/error_detectors/artifact_freshness.py"
+    if fault == "unreferenced_missing":
+        dependency.unlink()
+    elif fault == "unreferenced_dirty":
+        dependency.write_bytes(dependency.read_bytes() + b"\n# unreviewed\n")
+    expected = hashlib.sha256(json.dumps({
+        monitor: hashlib.sha256(subprocess.check_output(
+            ["git", "-C", str(root), "show", origin + ":" + monitor]
+        )).hexdigest()
+    }, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")).hexdigest()
+    if fault is None:
+        assert handoff._verify_entry_code_delta(root, commit, origin, paths, expected) == [monitor]
+    else:
+        with pytest.raises(ValueError):
+            handoff._verify_entry_code_delta(root, commit, origin, paths, expected)
+
+
 @pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])
 @pytest.mark.parametrize(
     "fault", [None, "missing", "dirty", "committed_change", "parent_mix"]
@@ -5441,7 +5489,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     )
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "75e0fbbf7"], check=True)
     hashes = {
-        "current": handoff.REVIEWED_SCHEDULED_SUFFIX_PROFILE,
+        "current": handoff.REVIEWED_SUBMISSION_MONITOR_PROFILE,
         "cron_phase_binding": handoff.REVIEWED_CRON_PHASE_BINDING_PROFILE,
         "causal_item": handoff.REVIEWED_CAUSAL_ITEM_PROFILE,
         "prefix_cost_context": handoff.REVIEWED_PREFIX_COST_CONTEXT_PROFILE,

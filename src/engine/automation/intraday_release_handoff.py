@@ -13703,6 +13703,37 @@ for _name, _current in REVIEWED_SCHEDULED_SUFFIX_CHANGED.items():
         (origin, _current) for origin in _origins if origin != _current)
 
 
+# Both readers derive this successor from the independent reader's one monitor
+# registration. Each reader still verifies its own full physical/logical profile.
+from src.engine.infrastructure import startup_validation_code_context as _preparation_code
+
+REVIEWED_SUBMISSION_MONITOR_HASHES = {
+    **{name: pair[1] for name, pair in
+       _preparation_code.REVIEWED_SUBMISSION_MONITOR_TRANSITION.items()},
+    "src/engine/infrastructure/startup_validation_code_context.py":
+        "d37682e328f13e230f73fdc3998185d7b0ebbd8d0276eb49340bf51dc0744482",
+}
+REVIEWED_SUBMISSION_MONITOR_PROFILE = {
+    **REVIEWED_SCHEDULED_SUFFIX_PROFILE,
+    **REVIEWED_SUBMISSION_MONITOR_HASHES,
+}
+REVIEWED_SUBMISSION_MONITOR_VARIANTS = _holding_history_variants({
+    **REVIEWED_SCHEDULED_SUFFIX_HASHES,
+    **REVIEWED_SUBMISSION_MONITOR_HASHES,
+})
+REVIEWED_SUBMISSION_MONITOR_PAIRS = {
+    name: {
+        (origin, current)
+        for origin in (
+            {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+            | {REVIEWED_SCHEDULED_SUFFIX_PROFILE[name]}
+        )
+        if origin != current
+    }
+    for name, current in REVIEWED_SUBMISSION_MONITOR_HASHES.items()
+}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -14872,6 +14903,22 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     ):
         prepared_hashes = REVIEWED_SCHEDULED_SUFFIX_PROFILE
         prepared_variants = REVIEWED_SCHEDULED_SUFFIX_VARIANTS
+    if any(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == sha
+        for name, sha in REVIEWED_SUBMISSION_MONITOR_HASHES.items()
+    ):
+        # Check the complete registered generation even for a caller whose
+        # original contract omits one of the historical dependency triggers.
+        # A new/partial consumer inventory must not silently skip the census.
+        for name, sha in REVIEWED_SUBMISSION_MONITOR_PROFILE.items():
+            source = candidate_bytes(name)
+            if hashlib.sha256(source).hexdigest() != sha:
+                raise ValueError("entry_consumer_reviewed_dependency_unreviewed:" + name)
+            if source != revision_bytes(commit, name):
+                raise ValueError("entry_consumer_reviewed_dependency_dirty:" + name)
+        prepared_hashes = REVIEWED_SUBMISSION_MONITOR_PROFILE
+        prepared_variants = REVIEWED_SUBMISSION_MONITOR_VARIANTS
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present
@@ -15309,7 +15356,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
         if (
-            pair in REVIEWED_OPERATOR_MARKET_PAIRS.get(repository_name(name), ())
+            pair in REVIEWED_SUBMISSION_MONITOR_PAIRS.get(repository_name(name), ())
+            or pair in REVIEWED_OPERATOR_MARKET_PAIRS.get(repository_name(name), ())
             or pair in REVIEWED_POST_SELL_SOURCE_PAIRS.get(repository_name(name), ())
             or pair in REVIEWED_HOLDING_INPUT_PAIRS.get(repository_name(name), ())
             or pair in REVIEWED_NONFIXED_CAPACITY_PAIRS.get(repository_name(name), ())

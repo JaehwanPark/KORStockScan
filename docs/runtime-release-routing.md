@@ -63,6 +63,20 @@ warnings remain report-only observations, without becoming new Main startup gate
 The existing active-policy, trailing, quantity, native preparation/P5 and PID
 checks retain their own authority and failure behavior.
 
+The submission monitor's reviewed source transition is registered once in
+`startup_validation_code_context.REVIEWED_SUBMISSION_MONITOR_TRANSITION`.
+The independent preparation reader and ordered handoff derive their successor
+profiles from that registration. Each preserves its complete native code profile
+and physical-byte versus reviewed-formatting comparison contract. The handoff
+checks the entire successor profile even when a caller's original contract has
+no historical dependency trigger. Missing, dirty, aliased, mixed or newly added
+unreviewed consumers fail before drain; legacy issued profiles remain immutable.
+This code compatibility does not make incomplete monitor observations valid.
+Predecessor manifest-reader comparisons pass their authenticated selected origin
+explicitly to the preparation predicate; candidate comparisons retain the
+execution root. A compatible digest pair cannot substitute one phase's physical
+source generation for the other.
+
 When the current operational checklist was edited after an already-consumed handoff, first compare every frozen predecessor source. Only a checklist-only mismatch may use the exact prior-release Git checklist whose SHA equals the sealed handoff. Preserve both that original and the user's complete edited document. Under the ordered deployment and detector locks, stage the verified original for the strict predecessor check, then publish the reviewed candidate checklist with the new selector. Restore the edited document with compare-and-swap if transition fails before publication. This does not rewrite the predecessor receipt or permit policy/env/controller differences; retain both identities in the deployment evidence.
 
 A reviewed native-code repair whose source hashes differ from the active policy requires `scalping.reversal_code_handoff` evidence before draining Main. The dated receipt binds the unchanged active pointer and branch definitions, the clean candidate commit, all current contract code, full origin-validator source hashes and native confirmation parity. Only that selected candidate can use it; policy/source errors, missing receipts, changed sources and unreviewed code still fail. The native dependency cache observes the selector and every receipt/source/code dependency. No policy pointer is activated or relabelled. Preserve the receipt, parity and old immutable validator release as referenced sources until their consumer/rollback lifetime ends; the next-session candidate remains separately bound to the final release.

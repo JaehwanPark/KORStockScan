@@ -3661,17 +3661,68 @@ _suffix_history.update((origin, _suffix_current) for origin in _suffix_origins
                        if origin != _suffix_current)
 
 
-def reviewed_preparation_pair(relative, old, current):
-    # The report/recovery owner remains outside the startup-required profile.
-    # Its new comparison endpoint requires its actual native calendar reader.
+# One registration is consumed by both the independent preparation reader and
+# the ordered handoff reader. Historical profiles retain their original bytes.
+REVIEWED_SUBMISSION_MONITOR_TRANSITION = {
+    "src/engine/monitoring/submission_bottleneck_monitor.py": (
+        "0a527ad29a96caf0f408db3467e8d407dccb8e552330f8f55e3e09a40dfc198e",
+        "6ecdd207980ff3f41b20b873791867f9b14ec84de80731b73e905c1fe4fbb18e",
+    ),
+}
+REVIEWED_SUBMISSION_MONITOR_PROFILE = {
+    **REVIEWED_CRON_PHASE_BINDING_PROFILE,
+    **{name: pair[1] for name, pair in REVIEWED_SUBMISSION_MONITOR_TRANSITION.items()},
+}
+
+
+def reviewed_preparation_pair(relative, old, current, *, root=None):
+    # A predecessor comparison uses its selected origin; candidate comparisons
+    # keep the execution root. A reviewed pair never changes that phase.
+    comparison_root = ROOT if root is None else Path(root)
+    if not comparison_root.is_absolute() or comparison_root.resolve() != comparison_root:
+        return False
     if (relative == _suffix_owner and current == _suffix_current
-            and any((ROOT / name).is_symlink() or not (ROOT / name).is_file()
-                    or _sha(ROOT / name) != expected
+            and any((comparison_root / name).is_symlink() or not (comparison_root / name).is_file()
+                    or _sha(comparison_root / name) != expected
                     for name, expected in REVIEWED_SCHEDULED_SUFFIX_DEPENDENCIES.items())):
         return False
+    monitor_generation = any(
+        (comparison_root / name).is_file()
+        and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == pair[1]
+        for name, pair in REVIEWED_SUBMISSION_MONITOR_TRANSITION.items()
+    )
+    if monitor_generation:
+        endpoint = comparison_root / relative
+        if (
+            (relative not in REVIEWED_PREPARATION_SOURCES
+             and relative not in REVIEWED_PREPARATION_HISTORY
+             and relative not in REVIEWED_SUBMISSION_MONITOR_TRANSITION)
+            or endpoint.is_symlink()
+            or not endpoint.is_file()
+            or _sha(endpoint) != current
+            or any(
+                (comparison_root / name).is_symlink()
+                or not (comparison_root / name).is_file()
+                or _sha(comparison_root / name) != expected
+                for name, expected in REVIEWED_SUBMISSION_MONITOR_PROFILE.items()
+            )
+        ):
+            return False
+        transition = REVIEWED_SUBMISSION_MONITOR_TRANSITION.get(relative)
+        if transition is not None:
+            return current == transition[1] and (
+                old == transition[0]
+                or (old, transition[0])
+                in REVIEWED_PREPARATION_HISTORY.get(relative, ())
+            )
+        # Other members retain their original endpoint and reviewed-formatting
+        # predicates in the shared cron-profile branch below.
+    # The report/recovery owner remains outside the startup-required profile.
+    # Its new comparison endpoint requires its actual native calendar reader.
     cron_phase_binding = any(
-        (ROOT / name).is_file() and not (ROOT / name).is_symlink()
-        and _sha(ROOT / name) == expected
+        (comparison_root / name).is_file() and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == expected
         for name, expected in REVIEWED_CRON_PHASE_BINDING_CHANGED.items()
         if expected != REVIEWED_PREFIX_COST_HANDOFF_PROFILE.get(name)
     )
@@ -3679,13 +3730,16 @@ def reviewed_preparation_pair(relative, old, current):
         if (relative not in REVIEWED_PREPARATION_SOURCES
                 and relative not in REVIEWED_PREPARATION_HISTORY):
             return False
-        endpoint = ROOT / relative
+        endpoint = comparison_root / relative
         if (endpoint.is_symlink() or not endpoint.is_file()
                 or _sha(endpoint) != current):
             return False
-        if any((ROOT / name).is_symlink() or not (ROOT / name).is_file()
-               or _sha(ROOT / name) != expected
-               for name, expected in REVIEWED_CRON_PHASE_BINDING_PROFILE.items()):
+        if any((comparison_root / name).is_symlink() or not (comparison_root / name).is_file()
+               or _sha(comparison_root / name) != expected
+               for name, expected in (
+                   REVIEWED_SUBMISSION_MONITOR_PROFILE if monitor_generation
+                   else REVIEWED_CRON_PHASE_BINDING_PROFILE
+               ).items()):
             return False
         if (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
                 or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ())):
@@ -3696,21 +3750,21 @@ def reviewed_preparation_pair(relative, old, current):
         return (predecessor != current and origin == predecessor
                 or REVIEWED_PREPARATION_SOURCES.get(relative) == (origin, predecessor)
                 or (origin, predecessor) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))
-    if all((ROOT / name).is_file() and not (ROOT / name).is_symlink()
-           and _sha(ROOT / name) == expected
+    if all((comparison_root / name).is_file() and not (comparison_root / name).is_symlink()
+           and _sha(comparison_root / name) == expected
            for name, expected in REVIEWED_PREFIX_COST_HANDOFF_PROFILE.items()):
         return (current == REVIEWED_PREFIX_COST_HANDOFF_PROFILE.get(relative)
                 and (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
                      or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ())))
     prefix_cost_handoff = any(
-        (ROOT / name).is_file() and not (ROOT / name).is_symlink()
-        and _sha(ROOT / name) == expected
+        (comparison_root / name).is_file() and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == expected
         for name, expected in REVIEWED_PREFIX_COST_HANDOFF_CHANGED.items()
         if expected != REVIEWED_PREFIX_COST_CONTEXT_PROFILE.get(name)
     )
     if prefix_cost_handoff:
-        if any((ROOT / name).is_symlink() or not (ROOT / name).is_file()
-               or _sha(ROOT / name) != expected
+        if any((comparison_root / name).is_symlink() or not (comparison_root / name).is_file()
+               or _sha(comparison_root / name) != expected
                for name, expected in REVIEWED_PREFIX_COST_HANDOFF_PROFILE.items()):
             return False
         if (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
@@ -3737,20 +3791,20 @@ def reviewed_preparation_pair(relative, old, current):
         REVIEWED_STARTUP_SCOPED_AUX_PROFILE,
         REVIEWED_STARTUP_SCOPED_PROFILE,
     ):
-        if all((ROOT / name).is_file() and not (ROOT / name).is_symlink()
-               and _sha(ROOT / name) == expected for name, expected in profile.items()):
+        if all((comparison_root / name).is_file() and not (comparison_root / name).is_symlink()
+               and _sha(comparison_root / name) == expected for name, expected in profile.items()):
             return (current == profile.get(relative)
                     and (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
                          or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ())))
     causal_item = any(
-        (ROOT / name).is_file() and not (ROOT / name).is_symlink()
-        and _sha(ROOT / name) == expected
+        (comparison_root / name).is_file() and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == expected
         for name, expected in REVIEWED_CAUSAL_ITEM_CHANGED.items()
         if expected != REVIEWED_CANCEL_STORAGE_REVIEW_PROFILE.get(name)
     )
     if causal_item:
-        if any((ROOT / name).is_symlink() or not (ROOT / name).is_file()
-               or _sha(ROOT / name) != expected
+        if any((comparison_root / name).is_symlink() or not (comparison_root / name).is_file()
+               or _sha(comparison_root / name) != expected
                for name, expected in REVIEWED_CAUSAL_ITEM_PROFILE.items()):
             return False
         if (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
@@ -3763,14 +3817,14 @@ def reviewed_preparation_pair(relative, old, current):
                 or REVIEWED_PREPARATION_SOURCES.get(relative) == (origin, predecessor)
                 or (origin, predecessor) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))
     prefix_cost_context = any(
-        (ROOT / name).is_file() and not (ROOT / name).is_symlink()
-        and _sha(ROOT / name) == expected
+        (comparison_root / name).is_file() and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == expected
         for name, expected in REVIEWED_PREFIX_COST_CONTEXT_CHANGED.items()
         if expected != REVIEWED_CAUSAL_ITEM_PROFILE.get(name)
     )
     if prefix_cost_context:
-        if any((ROOT / name).is_symlink() or not (ROOT / name).is_file()
-               or _sha(ROOT / name) != expected
+        if any((comparison_root / name).is_symlink() or not (comparison_root / name).is_file()
+               or _sha(comparison_root / name) != expected
                for name, expected in REVIEWED_PREFIX_COST_CONTEXT_PROFILE.items()):
             return False
         if (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
@@ -3783,14 +3837,14 @@ def reviewed_preparation_pair(relative, old, current):
                 or REVIEWED_PREPARATION_SOURCES.get(relative) == (origin, predecessor)
                 or (origin, predecessor) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))
     aftermarket = any(
-        (ROOT / name).is_file() and not (ROOT / name).is_symlink()
-        and _sha(ROOT / name) == expected
+        (comparison_root / name).is_file() and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == expected
         for name, expected in REVIEWED_CANCEL_STORAGE_REVIEW_CHANGED.items()
         if expected != REVIEWED_CANCEL_STATE_STORAGE_PROFILE.get(name)
     )
     if aftermarket:
-        if any((ROOT / name).is_symlink() or not (ROOT / name).is_file()
-               or _sha(ROOT / name) != expected
+        if any((comparison_root / name).is_symlink() or not (comparison_root / name).is_file()
+               or _sha(comparison_root / name) != expected
                for name, expected in REVIEWED_CANCEL_STORAGE_REVIEW_PROFILE.items()):
             return False
         # Exact reviewed historical endpoints remain valid after complete current-generation checks.
@@ -3804,14 +3858,14 @@ def reviewed_preparation_pair(relative, old, current):
                 or REVIEWED_PREPARATION_SOURCES.get(relative) == (origin, predecessor)
                 or (origin, predecessor) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))
     aftermarket = any(
-        (ROOT / name).is_file() and not (ROOT / name).is_symlink()
-        and _sha(ROOT / name) == expected
+        (comparison_root / name).is_file() and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == expected
         for name, expected in REVIEWED_CANCEL_STATE_STORAGE_CHANGED.items()
         if expected != REVIEWED_POSTCLOSE_SELECTED_STOP_PROFILE.get(name)
     )
     if aftermarket:
-        if any((ROOT / name).is_symlink() or not (ROOT / name).is_file()
-               or _sha(ROOT / name) != expected
+        if any((comparison_root / name).is_symlink() or not (comparison_root / name).is_file()
+               or _sha(comparison_root / name) != expected
                for name, expected in REVIEWED_CANCEL_STATE_STORAGE_PROFILE.items()):
             return False
         # Retain exact reviewed predecessor endpoint pairs after complete profile verification.
@@ -3825,14 +3879,14 @@ def reviewed_preparation_pair(relative, old, current):
                 or REVIEWED_PREPARATION_SOURCES.get(relative) == (origin, predecessor)
                 or (origin, predecessor) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))
     aftermarket = any(
-        (ROOT / name).is_file() and not (ROOT / name).is_symlink()
-        and _sha(ROOT / name) == expected
+        (comparison_root / name).is_file() and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == expected
         for name, expected in REVIEWED_POSTCLOSE_SELECTED_STOP_CHANGED.items()
         if expected != REVIEWED_STARTUP_SUBMISSION_SOURCE_PROFILE.get(name)
     )
     if aftermarket:
-        if any((ROOT / name).is_symlink() or not (ROOT / name).is_file()
-               or _sha(ROOT / name) != expected
+        if any((comparison_root / name).is_symlink() or not (comparison_root / name).is_file()
+               or _sha(comparison_root / name) != expected
                for name, expected in REVIEWED_POSTCLOSE_SELECTED_STOP_PROFILE.items()):
             return False
         # Preserve exact reviewed historical endpoint authority after full profile checks.
@@ -3846,14 +3900,14 @@ def reviewed_preparation_pair(relative, old, current):
                 or REVIEWED_PREPARATION_SOURCES.get(relative) == (origin, predecessor)
                 or (origin, predecessor) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))
     aftermarket = any(
-        (ROOT / name).is_file() and not (ROOT / name).is_symlink()
-        and _sha(ROOT / name) == expected
+        (comparison_root / name).is_file() and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == expected
         for name, expected in REVIEWED_STARTUP_SUBMISSION_SOURCE_CHANGED.items()
         if expected != REVIEWED_ACTIVE_REPORT_CLOSURE_PROFILE.get(name)
     )
     if aftermarket:
-        if any((ROOT / name).is_symlink() or not (ROOT / name).is_file()
-               or _sha(ROOT / name) != expected
+        if any((comparison_root / name).is_symlink() or not (comparison_root / name).is_file()
+               or _sha(comparison_root / name) != expected
                for name, expected in REVIEWED_STARTUP_SUBMISSION_SOURCE_PROFILE.items()):
             return False
         # Preserve reviewed historical endpoints after complete generation validation.
@@ -3867,14 +3921,14 @@ def reviewed_preparation_pair(relative, old, current):
                 or REVIEWED_PREPARATION_SOURCES.get(relative) == (origin, predecessor)
                 or (origin, predecessor) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))
     aftermarket = any(
-        (ROOT / name).is_file() and not (ROOT / name).is_symlink()
-        and _sha(ROOT / name) == expected
+        (comparison_root / name).is_file() and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == expected
         for name, expected in REVIEWED_ACTIVE_REPORT_CLOSURE_CHANGED.items()
         if expected != REVIEWED_DATED_REPORT_PARENT_PROFILE.get(name)
     )
     if aftermarket:
-        if any((ROOT / name).is_symlink() or not (ROOT / name).is_file()
-               or _sha(ROOT / name) != expected
+        if any((comparison_root / name).is_symlink() or not (comparison_root / name).is_file()
+               or _sha(comparison_root / name) != expected
                for name, expected in REVIEWED_ACTIVE_REPORT_CLOSURE_PROFILE.items()):
             return False
         # This helper reviews an exact source pair, including an immutable
@@ -3891,14 +3945,14 @@ def reviewed_preparation_pair(relative, old, current):
                 or REVIEWED_PREPARATION_SOURCES.get(relative) == (origin, predecessor)
                 or (origin, predecessor) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))
     aftermarket = any(
-        (ROOT / name).is_file() and not (ROOT / name).is_symlink()
-        and _sha(ROOT / name) == expected
+        (comparison_root / name).is_file() and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == expected
         for name, expected in REVIEWED_DATED_REPORT_PARENT_CHANGED.items()
         if expected != REVIEWED_LIFETIME_SOURCE_PHASE_PROFILE.get(name)
     )
     if aftermarket:
-        if any((ROOT / name).is_symlink() or not (ROOT / name).is_file()
-               or _sha(ROOT / name) != expected
+        if any((comparison_root / name).is_symlink() or not (comparison_root / name).is_file()
+               or _sha(comparison_root / name) != expected
                for name, expected in REVIEWED_DATED_REPORT_PARENT_PROFILE.items()):
             return False
         if current != REVIEWED_DATED_REPORT_PARENT_PROFILE.get(relative):
@@ -3913,14 +3967,14 @@ def reviewed_preparation_pair(relative, old, current):
                 or REVIEWED_PREPARATION_SOURCES.get(relative) == (origin, predecessor)
                 or (origin, predecessor) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))
     aftermarket = any(
-        (ROOT / name).is_file() and not (ROOT / name).is_symlink()
-        and _sha(ROOT / name) == expected
+        (comparison_root / name).is_file() and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == expected
         for name, expected in REVIEWED_LIFETIME_SOURCE_PHASE_CHANGED.items()
         if expected != REVIEWED_STARTUP_SCOPED_AUX_PROFILE.get(name)
     )
     if aftermarket:
-        if any((ROOT / name).is_symlink() or not (ROOT / name).is_file()
-               or _sha(ROOT / name) != expected
+        if any((comparison_root / name).is_symlink() or not (comparison_root / name).is_file()
+               or _sha(comparison_root / name) != expected
                for name, expected in REVIEWED_LIFETIME_SOURCE_PHASE_PROFILE.items()):
             return False
         if current != REVIEWED_LIFETIME_SOURCE_PHASE_PROFILE.get(relative):
@@ -3935,14 +3989,14 @@ def reviewed_preparation_pair(relative, old, current):
                 or REVIEWED_PREPARATION_SOURCES.get(relative) == (origin, predecessor)
                 or (origin, predecessor) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))
     aftermarket = any(
-        (ROOT / name).is_file() and not (ROOT / name).is_symlink()
-        and _sha(ROOT / name) == expected
+        (comparison_root / name).is_file() and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == expected
         for name, expected in REVIEWED_STARTUP_SCOPED_AUX_CHANGED.items()
         if expected != REVIEWED_STARTUP_SCOPED_PROFILE.get(name)
     )
     if aftermarket:
-        if any((ROOT / name).is_symlink() or not (ROOT / name).is_file()
-               or _sha(ROOT / name) != expected
+        if any((comparison_root / name).is_symlink() or not (comparison_root / name).is_file()
+               or _sha(comparison_root / name) != expected
                for name, expected in REVIEWED_STARTUP_SCOPED_AUX_PROFILE.items()):
             return False
         if current != REVIEWED_STARTUP_SCOPED_AUX_PROFILE.get(relative):
@@ -3957,24 +4011,24 @@ def reviewed_preparation_pair(relative, old, current):
                 or REVIEWED_PREPARATION_SOURCES.get(relative) == (origin, predecessor)
                 or (origin, predecessor) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))
     integrated = any(
-        (ROOT / name).is_file() and not (ROOT / name).is_symlink()
-        and _sha(ROOT / name) == expected
+        (comparison_root / name).is_file() and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == expected
         for name, expected in REVIEWED_STARTUP_SCOPED_CHANGED.items()
         if expected not in {REVIEWED_SCOPED_ENTRY_PROFILE.get(name),
                             REVIEWED_STARTUP_STORAGE_PROFILE.get(name)}
     ) or (
-        any((ROOT / name).is_file() and not (ROOT / name).is_symlink()
-            and _sha(ROOT / name) == expected
+        any((comparison_root / name).is_file() and not (comparison_root / name).is_symlink()
+            and _sha(comparison_root / name) == expected
             for name, expected in REVIEWED_STARTUP_STORAGE_CHANGED.items()
             if expected != REVIEWED_PROBE_AVG_PROFILE.get(name))
-        and any((ROOT / name).is_file() and not (ROOT / name).is_symlink()
-                and _sha(ROOT / name) == expected
+        and any((comparison_root / name).is_file() and not (comparison_root / name).is_symlink()
+                and _sha(comparison_root / name) == expected
                 for name, expected in REVIEWED_SCOPED_ENTRY_CHANGED.items()
                 if expected != REVIEWED_PROBE_AVG_PROFILE.get(name))
     )
     if integrated:
-        if any((ROOT / name).is_symlink() or not (ROOT / name).is_file()
-               or _sha(ROOT / name) != expected
+        if any((comparison_root / name).is_symlink() or not (comparison_root / name).is_file()
+               or _sha(comparison_root / name) != expected
                for name, expected in REVIEWED_STARTUP_SCOPED_PROFILE.items()):
             return False
         if current != REVIEWED_STARTUP_SCOPED_PROFILE.get(relative):
@@ -3989,16 +4043,16 @@ def reviewed_preparation_pair(relative, old, current):
                 or REVIEWED_PREPARATION_SOURCES.get(relative) == (origin, predecessor)
                 or (origin, predecessor) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))
     scoped_entry = any(
-        (ROOT / name).is_file()
-        and not (ROOT / name).is_symlink()
-        and _sha(ROOT / name) == expected
+        (comparison_root / name).is_file()
+        and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == expected
         for name, expected in REVIEWED_SCOPED_ENTRY_CHANGED.items()
     )
     if scoped_entry:
         if any(
-            (ROOT / name).is_symlink()
-            or not (ROOT / name).is_file()
-            or _sha(ROOT / name) != expected
+            (comparison_root / name).is_symlink()
+            or not (comparison_root / name).is_file()
+            or _sha(comparison_root / name) != expected
             for name, expected in REVIEWED_SCOPED_ENTRY_PROFILE.items()
         ):
             return False
@@ -4025,28 +4079,28 @@ def reviewed_preparation_pair(relative, old, current):
             predecessor,
         ) in REVIEWED_PREPARATION_HISTORY.get(relative, ())
     startup_storage = any(
-        (ROOT / name).is_file() and not (ROOT / name).is_symlink()
-        and _sha(ROOT / name) == expected
+        (comparison_root / name).is_file() and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == expected
         for name, expected in REVIEWED_STARTUP_STORAGE_CHANGED.items()
         if expected != REVIEWED_PROBE_AVG_PROFILE.get(name)
     )
     if startup_storage:
-        if any((ROOT / name).is_symlink() or not (ROOT / name).is_file()
-               or _sha(ROOT / name) != expected
+        if any((comparison_root / name).is_symlink() or not (comparison_root / name).is_file()
+               or _sha(comparison_root / name) != expected
                for name, expected in REVIEWED_STARTUP_STORAGE_PROFILE.items()):
             return False
         return (current == REVIEWED_STARTUP_STORAGE_PROFILE.get(relative)
                 and (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))
     probe_avg = current == REVIEWED_PROBE_AVG_PROFILE.get(relative) and any(
-        (ROOT / name).is_file()
-        and not (ROOT / name).is_symlink()
-        and _sha(ROOT / name) == expected
+        (comparison_root / name).is_file()
+        and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == expected
         for name, expected in REVIEWED_PROBE_AVG_CHANGED.items()
     )
     if probe_avg and any(
-        (ROOT / name).is_symlink()
-        or not (ROOT / name).is_file()
-        or _sha(ROOT / name) != expected
+        (comparison_root / name).is_symlink()
+        or not (comparison_root / name).is_file()
+        or _sha(comparison_root / name) != expected
         for name, expected in REVIEWED_PROBE_AVG_PROFILE.items()
     ):
         return False
@@ -4055,9 +4109,9 @@ def reviewed_preparation_pair(relative, old, current):
         not probe_avg
         and current == REVIEWED_TIMEOUT_TERMINAL_PROFILE.get(relative)
         and any(
-            (ROOT / name).is_file()
-            and not (ROOT / name).is_symlink()
-            and _sha(ROOT / name) == expected
+            (comparison_root / name).is_file()
+            and not (comparison_root / name).is_symlink()
+            and _sha(comparison_root / name) == expected
             for name, expected in REVIEWED_TIMEOUT_CHANGED.items()
         )
     )
@@ -4068,23 +4122,23 @@ def reviewed_preparation_pair(relative, old, current):
     ):
         return False
     if timeout_terminal and any(
-        (ROOT / name).is_symlink()
-        or not (ROOT / name).is_file()
-        or _sha(ROOT / name) != expected
+        (comparison_root / name).is_symlink()
+        or not (comparison_root / name).is_file()
+        or _sha(comparison_root / name) != expected
         for name, expected in REVIEWED_TIMEOUT_TERMINAL_PROFILE.items()
     ):
         return False
     holding_history = current == REVIEWED_HOLDING_HISTORY_PROFILE.get(relative) and any(
-        (ROOT / name).is_file() and not (ROOT / name).is_symlink()
-        and _sha(ROOT / name) == expected
+        (comparison_root / name).is_file() and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == expected
         for name, expected in REVIEWED_HOLDING_HISTORY_SOURCES.items()
     )
     if probe_avg or timeout_terminal:
         pass
     elif holding_history:
         if any(
-            (ROOT / name).is_symlink() or not (ROOT / name).is_file()
-            or _sha(ROOT / name) != expected
+            (comparison_root / name).is_symlink() or not (comparison_root / name).is_file()
+            or _sha(comparison_root / name) != expected
             for name, expected in REVIEWED_HOLDING_HISTORY_PROFILE.items()
         ):
             return False
@@ -4092,34 +4146,34 @@ def reviewed_preparation_pair(relative, old, current):
     elif current == REVIEWED_PREOPEN_VALIDATION_PROFILE.get(relative) and (
         current != REVIEWED_POSTCLOSE_INTEGRATED_SOURCES.get(relative)
         or any(
-            (ROOT / name).is_file()
-            and not (ROOT / name).is_symlink()
-            and _sha(ROOT / name) == expected
+            (comparison_root / name).is_file()
+            and not (comparison_root / name).is_symlink()
+            and _sha(comparison_root / name) == expected
             for name, expected in REVIEWED_PREOPEN_VALIDATION_SOURCES.items()
             if expected != REVIEWED_POSTCLOSE_INTEGRATED_SOURCES.get(name)
         )
     ):
         for name, expected in REVIEWED_PREOPEN_VALIDATION_PROFILE.items():
-            path = ROOT / name
+            path = comparison_root / name
             if path.is_symlink() or not path.is_file() or _sha(path) != expected:
                 return False
     elif current == REVIEWED_POSTCLOSE_INTEGRATED_SOURCES.get(relative) and (
         current != REVIEWED_HELD_SELL_SOURCES.get(relative)
         or any(
-            (ROOT / name).is_file()
-            and not (ROOT / name).is_symlink()
-            and _sha(ROOT / name) == expected
+            (comparison_root / name).is_file()
+            and not (comparison_root / name).is_symlink()
+            and _sha(comparison_root / name) == expected
             for name, expected in REVIEWED_POSTCLOSE_INTEGRATED_SOURCES.items()
             if expected != REVIEWED_HELD_SELL_SOURCES.get(name)
         )
     ):
         for name, expected in REVIEWED_POSTCLOSE_INTEGRATED_SOURCES.items():
-            path = ROOT / name
+            path = comparison_root / name
             if path.is_symlink() or not path.is_file() or _sha(path) != expected:
                 return False
     if not (holding_history or timeout_terminal or probe_avg) and current == REVIEWED_HELD_SELL_SOURCES.get(relative):
         for name, expected in REVIEWED_HELD_SELL_SOURCES.items():
-            path = ROOT / name
+            path = comparison_root / name
             if path.is_symlink() or not path.is_file() or _sha(path) != expected:
                 return False
     # An already reviewed physical pair keeps its original authority; a
@@ -5616,7 +5670,7 @@ def bind_main_preparation(root, commit, data_root, intake):
                 selected_hash = _sha(selected / relative)
                 if (
                     value != selected_hash
-                    and not reviewed_preparation_pair(relative, value, selected_hash)
+                    and not reviewed_preparation_pair(relative, value, selected_hash, root=selected)
                     or expected.setdefault(relative, selected_hash) != selected_hash
                 ):
                     raise ValueError(
@@ -6268,7 +6322,7 @@ def _main_proof(proof, request):
                 selected_hash = _sha(selected / relative)
                 if (
                     value != selected_hash
-                    and not reviewed_preparation_pair(relative, value, selected_hash)
+                    and not reviewed_preparation_pair(relative, value, selected_hash, root=selected)
                     or required.setdefault(relative, selected_hash) != selected_hash
                 ):
                     raise ValueError(
