@@ -209,6 +209,7 @@ def consumer_inventory(root, day, *, data_root=None):
         dict(
             family=family, role="report_only", source_date=day,
             code_sha256=generation.code_generation(family),
+            validation_plan_sha256=generation.digest(validation.plan_identity(family)),
             observation=(current_fixture_observation(observed[family], data)
                          if family in observed else None),
         )
@@ -848,23 +849,21 @@ def _historical_fixture(contract, data, family, *, late_report=None):
     reference = contract.get("fixture_receipt")
     if reference is None and late_report is None:
         return None
-    path = (
-        Path(data)
-        / "report/postclose_generation_validation"
-        / (family + "_" + contract["code_sha256"] + ".json")
-    )
-    referenced = (
-        Path(str((reference or {}).get("path") or ""))
-        if isinstance(reference, dict)
-        else Path(".")
-    )
-    if not referenced.is_absolute():
-        referenced = Path(data).parent / referenced
-    if reference is not None and (
-        not isinstance(reference, dict) or referenced.resolve() != path.resolve()
-    ):
+    directory = Path(data) / "report/postclose_generation_validation"
+    legacy = directory / (family + "_" + contract["code_sha256"] + ".json")
+    if reference is not None and not isinstance(reference, dict):
+        raise ValueError("successor_historical_fixture_path_invalid")
+    path = Path(str((reference or {}).get("path") or legacy))
+    if not path.is_absolute():
+        path = Path(data).parent / path
+    if path.resolve().parent != directory.resolve() or path.is_symlink():
         raise ValueError("successor_historical_fixture_path_invalid")
     payload, sha = validation.bounded_object(path, 65536)
+    plan = payload.get("validation_plan")
+    qualified_name = (family + "_" + contract["code_sha256"] + "_"
+                      + generation.digest(plan) + ".json") if isinstance(plan, dict) else None
+    if path.name not in {legacy.name, qualified_name}:
+        raise ValueError("successor_historical_fixture_path_invalid")
     if (
         path.is_symlink()
         or reference is not None

@@ -48,9 +48,9 @@ def _assert_current_code_profile(relative, current):
     """Current source assertions use both final readers, not a dated overlay."""
     raw = (ROOT / relative).read_bytes()
     assert hashlib.sha256(raw).hexdigest() == current
-    if relative in C.REVIEWED_STORAGE_MOUNT_PROFILE:
-        assert current == C.REVIEWED_STORAGE_MOUNT_PROFILE[relative]
-    expected = H.REVIEWED_STORAGE_MOUNT_PROFILE[relative]
+    if relative in C.REVIEWED_STORAGE_CAPABILITY_PROFILE:
+        assert current == C.REVIEWED_STORAGE_CAPABILITY_PROFILE[relative]
+    expected = H.REVIEWED_STORAGE_CAPABILITY_PROFILE[relative]
     compared = H.reviewed_formatting_source(relative, raw)
     assert hashlib.sha256(compared).hexdigest() == expected
 
@@ -4746,16 +4746,16 @@ def test_p5_consumer_union_requires_complete_current_generation(tmp_path, fault)
 
 def test_storage_integration_registered_for_both_native_readers():
     """A future profile drift fails before candidate admission, not at launch."""
-    assert set(C.REVIEWED_STORAGE_MOUNT_PROFILE) <= set(
-        H.REVIEWED_STORAGE_MOUNT_PROFILE
+    assert set(C.REVIEWED_STORAGE_CAPABILITY_PROFILE) <= set(
+        H.REVIEWED_STORAGE_CAPABILITY_PROFILE
     )
-    for name, expected in C.REVIEWED_STORAGE_MOUNT_PROFILE.items():
+    for name, expected in C.REVIEWED_STORAGE_CAPABILITY_PROFILE.items():
         raw = (ROOT / name).read_bytes()
         assert hashlib.sha256(raw).hexdigest() == expected, name
         compared = H.reviewed_formatting_source(name, raw)
-        assert hashlib.sha256(compared).hexdigest() == H.REVIEWED_STORAGE_MOUNT_PROFILE[name], name
+        assert hashlib.sha256(compared).hexdigest() == H.REVIEWED_STORAGE_CAPABILITY_PROFILE[name], name
     context = "src/engine/infrastructure/startup_validation_code_context.py"
-    assert C._sha(ROOT / context) == H.REVIEWED_STORAGE_MOUNT_PROFILE[context]
+    assert C._sha(ROOT / context) == H.REVIEWED_STORAGE_CAPABILITY_PROFILE[context]
     # The actual selected predecessor precedes the P5-only intermediate. The
     # complete storage generation must inherit both declared P5 endpoints,
     # without requiring an intermediate release to run merely for custody.
@@ -4763,13 +4763,13 @@ def test_storage_integration_registered_for_both_native_readers():
         for origin in pair:
             assert (origin, H.REVIEWED_STORAGE_INTEGRATION_HASHES[context]) in H.REVIEWED_STORAGE_INTEGRATION_PAIRS[context]
     assert ("f" * 64, H.REVIEWED_STORAGE_INTEGRATION_HASHES[context]) not in H.REVIEWED_STORAGE_INTEGRATION_PAIRS[context]
-    for (name, digest), variant in H.REVIEWED_STORAGE_MOUNT_VARIANTS.items():
-        if name in H.REVIEWED_STORAGE_MOUNT_PROFILE:
-            assert digest == H.REVIEWED_STORAGE_MOUNT_PROFILE[name]
-        assert variant["selector_sha256"] == H.REVIEWED_STORAGE_MOUNT_PROFILE[variant["selector_path"]]
+    for (name, digest), variant in H.REVIEWED_STORAGE_CAPABILITY_VARIANTS.items():
+        if name in H.REVIEWED_STORAGE_CAPABILITY_PROFILE:
+            assert digest == H.REVIEWED_STORAGE_CAPABILITY_PROFILE[name]
+        assert variant["selector_sha256"] == H.REVIEWED_STORAGE_CAPABILITY_PROFILE[variant["selector_path"]]
         for name, digest in variant["dependencies"].items():
-            if name in H.REVIEWED_STORAGE_MOUNT_PROFILE:
-                assert digest == H.REVIEWED_STORAGE_MOUNT_PROFILE[name], name
+            if name in H.REVIEWED_STORAGE_CAPABILITY_PROFILE:
+                assert digest == H.REVIEWED_STORAGE_CAPABILITY_PROFILE[name], name
 
 
 def test_reviewed_predecessor_composition_keeps_unknown_and_disconnected_edges_out():
@@ -4786,24 +4786,26 @@ def test_reviewed_predecessor_composition_keeps_unknown_and_disconnected_edges_o
 
 
 @pytest.mark.parametrize("fault", [None, "missing", "mixed", "origin", "future"])
-@pytest.mark.parametrize("generation", ["prior", "integrated", "issued_health", "current"])
+@pytest.mark.parametrize("generation", ["prior", "integrated", "issued_health", "issued_mount", "current"])
 @pytest.mark.parametrize("consumer", ["changed", "unchanged_native"])
 def test_storage_integration_requires_complete_profile(tmp_path, fault, generation, consumer):
     profile = (C.REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE if generation == "prior"
                else C.REVIEWED_STORAGE_INTEGRATION_PROFILE if generation == "integrated"
                else C.REVIEWED_STORAGE_HEALTH_PROFILE if generation == "issued_health"
-               else C.REVIEWED_STORAGE_MOUNT_PROFILE)
+               else C.REVIEWED_STORAGE_MOUNT_PROFILE if generation == "issued_mount"
+               else C.REVIEWED_STORAGE_CAPABILITY_PROFILE)
     for name, expected in profile.items():
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        revision = "f1648286c" if generation == "prior" else "2fe611daa" if generation == "issued_health" else "9fb3f7198"
+        revision = "f1648286c" if generation == "prior" else "2fe611daa" if generation == "issued_health" else "3deb89f38" if generation == "issued_mount" else "9fb3f7198"
         path.write_bytes(subprocess.check_output(["git", "-C", str(ROOT), "show", revision + ":" + name])
                          if generation != "current" else (ROOT / name).read_bytes())
         assert C._sha(path) == expected
     transition = (C.REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION if generation == "prior"
                   else C.REVIEWED_STORAGE_INTEGRATION_TRANSITION if generation == "integrated"
                   else C.REVIEWED_STORAGE_HEALTH_TRANSITION if generation == "issued_health"
-                  else C.REVIEWED_STORAGE_MOUNT_TRANSITION)
+                  else C.REVIEWED_STORAGE_MOUNT_TRANSITION if generation == "issued_mount"
+                  else C.REVIEWED_STORAGE_CAPABILITY_TRANSITION)
     name, (old, current) = next(iter(transition.items()))
     if consumer == "unchanged_native":
         name="src/engine/scalping/continuous_reversal_policy_v6.py"

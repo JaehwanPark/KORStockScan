@@ -46,7 +46,9 @@ def test_code_cache_invalidates_only_corrected_file_and_never_caches_costs(
 
 def attest(root, family):
     code = generation.code_generation(family)
-    path = root / "report/postclose_generation_validation" / f"{family}_{code}.json"
+    from src.engine.monitoring.policy_generation_validation import fixture_path
+
+    path = fixture_path(root, family)
     body = dict(
         schema="postclose_generation_fixture_receipt_v1",
         family=family,

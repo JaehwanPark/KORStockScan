@@ -354,10 +354,12 @@ def junit_counts(path, family, *, raw=None):
 
 
 def fixture_path(data, family):
+    """Address immutable evidence by both code and its exact validation plan."""
     return (
         Path(data)
         / "report/postclose_generation_validation"
-        / f"{family}_{generation.code_generation(family)}.json"
+        / (f"{family}_{generation.code_generation(family)}_"
+           f"{generation.digest(plan_identity(family))}.json")
     )
 
 

@@ -145,11 +145,9 @@ def native(
 ):
     code = code_generation(family)
     receipt = None
-    path = (
-        Path(data_root)
-        / "report/postclose_generation_validation"
-        / f"{family}_{code}.json"
-    )
+    from .policy_generation_validation import fixture_path
+
+    path = fixture_path(data_root, family)
     try:
         from src.engine.scalping.main_stop_policy import bounded_object
 

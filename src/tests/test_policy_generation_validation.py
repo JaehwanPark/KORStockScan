@@ -579,6 +579,9 @@ def test_late_historical_fixture_uses_exact_original_issuer_plan(
     if damage == "evidence":
         value["evidence"]["network.json"] = "b" * 64
     seal()
+    legacy = path.with_name("holding_vote_" + value["code_sha256"] + ".json")
+    path.rename(legacy)
+    path = legacy
     contract = dict(code_sha256=value["code_sha256"], fixture_receipt=None)
     if damage:
         with pytest.raises(ValueError):
@@ -1955,6 +1958,7 @@ def test_consumer_inventory_keeps_missing_reports_and_report_only_role(tmp_path,
     rows = handoff.consumer_inventory(tmp_path, DAY)
     assert {r["family"] for r in rows} == set(generation.COMPONENTS)
     assert all(r["role"] == "report_only" and r["observation"] is None for r in rows)
+    assert all(r["validation_plan_sha256"] == generation.digest(validation.plan_identity(r["family"])) for r in rows)
     monkeypatch.setattr(validation, "PLANS", {})
     with pytest.raises(ValueError, match="capability_consumer_registry_incomplete"):
         handoff.consumer_inventory(tmp_path, DAY)
@@ -2194,3 +2198,42 @@ def test_partitioned_cancel_report_native_intake_preserves_exact_semantics(tmp_p
         assert owner._bounded_semantic_json(report)[1] == sha
     if damage != 'generation':
         assert report.read_bytes() == original
+
+
+@pytest.mark.parametrize("family", validation.PLANS)
+def test_validation_plan_successor_gets_immutable_evidence_and_native_reader(tmp_path, monkeypatch, family):
+    from copy import deepcopy
+    from src.engine.monitoring import policy_generation_code_handoff as handoff
+
+    data = tmp_path / "data"
+    _, report, _, old_path, old, _ = _fixture(data, family)
+    original = old_path.read_bytes()
+    code = generation.code_generation(family)
+    plan = validation.plan_identity(family)
+    changed = {**plan, validation.PLANS[family][0]: "f" * 64}
+    monkeypatch.setattr(validation, "plan_identity", lambda name: changed)
+    path = validation.fixture_path(data, family)
+    assert generation.code_generation(family) == code
+    assert path != old_path
+    with pytest.raises(FileNotFoundError):
+        validation.verify_fixture(data, family)
+    payload = dict(date=DAY, generated_at=DAY + "T21:00:00+09:00")
+    args = dict(family=family, day=DAY, data_root=data,
+                source_state="valid_empty", comparison_state="insufficient_sample",
+                handoff_state="incumbent_carried")
+    assert generation.native(payload, **args)["fixture_receipt"] is None
+    successor = deepcopy(old)
+    successor["validation_plan"] = changed
+    successor["receipt_sha256"] = generation.digest({k:v for k,v in successor.items() if k != "receipt_sha256"})
+    path.write_text(json.dumps(successor))
+    _, reference = validation.verify_fixture(data, family)
+    contract = generation.native(payload, **args)
+    assert contract["fixture_receipt"] == reference
+    assert handoff._historical_fixture(contract, data, family) == reference
+    assert old_path.read_bytes() == original
+    # A stale plan cannot be copied under the successor's address.
+    path.write_bytes(original)
+    with pytest.raises(ValueError, match="fixture_identity_or_authority_invalid"):
+        validation.verify_fixture(data, family)
+    with pytest.raises(ValueError, match="successor_historical_fixture_path_invalid"):
+        handoff._historical_fixture({**contract, "fixture_receipt": dict(path=str(path), sha256=validation.file_sha(path))}, data, family)

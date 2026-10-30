@@ -3993,10 +3993,10 @@ def test_live_failed_collector_pointer_recovery_requires_both_consumed_generatio
 
 
 @pytest.mark.parametrize("phase", ["candidate", "selected_prepared", "actual_pid"])
-@pytest.mark.parametrize("damage", [None, "code", "registry", "role"])
+@pytest.mark.parametrize("damage", [None, "code", "registry", "role", "plan"])
 def test_deployment_uses_same_report_census_without_promoting_source_gaps(tmp_path, monkeypatch, phase, damage):
     from src.engine.monitoring import policy_generation_code_handoff as handoff
-    baseline = [dict(family="auxiliary", role="report_only", source_date="2026-10-26", code_sha256="a" * 64,
+    baseline = [dict(family="auxiliary", role="report_only", source_date="2026-10-26", code_sha256="a" * 64, validation_plan_sha256="c" * 64,
                      observation=dict(status="unverified", findings=["policy_generation_unverified"]))]
     current = json.loads(json.dumps(baseline))
     if damage == "code":
@@ -4005,6 +4005,8 @@ def test_deployment_uses_same_report_census_without_promoting_source_gaps(tmp_pa
         current.clear()
     elif damage == "role":
         current[0]["role"] = "startup_required"
+    elif damage == "plan":
+        current[0]["validation_plan_sha256"] = "d" * 64
     elif phase != "candidate":
         current[0]["observation"]["findings"] = ["historical_cost_source_gap"]
     calls = []

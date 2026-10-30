@@ -1606,7 +1606,7 @@ class Deployment:
             self.candidate, reports["source_date"], data_root=self.workspace / "data"
         )
         identity = lambda rows: [
-            {k: row[k] for k in ("family", "role", "source_date", "code_sha256")}
+            {k: row[k] for k in ("family", "role", "source_date", "code_sha256", "validation_plan_sha256")}
             for row in rows
         ]
         if identity(current) != identity(baseline):
