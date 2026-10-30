@@ -3688,6 +3688,42 @@ REVIEWED_SUBMISSION_MONITOR_PROFILE = {
     **{name: pair[1] for name, pair in REVIEWED_SUBMISSION_MONITOR_TRANSITION.items()},
 }
 
+# One source registration shared by the native handoff and this independent
+# preparation reader. The offline workload is report-only and is deliberately
+# excluded from the startup-required profile below.
+REVIEWED_STOP_INCIDENT_TRANSITION = {
+    "src/engine/automation/main_stop_runtime_workload.py": (
+        "4835d5168d8a87a1844f144d76da3a03a3023b8ff5f6a1c2974e14d81be00817",
+        "f9ebd03ad6b55ba971b679e710db05d1a7eae21196efe5c16cce827d3aa85e28",
+    ),
+    "src/engine/scalping/main_stop_quantity_source.py": (
+        "161ad67649004fdef873b238a5face5923079d3ee91cb0d85bc4e0cca52e2f26",
+        "9885041f7c83ba5c91b632f23e371d9e32b59af71ce246cfb4cca4c7a97793bf",
+    ),
+    "src/engine/scalping/main_stop_runtime_source.py": (
+        "6e69839e7bda72f6b7d2791c91d0c364ca51feb03bb4412176fdec364d17e1c0",
+        "9ffc9b4032f41f94e23a60e8f5f2d480b60ce1e53f3b462b9a037a8e16231508",
+    ),
+    "src/engine/sniper_state_handlers.py": (
+        "82fa6b5c762e99e644e889ca343cb565caf0f52d62da0b0ca728fca8309414f6",
+        "ddd9c3d20ca2b7a605735a67e61e1432c8c484cdc934f5322727cfbf85904204",
+    ),
+    "src/engine/sniper_trade_review_report.py": (
+        "a13e1b73e76120a4ceb87a5c65b2a714bdc6845d9b38c81f3d1d37ce7be12b08",
+        "caf9f74641080abe610ba62ffef04fb000529de423d56d4f208c296d33078459",
+    ),
+    "src/engine/sniper_trade_utils.py": (
+        "d0570ff0e17a7f164c63fd187eca593bfc92516e40c0e0c58eb019828c7ffbda",
+        "ce50a80ee5c0dcd6ba81a37158ffbc75f023a1188e31968422b7cdd7bdd3c14e",
+    ),
+}
+_STOP_INCIDENT_OFFLINE_OWNER = "src/engine/automation/main_stop_runtime_workload.py"
+REVIEWED_STOP_INCIDENT_PROFILE = {
+    **REVIEWED_SUBMISSION_MONITOR_PROFILE,
+    **{name: pair[1] for name, pair in REVIEWED_STOP_INCIDENT_TRANSITION.items()
+       if name != _STOP_INCIDENT_OFFLINE_OWNER},
+}
+
 
 def reviewed_preparation_pair(relative, old, current, *, root=None):
     # A predecessor comparison uses its selected origin; candidate comparisons
@@ -3695,6 +3731,24 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
     comparison_root = ROOT if root is None else Path(root)
     if not comparison_root.is_absolute() or comparison_root.resolve() != comparison_root:
         return False
+    stop_generation = any(
+        (comparison_root / name).is_file()
+        and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == pair[1]
+        for name, pair in REVIEWED_STOP_INCIDENT_TRANSITION.items()
+        if name != _STOP_INCIDENT_OFFLINE_OWNER
+    )
+    if stop_generation:
+        if any(
+            (comparison_root / name).is_symlink()
+            or not (comparison_root / name).is_file()
+            or _sha(comparison_root / name) != expected
+            for name, expected in REVIEWED_STOP_INCIDENT_PROFILE.items()
+        ):
+            return False
+        transition = REVIEWED_STOP_INCIDENT_TRANSITION.get(relative)
+        if transition is not None and relative != _STOP_INCIDENT_OFFLINE_OWNER:
+            return current == transition[1] and old == transition[0]
     if (relative == _suffix_owner and current == _suffix_current
             and any((comparison_root / name).is_symlink() or not (comparison_root / name).is_file()
                     or _sha(comparison_root / name) != expected
@@ -3719,7 +3773,10 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
                 (comparison_root / name).is_symlink()
                 or not (comparison_root / name).is_file()
                 or _sha(comparison_root / name) != expected
-                for name, expected in REVIEWED_SUBMISSION_MONITOR_PROFILE.items()
+                for name, expected in (
+                    REVIEWED_STOP_INCIDENT_PROFILE if stop_generation
+                    else REVIEWED_SUBMISSION_MONITOR_PROFILE
+                ).items()
             )
         ):
             return False
@@ -3743,7 +3800,7 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
                 or any((comparison_root / name).is_symlink() or not (comparison_root / name).is_file()
                        or _sha(comparison_root / name) != expected
                        for name, expected in (
-                           REVIEWED_SUBMISSION_MONITOR_PROFILE if monitor_generation
+                           (REVIEWED_STOP_INCIDENT_PROFILE if stop_generation else REVIEWED_SUBMISSION_MONITOR_PROFILE) if monitor_generation
                            else REVIEWED_P5_RECHECK_PROFILE
                        ).items())):
             return False

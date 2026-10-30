@@ -13749,6 +13749,53 @@ REVIEWED_SUBMISSION_MONITOR_PAIRS = {
     for name, current in REVIEWED_SUBMISSION_MONITOR_HASHES.items()
 }
 
+# Preserve the existing role of every dependency and extension; the offline
+# workload is checked only by native consumers that already require it.
+REVIEWED_STOP_INCIDENT_HASHES = {
+    **{name: pair[1] for name, pair in
+       _preparation_code.REVIEWED_STOP_INCIDENT_TRANSITION.items()},
+    "src/engine/infrastructure/startup_validation_code_context.py":
+        "a849c125d7382f366669829cd5c8bc478091655d042f957cde83132645f7b892",
+}
+REVIEWED_STOP_INCIDENT_PROFILE = {
+    **REVIEWED_SUBMISSION_MONITOR_PROFILE,
+    **{name: sha for name, sha in REVIEWED_STOP_INCIDENT_HASHES.items()
+       if name != _preparation_code._STOP_INCIDENT_OFFLINE_OWNER},
+}
+REVIEWED_STOP_INCIDENT_VARIANTS = {
+    (key[0], REVIEWED_STOP_INCIDENT_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_sha256": REVIEWED_STOP_INCIDENT_HASHES.get(
+            value["selector_path"], value["selector_sha256"]
+        ),
+        "dependencies": {
+            name: REVIEWED_STOP_INCIDENT_HASHES.get(name, sha)
+            for name, sha in value["dependencies"].items()
+        },
+        "contract_extensions": {
+            origin: {name: REVIEWED_STOP_INCIDENT_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in members.items()}
+            for origin, members in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_SUBMISSION_MONITOR_VARIANTS.items()
+}
+REVIEWED_STOP_INCIDENT_PAIRS = {
+    name: {pair} for name, pair in
+    _preparation_code.REVIEWED_STOP_INCIDENT_TRANSITION.items()
+}
+REVIEWED_STOP_INCIDENT_PAIRS[
+    "src/engine/infrastructure/startup_validation_code_context.py"
+] = {
+    (origin, REVIEWED_STOP_INCIDENT_HASHES[
+        "src/engine/infrastructure/startup_validation_code_context.py"
+    ])
+    for origin in (
+        "919c6794fc7fd0162b60a7d8264c4c64645d2447e6b227bca7ea759dacb266c0",
+        "39adcc61fd9093a945b11c946052c259a70f1040bd8c35f31b96dca7c1f84708",
+    )
+}
+
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
@@ -14927,6 +14974,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
     if p5_recheck_present:
         prepared_hashes = REVIEWED_P5_RECHECK_PROFILE
         prepared_variants = REVIEWED_P5_RECHECK_VARIANTS
+    stop_incident_present = any(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == sha
+        for name, sha in REVIEWED_STOP_INCIDENT_HASHES.items()
+        if name != _preparation_code._STOP_INCIDENT_OFFLINE_OWNER
+    )
     if any(
         (source := candidate_bytes(name, optional=True)) is not None
         and hashlib.sha256(source).hexdigest() == sha
@@ -14935,14 +14988,19 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         # Check the complete registered generation even for a caller whose
         # original contract omits one of the historical dependency triggers.
         # A new/partial consumer inventory must not silently skip the census.
-        for name, sha in REVIEWED_SUBMISSION_MONITOR_PROFILE.items():
+        for name, sha in (
+            REVIEWED_STOP_INCIDENT_PROFILE if stop_incident_present
+            else REVIEWED_SUBMISSION_MONITOR_PROFILE
+        ).items():
             source = candidate_bytes(name)
             if hashlib.sha256(source).hexdigest() != sha:
                 raise ValueError("entry_consumer_reviewed_dependency_unreviewed:" + name)
             if source != revision_bytes(commit, name):
                 raise ValueError("entry_consumer_reviewed_dependency_dirty:" + name)
-        prepared_hashes = REVIEWED_SUBMISSION_MONITOR_PROFILE
-        prepared_variants = REVIEWED_SUBMISSION_MONITOR_VARIANTS
+        prepared_hashes = (REVIEWED_STOP_INCIDENT_PROFILE if stop_incident_present
+                           else REVIEWED_SUBMISSION_MONITOR_PROFILE)
+        prepared_variants = (REVIEWED_STOP_INCIDENT_VARIANTS if stop_incident_present
+                             else REVIEWED_SUBMISSION_MONITOR_VARIANTS)
     entry_cost_hashes = (
         prepared_hashes
         if prepared_owner_present or p5_recheck_present
@@ -15380,7 +15438,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
         if (
-            pair in REVIEWED_SUBMISSION_MONITOR_PAIRS.get(repository_name(name), ())
+            pair in REVIEWED_STOP_INCIDENT_PAIRS.get(repository_name(name), ())
+            or pair in REVIEWED_SUBMISSION_MONITOR_PAIRS.get(repository_name(name), ())
             or pair in REVIEWED_OPERATOR_MARKET_PAIRS.get(repository_name(name), ())
             or pair in REVIEWED_POST_SELL_SOURCE_PAIRS.get(repository_name(name), ())
             or pair in REVIEWED_HOLDING_INPUT_PAIRS.get(repository_name(name), ())
