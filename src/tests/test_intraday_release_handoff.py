@@ -1698,7 +1698,7 @@ def test_prepared_verifier_preserves_original_receipt_and_checks_sources(
     )
     prepare()
     result = readiness.verify_prepared(DAY, require_today=True, now=NOW)
-    assert result["status"] == "pass"
+    assert result["status"] == "pass", result
     assert (
         result["selected_release_commit"] == NEW
         and result["preserved_preopen_commit"] == OLD
@@ -7491,3 +7491,65 @@ def test_startup_storage_preserves_issued_probe_avg_predecessor(tmp_path, family
     test_entry_cost_handoff_keeps_exact_complete_generation(
         tmp_path, family, None, "probe_avg_consumed", "src/utils/kiwoom_utils.py"
     )
+
+@pytest.mark.parametrize("damage", [None, "missing", "changed", "conflict"])
+def test_interrupted_recovery_prepare_binds_retained_custody(fixture, monkeypatch, damage):
+    from src.engine.automation import ordered_intraday_deploy as D
+
+    data, _, selected, prepare = fixture
+    assert prepare()["status"] == "pass"
+    handoff.consume(DAY, pid=2, now=NOW)
+    successor = selected.parent / "successor"
+    successor.mkdir()
+    commit = "c" * 40
+    identity = dict(pid=2, start_ticks="42", cwd=str(selected / "src"))
+    monkeypatch.setattr(handoff, "_selection", lambda **kw: (successor, commit))
+    monkeypatch.setattr(handoff.subprocess, "check_output", lambda command, **kw: NEW + "\n" if "rev-parse" in command else "")
+    exists = Path.exists
+    monkeypatch.setattr(Path, "exists", lambda p: False if str(p) == "/proc/2" else exists(p))
+    transition = data / "runtime/release_transitions" / DAY / commit / "status.json"
+    original = data / "runtime/release_transitions" / DAY / ("b" * 40) / "status.json"
+    collector = data / "collector.json"
+    heartbeat = data.parent / "tmp/error_detector_heartbeat.json"
+    _json(collector, {"original": "collector"})
+    _json(heartbeat, {"original": "heartbeat"})
+    original_selection = original.with_name("selection-before.json")
+    _json(original_selection, {"original": "selection"})
+    saved_collector = original.with_name("interrupted-collector-original.json")
+    saved_heartbeat = original.with_name("interrupted-heartbeat-original.json")
+    saved_collector.write_bytes(collector.read_bytes())
+    saved_heartbeat.write_bytes(heartbeat.read_bytes())
+    p5 = data / "p5.json"
+    _json(p5, {"original": "p5"})
+    observation = dict(basis="interrupted_consumed_process", collector_path=str(collector), collector_sha256=handoff._sha(collector), source_hashes={str(collector): handoff._sha(collector), str(heartbeat): handoff._sha(heartbeat)})
+    closed = original.with_name("closed-predecessor.json")
+    _json(closed, {"closed_observation": observation})
+    _json(original, dict(phase="failed", status="fail", failed_phase="startup_held", error="deployment_stopped_recovery_source_invalid", predecessor_identity=identity, original_selection_sha256=handoff._sha(original_selection), candidate_p5=dict(path=str(p5), sha256=handoff._sha(p5))))
+    hold = transition.with_name("failed-startup-hold-before.json")
+    _json(hold, {"original": "hold"})
+    adoption = dict(source_failure="deployment_stopped_recovery_source_invalid", failed_transition_path=str(original), failed_transition_sha256=handoff._sha(original), previous_hold_sha256=handoff._sha(hold), transfer_status="transferred_exact_owned_hold")
+    _json(transition, dict(candidate_commit=commit, predecessor_identity=identity, failed_hold_adoption=adoption))
+    _json(data / "runtime/runtime_release_selection.json", {"deployment_transition": str(transition)})
+    sources = {str(original): handoff._sha(original), str(closed): handoff._sha(closed), str(original_selection): handoff._sha(original_selection), str(saved_collector): handoff._sha(saved_collector), str(saved_heartbeat): handoff._sha(saved_heartbeat), str(hold): handoff._sha(hold), str(p5): handoff._sha(p5)}
+    if damage == "conflict": sources[str(handoff.bootstrap.env_path(DAY))] = "0" * 64
+    calls = []
+    def authenticate(workspace, day, identity, path, *, adopted_transition):
+        calls.append((workspace, day, identity, path, adopted_transition))
+        if damage == "missing": raise ValueError("deployment_interrupted_hold_transfer_invalid")
+        return {"sources": sources}
+    monkeypatch.setattr(D, "verify_interrupted_transition_hold", authenticate)
+    if damage in ("missing", "conflict"):
+        with pytest.raises(ValueError):
+            handoff.prepare(DAY, old_pid=2, previous_root=selected, confirm=handoff.CONFIRM, now=NOW, previous_stopped=True)
+        return
+    result = handoff.prepare(DAY, old_pid=2, previous_root=selected, confirm=handoff.CONFIRM, now=NOW, previous_stopped=True)
+    assert result["status"] == "pass", result
+    assert calls and result["handoff"]["frozen_files"][str(original)] == handoff._sha(original)
+    monkeypatch.setattr(handoff, "_identity", lambda pid: dict(pid=pid, start_ticks="43", cwd=str(successor / "src")))
+    assert handoff.consume(DAY, pid=3, now=NOW)["actual_pid_consumed"] is True
+    collector.write_text("new live collector")
+    heartbeat.write_text("new live heartbeat")
+    assert handoff.verify(DAY, commit, now=NOW)["status"] == "pass"
+    if damage == "changed":
+        original.write_text("changed")
+        assert handoff.verify(DAY, commit, now=NOW)["status"] == "fail"

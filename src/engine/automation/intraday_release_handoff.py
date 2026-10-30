@@ -402,7 +402,7 @@ def _identity(pid):
     }
 
 
-def closed_consumption_observation(day=None, *, now=None):
+def closed_consumption_observation(day=None, *, now=None, owned_interrupted_transition=None):
     """Authenticate prior policy consumption after normal or interrupted process exit.
 
     The native market terminal, postclose stop and EOD completion are separate
@@ -468,7 +468,14 @@ def closed_consumption_observation(day=None, *, now=None):
     if not _postclose_main_absent():
         raise ValueError("intraday_closed_consumption_process_inventory_unknown")
     hold_path = data / "runtime/operator_startup_hold.json"
-    if hold_path.is_file() and _read(hold_path).get("candidate_commit") != commit:
+    owned = None
+    if owned_interrupted_transition is not None:
+        from src.engine.automation import ordered_intraday_deploy as D
+
+        owned = D.verify_interrupted_transition_hold(
+            data.parent, day, identity, owned_interrupted_transition
+        )
+    if owned is None and hold_path.is_file() and _read(hold_path).get("candidate_commit") != commit:
         # The native ordered owner may have stopped the consumed predecessor
         # before selection. Its exact failed attempt, hold and lossless closure
         # are custody evidence; no EOD or new PID consumption is invented.
@@ -476,6 +483,8 @@ def closed_consumption_observation(day=None, *, now=None):
 
         driver = D.StoppedDeploymentRecovery(data.parent, Path(__file__).resolve().parents[3], day, D.CONFIRM)
         origin = driver.inspect_stopped_origin()
+        if origin.get("interrupted_observation") is not None:
+            return origin["interrupted_observation"]
         stopped = datetime.fromisoformat(origin["failed"]["updated_at"])
         closed = _read(origin["failed"]["collector_shutdown_pin"]["path"])
         closed_at = datetime.fromisoformat(closed["generated_at"])
@@ -560,7 +569,7 @@ def closed_consumption_observation(day=None, *, now=None):
                 **checked.get("handoff", {}).get("frozen_files", {}),
             }
         )
-        return dict(
+        result = dict(
             schema="intraday_closed_consumption_observation_v1",
             target_date=day,
             release_commit=commit,
@@ -578,6 +587,16 @@ def closed_consumption_observation(day=None, *, now=None):
             current_observation_verified=False,
             new_pid_consumption_claimed=False,
         )
+        if owned is not None and (
+            result != owned["observation"]
+            or D.verify_interrupted_transition_hold(
+                data.parent, day, identity, owned_interrupted_transition
+            ) != owned
+        ):
+            raise ValueError("intraday_interrupted_owned_hold_changed")
+        return result
+    if owned is not None:
+        raise ValueError("intraday_interrupted_owned_hold_invalid")
     isolation_path = data.parent / "tmp/postclose_bot_isolation.json"
     isolation, isolation_raw = router._startup_receipt(isolation_path)
     paths.append(isolation_path)
@@ -1132,7 +1151,9 @@ def stopped_preparation_review(day):
             git_commit=candidate_commit,
         ),
     )
-    if origin["selected"].get("native_predecessor_path"):
+    if origin.get("interrupted_native"):
+        native = origin["interrupted_native"]
+    elif origin["selected"].get("native_predecessor_path"):
         native = _native_predecessor(
             day,
             commit,
@@ -16149,6 +16170,29 @@ def _prepare(
             reseal["operating_checklist"] = operating
     # All native source receipts remain independently validated by the launcher.
     hashes = {str(path): _sha(path) for path in frozen}
+    interrupted_custody = None
+    if previous_stopped:
+        selection_path = DATA_DIR / "runtime/runtime_release_selection.json"
+        selection = _read(selection_path) if selection_path.exists() else {}
+        transition = selection.get("deployment_transition")
+        if transition:
+            state = _read(transition)
+            adoption = state.get("failed_hold_adoption") or {}
+            if adoption.get("source_failure") == "deployment_stopped_recovery_source_invalid":
+                from src.engine.automation import ordered_intraday_deploy as D
+
+                custody = D.verify_interrupted_transition_hold(
+                    DATA_DIR.resolve().parent, day, old_identity,
+                    adoption.get("failed_transition_path"), adopted_transition=transition,
+                )
+                if any(path in hashes and hashes[path] != digest
+                       for path, digest in custody["sources"].items()):
+                    raise ValueError("intraday_interrupted_recovery_sources_conflict")
+                hashes.update(custody["sources"])
+                interrupted_custody = dict(
+                    failed_transition_path=adoption["failed_transition_path"],
+                    sources=custody["sources"],
+                )
     if reseal is not None and any(
         hashes[source[key + "_path"]] != source[key + "_sha256"]
         for key in ("controller", "summary")
@@ -16184,6 +16228,8 @@ def _prepare(
     }
     if reseal is not None:
         payload["postclose_source_reseal"] = reseal
+    if interrupted_custody is not None:
+        payload["interrupted_recovery_custody"] = interrupted_custody
     if previous_stopped:
         payload["previous_process_state"] = (
             "stopped_native_preopen_consumption_verified"
@@ -16309,6 +16355,48 @@ def _verify_handoff(day, commit, *, now=None, historical_observer=False):
         }
         if native_predecessor:
             required.add(native_predecessor["path"])
+        custody = payload.get("interrupted_recovery_custody")
+        if custody is not None:
+            selection = _read(DATA_DIR / "runtime/runtime_release_selection.json")
+            transition = Path(selection.get("deployment_transition") or "")
+            state = _read(transition)
+            adoption = state.get("failed_hold_adoption") or {}
+            failed_path = Path(custody.get("failed_transition_path") or "")
+            failed = _read(failed_path)
+            source_map = custody.get("sources")
+            closed_path = failed_path.with_name("closed-predecessor.json")
+            observation = _read(closed_path).get("closed_observation") or {}
+            expected_sources = dict(observation.get("source_hashes") or {})
+            expected_sources.pop(str(DATA_DIR / "runtime/runtime_release_selection.json"), None)
+            expected_sources.pop(observation.get("collector_path"), None)
+            expected_sources.pop(str(DATA_DIR.parent / "tmp/error_detector_heartbeat.json"), None)
+            expected_sources.update({
+                str(failed_path): adoption.get("failed_transition_sha256"),
+                str(closed_path): _sha(closed_path),
+                str(failed_path.with_name("selection-before.json")): failed.get("original_selection_sha256"),
+                str(failed_path.with_name("interrupted-collector-original.json")): observation.get("collector_sha256"),
+                str(failed_path.with_name("interrupted-heartbeat-original.json")): (observation.get("source_hashes") or {}).get(str(DATA_DIR.parent / "tmp/error_detector_heartbeat.json")),
+                str(transition.with_name("failed-startup-hold-before.json")): adoption.get("previous_hold_sha256"),
+                str((failed.get("candidate_p5") or {}).get("path")): (failed.get("candidate_p5") or {}).get("sha256"),
+            })
+            if (
+                payload.get("previous_process_state") != "stopped_historical_consumption_verified"
+                or adoption.get("source_failure") != "deployment_stopped_recovery_source_invalid"
+                or adoption.get("failed_transition_path") != str(failed_path)
+                or adoption.get("transfer_status") != "transferred_exact_owned_hold"
+                or state.get("candidate_commit") != commit
+                or state.get("predecessor_identity") != payload.get("old_pid_identity")
+                or failed.get("phase") != "failed" or failed.get("status") != "fail"
+                or failed.get("failed_phase") != "startup_held"
+                or failed.get("error") != adoption.get("source_failure")
+                or failed.get("predecessor_identity") != payload.get("old_pid_identity")
+                or observation.get("basis") != "interrupted_consumed_process"
+                or source_map != expected_sources
+                or any(not isinstance(sha, str) or frozen.get(name) != sha
+                       for name, sha in expected_sources.items())
+            ):
+                raise ValueError("intraday_interrupted_recovery_custody_invalid")
+            required.update(expected_sources)
         reseal = payload.get("postclose_source_reseal")
         if reseal is not None:
             prepared_receipt = _read(payload["prepared_receipt_path"])

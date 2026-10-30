@@ -1014,7 +1014,7 @@ def _pin_closed_collector(workspace, identity, path, payload, raw):
     return pin
 
 
-def verify_collector_shutdown(pin):
+def verify_collector_shutdown(pin, *, owned_interrupted_transition=None):
     """Process exit is insufficient: require its immutable, native closed epoch."""
     from src.engine.scalping.micro_reversion.observer_source_quality import (
         main_raw_epoch_validation,
@@ -1030,7 +1030,10 @@ def verify_collector_shutdown(pin):
         if (
             _digest(raw) != pin["sha256"]
             or payload != pin["original_collector_receipt"]
-            or H.closed_consumption_observation() != pin["historical_consumption"]
+            or (H.closed_consumption_observation(
+                owned_interrupted_transition=owned_interrupted_transition
+            ) if owned_interrupted_transition is not None else H.closed_consumption_observation())
+            != pin["historical_consumption"]
             or _main_pids()
             or not _session_absent()
         ):
@@ -1170,6 +1173,142 @@ def verify_collector_shutdown(pin):
         native_source_validation=semantic_verdicts,
         observer_canary_stopped=pin.get("basis") == "native_observer_canary_stop",
     )
+
+
+def verify_interrupted_transition_hold(workspace, day, identity, transition_path, *, adopted_transition=None):
+    """Authenticate the exact preselection hold and its interrupted predecessor.
+
+    The same evidence is needed while the owner is holding startup and after
+    this precise failure. It does not establish collector closure or a new PID.
+    """
+    workspace = Path(workspace).resolve(strict=True)
+    hold_path = (Path(adopted_transition).with_name("failed-startup-hold-before.json")
+                 if adopted_transition is not None else workspace / "data/runtime/operator_startup_hold.json")
+    hold, hold_raw, hold_sig = _owned_metadata(hold_path)
+    commit = hold.get("candidate_commit")
+    if not isinstance(commit, str) or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+        raise ValueError("deployment_interrupted_hold_invalid")
+    path = workspace / "data/runtime/release_transitions" / day / commit / "status.json"
+    if Path(transition_path) != path or hold.get("transition") != str(path):
+        raise ValueError("deployment_interrupted_hold_path_invalid")
+    failed, raw, sig = _owned_metadata(path)
+    prior_path = path.with_name("selection-before.json")
+    prior, prior_raw, prior_sig = _owned_metadata(prior_path)
+    selection_path = (prior_path if adopted_transition is not None
+                      else workspace / "data/runtime/runtime_release_selection.json")
+    selected, selected_raw, selection_sig = _owned_metadata(selection_path)
+    closed_path = path.with_name("closed-predecessor.json")
+    closed, closed_raw, closed_sig = _owned_metadata(closed_path)
+    pin = failed.get("interrupted_collector") or {}
+    observation = closed.get("closed_observation") or {}
+    phase_ok = (
+        failed.get("phase") == "startup_held" and failed.get("status") in (None, "running")
+    ) or (
+        failed.get("phase") == "failed" and failed.get("status") == "fail"
+        and failed.get("failed_phase") == "startup_held"
+        and failed.get("error") == "deployment_stopped_recovery_source_invalid"
+    )
+    if (
+        not phase_ok or failed.get("schema") != "ordered_intraday_deployment_v1"
+        or failed.get("authority") != CONFIRM or failed.get("target_date") != day
+        or failed.get("candidate_commit") != commit
+        or failed.get("predecessor_identity") != identity
+        or failed.get("predecessor_launcher") != {"pid": None, "start_ticks": None}
+        or failed.get("policy_effect") != "unchanged"
+        or hold != dict(schema="ordered_deployment_startup_hold_v1", authority=CONFIRM,
+                        transition=str(path), target_date=day, candidate_commit=commit,
+                        old_pid_identity=identity)
+        or prior_raw != selected_raw or failed.get("original_selection_sha256") != _digest(prior_raw)
+        or prior.get("git_commit") != failed.get("previous_commit")
+        or prior.get("release_root") != failed.get("previous_root")
+        or prior.get("actual_pid_consumed") is not True
+        or closed != failed.get("closed_predecessor")
+        or closed.get("schema") != "intraday_closed_predecessor_verification_v1"
+        or closed.get("status") != "pass" or closed.get("target_date") != day
+        or closed.get("pid_identity") != identity or closed.get("historical_consumption_verified") is not True
+        or closed.get("actual_pid_consumed") is not False or closed.get("runtime_effect") is not False
+        or closed.get("selected_release_commit") != prior.get("git_commit")
+        or closed.get("release_root") != prior.get("release_root")
+        or observation.get("basis") != "interrupted_consumed_process"
+        or observation.get("target_date") != day or observation.get("pid_identity") != identity
+        or observation.get("selection_sha256") != _digest(prior_raw)
+        or observation.get("release_commit") != prior.get("git_commit")
+        or observation.get("terminal_verified") is not False
+        or observation.get("source_admission") != "unverified_interrupted_epoch"
+        or pin.get("basis") != "interrupted_consumed_process"
+        or pin.get("historical_consumption") != observation
+        or pin.get("pid") != identity.get("pid") or pin.get("start_ticks") != identity.get("start_ticks")
+        or pin.get("path") != str(workspace / "data/runtime/scalp_micro_reversion_forward_collector/latest.json")
+        or pin.get("sha256") != observation.get("collector_sha256")
+        or pin.get("sequence_epoch") != observation.get("collector_epoch")
+        or pin.get("terminal_verified") is not False
+        or pin.get("source_admission") != "unverified_interrupted_epoch"
+        or not isinstance(observation.get("source_hashes"), dict)
+        or not observation["source_hashes"]
+    ):
+        raise ValueError("deployment_interrupted_hold_evidence_invalid")
+    p5 = failed.get("candidate_p5") or {}
+    R.validate_release(workspace, dict(schema="runtime_release_selection_v1",
+        workspace=str(workspace), release_root=failed.get("candidate_root"), git_commit=commit))
+    checked_p5 = verify_candidate_p5(workspace, day, Path(failed.get("candidate_root") or ""), commit,
+                                     p5.get("path"), p5.get("sha256"), prior)
+    if json.loads(_json_bytes(checked_p5)) != p5:
+        raise ValueError("deployment_interrupted_hold_p5_changed")
+    collector = Path(pin["path"])
+    heartbeat = workspace / "tmp/error_detector_heartbeat.json"
+    originals = ((collector, path.with_name("interrupted-collector-original.json")),
+                 (heartbeat, path.with_name("interrupted-heartbeat-original.json")))
+    sources = dict(observation["source_hashes"])
+    if adopted_transition is not None:
+        live_selection = workspace / "data/runtime/runtime_release_selection.json"
+        sources.pop(str(live_selection), None)
+        # The successor owns these live pointers after launch. Their original
+        # bytes are preserved below and must not freeze the next PID's writes.
+        sources.pop(str(collector), None)
+        sources.pop(str(heartbeat), None)
+        adoption_path = Path(adopted_transition)
+        adoption, _, _ = _owned_metadata(adoption_path)
+        current_hold, _, _ = _owned_metadata(workspace / "data/runtime/operator_startup_hold.json")
+        live, _, _ = _owned_metadata(live_selection)
+        transfer = adoption.get("failed_hold_adoption") or {}
+        if (
+            adoption_path != workspace / "data/runtime/release_transitions" / day / str(adoption.get("candidate_commit")) / "status.json"
+            or adoption.get("schema") != "ordered_intraday_deployment_v1"
+            or adoption.get("phase") != "selected"
+            or adoption.get("authority") != CONFIRM or adoption.get("target_date") != day
+            or adoption.get("predecessor_identity") != identity
+            or transfer.get("failed_transition_path") != str(path)
+            or transfer.get("failed_transition_sha256") != _digest(raw)
+            or transfer.get("previous_hold_sha256") != _digest(hold_raw)
+            or transfer.get("transfer_status") != "transferred_exact_owned_hold"
+            or current_hold != dict(schema="ordered_deployment_startup_hold_v1", authority=CONFIRM,
+                transition=str(adoption_path), target_date=day,
+                candidate_commit=adoption.get("candidate_commit"), old_pid_identity=identity)
+            or live.get("deployment_transition") != str(adoption_path)
+            or live.get("git_commit") != adoption.get("candidate_commit")
+            or live.get("actual_pid_consumed") is not False
+            or live.get("previous_git_commit") != prior.get("git_commit")
+            or live.get("previous_release_root") != prior.get("release_root")
+        ):
+            raise ValueError("deployment_interrupted_hold_transfer_invalid")
+        sources[str(hold_path)] = _digest(hold_raw)
+        sources[str(path)] = _digest(raw)
+    sources[str(closed_path)] = _digest(closed_raw)
+    sources[str(prior_path)] = _digest(prior_raw)
+    sources[str(p5["path"])] = p5["sha256"]
+    for original, saved in originals:
+        _, saved_raw, _ = _owned_metadata(saved)
+        if (_digest(saved_raw) != observation["source_hashes"].get(str(original))
+            or H._sha(original) != _digest(saved_raw)):
+            raise ValueError("deployment_interrupted_original_changed")
+        sources[str(saved)] = _digest(saved_raw)
+    if (any(H._sha(p) != sha for p, sha in sources.items())
+        or _main_pids() or not _session_absent()
+        or Path("/proc", str(identity["pid"])).exists()):
+        raise ValueError("deployment_interrupted_sources_changed")
+    return dict(observation=observation, sources=sources, transition_sha256=_digest(raw),
+                transition_signature=sig, hold_sha256=_digest(hold_raw), hold_signature=hold_sig,
+                prior_signature=prior_sig, selection_signature=selection_sig, closed_signature=closed_sig)
 
 
 class Deployment:
@@ -1855,8 +1994,15 @@ class Deployment:
         self.assert_hold()
         if getattr(self, "closed_predecessor", None):
             self.assert_unchanged()
+            interrupted_transition = (
+                self.directory / "status.json"
+                if self.closed_predecessor["closed_observation"].get("basis")
+                == "interrupted_consumed_process" else None
+            )
             if (
-                H.closed_consumption_observation(self.day)
+                (H.closed_consumption_observation(
+                    self.day, owned_interrupted_transition=interrupted_transition
+                ) if interrupted_transition is not None else H.closed_consumption_observation(self.day))
                 != self.closed_predecessor["closed_observation"]
                 or _main_pids()
                 or not _session_absent()
@@ -1872,9 +2018,10 @@ class Deployment:
                     == "interrupted_consumed_process"
                     else "native_postclose_stopped_consumption_verified"
                 ),
-                collector_shutdown=verify_collector_shutdown(
-                    self.collector_shutdown_pin
-                ),
+                collector_shutdown=(verify_collector_shutdown(
+                    self.collector_shutdown_pin,
+                    owned_interrupted_transition=interrupted_transition,
+                ) if interrupted_transition is not None else verify_collector_shutdown(self.collector_shutdown_pin)),
             )
             return
         self.assert_unchanged()
@@ -2211,7 +2358,7 @@ class StoppedDeploymentRecovery(Deployment):
             or self.flag.exists()
             or self.flag.is_symlink()
             or Path("/proc", str(self.identity["pid"])).exists()
-            or Path("/proc", str(self.launcher)).exists()
+            or (self.launcher is not None and Path("/proc", str(self.launcher)).exists())
         ):
             raise ValueError("deployment_recovery_requires_stopped_main_and_supervisor")
 
@@ -2246,14 +2393,17 @@ class StoppedDeploymentRecovery(Deployment):
         prior, prior_raw, prior_sig = _owned_metadata(prior_path)
         identity = failed.get("predecessor_identity") or {}
         preparation_sources = stopped_preparation_failure_sources(failed, failed_path)
+        interrupted = preselection and (
+            failed.get("failed_phase"), failed.get("error")
+        ) == ("startup_held", "deployment_stopped_recovery_source_invalid")
         if (
             (not preselection and (
                 selected.get("deployment_transition") != str(failed_path)
                 or selected.get("actual_pid_consumed") is not False))
             or (preselection and (
                 self.before != prior_raw
-                or failed.get("failed_phase") != "draining"
-                or failed.get("error") != "deployment_collector_closed_epoch_invalid"))
+                or (not interrupted and (failed.get("failed_phase") != "draining"
+                    or failed.get("error") != "deployment_collector_closed_epoch_invalid"))))
             or selected.get("approval_scope") != "ordered_intraday_deploy_and_restart"
             or selected.get("approved_by") != "user"
             or failed.get("schema") != "ordered_intraday_deployment_v1"
@@ -2298,10 +2448,11 @@ class StoppedDeploymentRecovery(Deployment):
             or identity["pid"] <= 0
             or not isinstance(identity.get("start_ticks"), str)
             or not identity["start_ticks"].isdigit()
-            or type((failed.get("predecessor_launcher") or {}).get("pid")) is not int
-            or failed["predecessor_launcher"]["pid"] <= 0
-            or not isinstance(failed["predecessor_launcher"].get("start_ticks"), str)
-            or not failed["predecessor_launcher"]["start_ticks"].isdigit()
+            or (not interrupted and (
+                type((failed.get("predecessor_launcher") or {}).get("pid")) is not int
+                or failed["predecessor_launcher"]["pid"] <= 0
+                or not isinstance(failed["predecessor_launcher"].get("start_ticks"), str)
+                or not failed["predecessor_launcher"]["start_ticks"].isdigit()))
             or (prior.get("actual_pid_receipt") or {}).get("pid") != identity["pid"]
             or identity.get("cwd") != str(Path(prior["release_root"]) / "src")
         ):
@@ -2316,7 +2467,21 @@ class StoppedDeploymentRecovery(Deployment):
         self.assert_stopped()
         self.previous, self.previous_commit = R.validate_release(self.workspace, prior)
         collector_source = {}
-        if preselection:
+        interrupted_native = None
+        if interrupted:
+            evidence = verify_interrupted_transition_hold(self.workspace, self.day, identity, failed_path)
+            if H.closed_consumption_observation(
+                self.day, owned_interrupted_transition=failed_path
+            ) != evidence["observation"]:
+                raise ValueError("deployment_interrupted_consumption_changed")
+            pin = failed["interrupted_collector"]
+            verify_collector_shutdown(pin, owned_interrupted_transition=failed_path)
+            proof_path = failed_path.with_name("closed-predecessor.json")
+            interrupted_native = dict(path=str(proof_path), sha256=H._sha(proof_path),
+                                      frozen_files=evidence["sources"])
+            preparation_sources.update(evidence["sources"])
+            collector_source[pin["path"]] = pin["sha256"]
+        elif preselection:
             pin = failed.get("collector_shutdown_pin") or {}
             if (pin.get("pid") != identity["pid"]
                 or pin.get("start_ticks") != identity["start_ticks"]
@@ -2347,6 +2512,8 @@ class StoppedDeploymentRecovery(Deployment):
             prior_sig=prior_sig,
             identity=identity,
             preparation_sources=preparation_sources,
+            interrupted_native=interrupted_native,
+            interrupted_observation=(evidence["observation"] if interrupted else None),
         )
 
     def preflight(self):
@@ -2388,7 +2555,9 @@ class StoppedDeploymentRecovery(Deployment):
 
         self.pending_scoring = pending_scoring_code_check(self.workspace / "data", self.day)
         native_basis = bool(selected.get("native_predecessor_path")) and not origin["preselection"]
-        if native_basis:
+        if origin["interrupted_native"]:
+            native = origin["interrupted_native"]
+        elif native_basis:
             native = H._native_predecessor(
                 self.day,
                 failed_commit,

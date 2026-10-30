@@ -4173,3 +4173,116 @@ def test_postclose_stop_initial_admission_uses_current_selected_consumer(tmp_pat
     assert not (runtime / 'operator_startup_hold.json').exists()
     assert not (runtime / 'postclose_stop' / day / 'status.json').exists()
     assert not (tmp_path / 'restart.flag').exists()
+
+@pytest.mark.parametrize("damage", [None, "failure", "phase", "hold", "collector", "selector", "new_pid", "p5", "closed"])
+def test_interrupted_hold_phase_and_failed_recovery_preserve_native_consumption(
+    stopped_recovery, monkeypatch, tmp_path, damage
+):
+    """Exercise observation before/after native hold, failed adoption and CAS."""
+    from datetime import datetime
+    from src.engine.error_detectors import artifact_freshness
+    from src.engine.scalping import reversal_cumulative_registration as registration
+
+    d, failed_path, policy = stopped_recovery
+    day = d.day
+    data = tmp_path / "data"
+    previous = tmp_path / "old"
+    previous.mkdir()
+    failed_root = tmp_path / "failed"
+    failed_root.mkdir()
+    old = "a" * 40
+    failed_commit = "b" * 40
+    identity = dict(pid=2147483601, start_ticks="123", cwd=str(previous / "src"))
+    monkeypatch.setattr(D.H, "DATA_DIR", data)
+    monkeypatch.setattr(D.H, "_selection", lambda **kw: (previous, old))
+    monkeypatch.setattr(D.H, "_identity", lambda pid: (_ for _ in ()).throw(FileNotFoundError()))
+    monkeypatch.setattr(artifact_freshness, "_postclose_main_absent", lambda: True)
+    monkeypatch.setattr(D.H.bootstrap, "manifest_path", lambda _: data / "manifest.json")
+    monkeypatch.setattr(D.H, "_verify_handoff", lambda *a, **kw: {"status": "pass", "handoff": {"frozen_files": {str(policy): D.H._sha(policy)}}})
+    monkeypatch.setattr(D.R, "selected_release", lambda _: (previous, old))
+    monkeypatch.setattr(registration, "pending_scoring_code_check", lambda *a: {})
+    monkeypatch.setattr(D.H, "_checked_bootstrap", lambda *a: {"manifest_sha256": "m" * 64})
+    manifest = data / "manifest.json"
+    manifest.write_text(json.dumps({"manifest_sha256": "m" * 64}))
+    handoff_path, consumed_path = D.H._paths(day, old)
+    handoff_path.parent.mkdir(parents=True, exist_ok=True)
+    handoff_path.write_text("{}")
+    consumed_path.write_text(json.dumps(dict(schema="intraday_policy_preserving_consumption_v1", status="pass", target_date=day, selected_release_commit=old, release_root=str(previous), handoff_sha256=D.H._sha(handoff_path), pid_identity=identity, actual_pid_consumed=True, manifest_sha256="m" * 64)))
+    prior = dict(schema="runtime_release_selection_v1", workspace=str(tmp_path), release_root=str(previous), git_commit=old, actual_pid_consumed=True, approved_by="user", approval_scope="ordered_intraday_deploy_and_restart", actual_pid_receipt=dict(schema="runtime_release_pid_receipt_v1", pid=identity["pid"], start_ticks=identity["start_ticks"], process_cwd=identity["cwd"], release_root=str(previous), git_commit=old, recorded_at_kst=day+"T09:00:00+09:00"))
+    d.selection.write_bytes(D._json_bytes(prior))
+    failed_path.with_name("selection-before.json").write_bytes(d.selection.read_bytes())
+    heartbeat = tmp_path / "tmp/error_detector_heartbeat.json"
+    heartbeat.parent.mkdir()
+    heartbeat.write_text(json.dumps(dict(main_loop=dict(pid=identity["pid"], last_beat=day+"T09:01:00+09:00"), ai_circuit=dict(pid=identity["pid"], process_start_ticks="123"), threads=dict(sniper_engine=dict(alive=True, last_beat=day+"T09:01:00+09:00")))))
+    collector = data / "runtime/scalp_micro_reversion_forward_collector/latest.json"
+    collector.parent.mkdir(parents=True)
+    payload = dict(schema="scalp_micro_reversion_canary_monitor_v1", generated_at=day+"T09:01:00+09:00", collector_snapshot=dict(process_pid=identity["pid"], process_start_ticks="123", source_contract="main_market_source_v1", collector_lifecycle="running", sequence_epoch=123))
+    collector.write_text(json.dumps(payload))
+    monkeypatch.setattr(D.H, "datetime", type("Clock", (datetime,), {"now": classmethod(lambda cls, tz=None: datetime.fromisoformat(day+"T10:00:00+09:00"))}))
+    d.hold.unlink()
+    observation = D.H.closed_consumption_observation(day)
+    closed = dict(schema="intraday_closed_predecessor_verification_v1", basis="closed_intraday", status="pass", target_date=day, selected_release_commit=old, release_root=str(previous), pid_identity=identity, closed_observation=observation, manifest_sha256="m"*64, historical_consumption_verified=True, actual_pid_consumed=False, runtime_effect=False)
+    pin = dict(path=str(collector), sha256=D.H._sha(collector), pid=identity["pid"], start_ticks="123", sequence_epoch=123, basis="interrupted_consumed_process", source_admission="unverified_interrupted_epoch", terminal_verified=False, original_collector_receipt=payload, historical_consumption=observation)
+    failed_path.with_name("closed-predecessor.json").write_bytes(D._json_bytes(closed))
+    failed_path.with_name("interrupted-collector-original.json").write_bytes(collector.read_bytes())
+    failed_path.with_name("interrupted-heartbeat-original.json").write_bytes(heartbeat.read_bytes())
+    original_candidate = d.candidate
+    d.candidate = failed_root
+    p5_path = _candidate_p5_fixture(d, failed_commit)
+    moved = p5_path.parent.with_name("e" * 32)
+    p5_path.parent.rename(moved)
+    p5_path = moved / "final.json"
+    p5_value = json.loads(p5_path.read_bytes())
+    p5_value["run_id"] = moved.name
+    p5_path.write_bytes(D._json_bytes(p5_value))
+    failed_p5 = D.verify_candidate_p5(tmp_path, day, failed_root, failed_commit, p5_path, D.H._sha(p5_path), prior)
+    d.candidate = original_candidate
+    _candidate_p5_fixture(d, "c"*40)
+    status = dict(schema="ordered_intraday_deployment_v1", authority=D.CONFIRM, target_date=day, candidate_commit=failed_commit, candidate_root=str(failed_root), previous_commit=old, previous_root=str(previous), predecessor_identity=identity, predecessor_launcher=dict(pid=None, start_ticks=None), phase="startup_held", policy_effect="unchanged", original_selection_sha256=D._digest(d.selection.read_bytes()), candidate_p5=failed_p5, closed_predecessor=closed, interrupted_collector=pin)
+    failed_path.write_bytes(D._json_bytes(status))
+    d.hold.write_bytes(D._json_bytes(dict(schema="ordered_deployment_startup_hold_v1", authority=D.CONFIRM, transition=str(failed_path), target_date=day, candidate_commit=failed_commit, old_pid_identity=identity)))
+    assert D.H.closed_consumption_observation(day, owned_interrupted_transition=failed_path) == observation
+    assert D.verify_collector_shutdown(pin, owned_interrupted_transition=failed_path)["status"] == "preserved_unverified"
+    status.update(phase="failed", status="fail", failed_phase="startup_held", error="deployment_stopped_recovery_source_invalid")
+    if damage == "failure": status["error"] = "other"
+    if damage == "phase": status["failed_phase"] = "draining"
+    if damage == "closed": status["closed_predecessor"]["pid_identity"]["pid"] += 1
+    failed_path.write_bytes(D._json_bytes(status))
+    if damage == "hold": d.hold.write_text("{}")
+    if damage == "collector": collector.write_text("{}")
+    if damage == "selector": d.selection.write_text("{}")
+    if damage == "p5": p5_path.write_text("{}")
+    if damage == "new_pid": monkeypatch.setattr(D, "_main_pids", lambda: [7])
+    if damage:
+        with pytest.raises((ValueError, OSError, KeyError)):
+            d.inspect_stopped_origin()
+        return
+    assert D.H.closed_consumption_observation(day) == observation
+    origin = d.inspect_stopped_origin()
+    assert origin["interrupted_observation"] == observation
+    before = failed_path.read_bytes(), d.hold.read_bytes(), d.selection.read_bytes()
+    d.preflight()
+    assert (failed_path.read_bytes(), d.hold.read_bytes(), d.selection.read_bytes()) == before
+    d.acquire_hold()
+    assert d.hold.read_bytes() != before[1]
+    assert failed_path.read_bytes() == before[0] and d.selection.read_bytes() == before[2]
+    d.drain()
+    assert d.phase == "drained" and d.selection.read_bytes() == before[2]
+    assert failed_path.read_bytes() == before[0]
+    monkeypatch.setattr(D, "_predecessor_observer", lambda *a: {})
+    monkeypatch.setattr(D, "inherit_prepared_delay_code", lambda *a: None)
+    d.publish()
+    assert d.phase == "selected" and failed_path.read_bytes() == before[0]
+    preserved = D.verify_interrupted_transition_hold(
+        tmp_path, day, identity, failed_path, adopted_transition=d.directory / "status.json"
+    )
+    assert preserved["observation"] == observation
+    assert str(d.selection) not in preserved["sources"]
+    assert str(collector) not in preserved["sources"] and str(heartbeat) not in preserved["sources"]
+    assert preserved["sources"][str(failed_path)] == D.H._sha(failed_path)
+    assert preserved["sources"][str(failed_path.with_name("selection-before.json"))] == observation["selection_sha256"]
+    collector.write_text("tampered")
+    with pytest.raises(ValueError, match="deployment_interrupted_original_changed"):
+        D.verify_interrupted_transition_hold(
+            tmp_path, day, identity, failed_path, adopted_transition=d.directory / "status.json"
+        )
