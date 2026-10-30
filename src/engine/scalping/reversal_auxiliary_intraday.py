@@ -351,10 +351,17 @@ def _contract_repair_replacement(original, repair_schema):
         )
     if repair_schema != CONTRACT_REPAIR_SCHEMA:
         raise ValueError("auxiliary_contract_repair_schema_invalid")
-    if original["schema"] != G.SCHEMA or original["prompt"].endswith(
-        COMMON_SUPPORT_CLARIFICATION
-    ):
+    if original["schema"] == G.SCHEMA_V2:
+        # Compact and production-input definitions carry their own immutable
+        # research and codec lineage. They are not prompt-only successors.
+        return G.validate(copy.deepcopy(original))
+    if original["schema"] != G.SCHEMA:
         raise ValueError("auxiliary_contract_repair_registry_unsupported")
+    # A selected generation may already contain this exact reviewed repair in
+    # some scopes. Preserve those sealed definitions byte-for-byte while
+    # deriving successors only for the remaining incumbent definitions.
+    if COMMON_SUPPORT_CLARIFICATION in original["prompt"]:
+        return G.validate(copy.deepcopy(original))
     replacement = copy.deepcopy(original)
     replacement["prompt"] += COMMON_SUPPORT_CLARIFICATION
     replacement.pop("registry_sha256")
