@@ -5971,6 +5971,15 @@ class GPTSniperEngine:
                 else registered_auxiliary["prompt"]
             )
             request.schema_name = registered_auxiliary["response_schema_version"]
+        elif (
+            isinstance(auxiliary_identity_context, dict)
+            and auxiliary_identity_context.get("policy_version")
+            in {"continuous_reversal_policy_v5", "continuous_reversal_policy_v6"}
+        ):
+            # Native initial/carry policies own their complete issued prompt
+            # even before a registry overlay exists. The generic transport
+            # header must not change the already verified machine request.
+            request.prompt = str(prompt)
         response_schema_registry_used = self._should_use_openai_schema_registry(
             require_json=request.require_json,
             schema_name=request.schema_name,
@@ -6110,15 +6119,6 @@ class GPTSniperEngine:
                     },
                     **(
                         {
-                            **{
-                                k: v
-                                for k, v in (metadata_extra or {}).items()
-                                if k
-                                in (
-                                    "machine_observation_sha256",
-                                    "continuous_reversal_consumption",
-                                )
-                            },
                             "auxiliary_wire_envelope": dict(
                                 contract=auxiliary_envelope["contract"],
                                 hashes=auxiliary_envelope["hashes"],
@@ -6127,6 +6127,14 @@ class GPTSniperEngine:
                         if auxiliary_envelope
                         else {}
                     ),
+                    **{
+                        k: v
+                        for k, v in (metadata_extra or {}).items()
+                        if k in (
+                            "machine_observation_sha256",
+                            "continuous_reversal_consumption",
+                        )
+                    },
                 },
                 replay_context=replay_context,
             )

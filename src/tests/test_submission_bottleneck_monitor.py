@@ -11691,3 +11691,49 @@ def test_probe_actor_recognizes_native_receipt_serialization_and_rejects_conflic
     assert monitor._row_actor(row) == ["123", "456"]
     row["fields"]["zero_base_producer_start_ticks"] = "999"
     assert monitor._row_actor(row) is None
+
+
+@pytest.mark.parametrize("origin", ["current", "prior_pid", "prior_window", "unknown", "conflict", "invalid_hash", "global_parse"])
+def test_machine_native_failures_keep_their_original_actor_and_window(tmp_path, monkeypatch, origin):
+    from copy import deepcopy
+
+    original, write, now = reversal_semantic_fixture(tmp_path, monkeypatch)
+    row = deepcopy(original)
+    runtime = row["runtime_consumption"]
+    native = runtime["continuous_reversal"]
+    actor = [str(runtime["pid"]), runtime["process_start_ticks"]]
+    if origin in ("prior_pid", "global_parse", "invalid_hash"):
+        runtime["pid"] = native["pid"] = 123456789
+        runtime["process_start_ticks"] = native["process_start_ticks"] = "987654321"
+    elif origin == "prior_window":
+        row["captured_at"] = (now - timedelta(seconds=601)).isoformat()
+    elif origin == "unknown":
+        runtime.pop("pid"); native.pop("pid")
+    elif origin == "conflict":
+        native["pid"] = 123456789
+    write(row)
+    path = tmp_path / "ai_decision_payloads" / f"ai_decision_payloads_{now.date()}.jsonl"
+    if origin == "invalid_hash":
+        row = json.loads(path.read_text()); row["runtime_effect"] = "tampered"
+        path.write_text(json.dumps(row) + "\n")
+    elif origin == "global_parse":
+        with path.open("a") as out: out.write("not-json\n")
+
+    def reject(*a, **kw):
+        raise ValueError("native_receipt_scope_invalid")
+
+    monkeypatch.setattr(monitor, "_reversal_observation_receipt", reject)
+    token = monitor._HEALTH_ACTOR.set(actor)
+    try:
+        result = monitor.machine_semantics(tmp_path, now)
+    finally:
+        monitor._HEALTH_ACTOR.reset(token)
+    view = result["current_health_cohort"]["view"]
+    reason = "machine_observation_hash_invalid" if origin == "invalid_hash" else "native_receipt_scope_invalid"
+    assert result["issues"][reason] == 1
+    historical = origin in ("prior_pid", "prior_window", "global_parse")
+    assert (reason in view["issues"]) is not historical
+    assert result["current_health_cohort"]["excluded_observation_count"] == int(historical)
+    assert bool(view["examples"]) is not historical
+    if origin == "global_parse":
+        assert view["issues"] == {"observation_json_invalid": 1}

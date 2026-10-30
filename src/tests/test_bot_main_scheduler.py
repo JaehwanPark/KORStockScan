@@ -9,6 +9,48 @@ import pytest
 import src.bot_main as bot_main
 
 
+@pytest.mark.parametrize("state", ["ready", "missing", "malformed"])
+def test_startup_daily_report_reuses_snapshot_or_dispatches_without_running_models(monkeypatch, state):
+    reads, builds, writes, jobs = [], [], [], []
+    report = {"date": "2026-10-30", "meta": {"report_generated_at": "2026-10-30 08:45:00"}}
+
+    def load(day):
+        reads.append(day)
+        if state == "malformed":
+            raise ValueError("invalid_json")
+        return report if state == "ready" else None
+
+    monkeypatch.setattr(bot_main, "load_saved_daily_report", load)
+    monkeypatch.setattr(bot_main, "build_daily_report", lambda day: builds.append(day) or report)
+    monkeypatch.setattr(bot_main, "save_daily_report", lambda value: writes.append(value) or "fixture")
+    monkeypatch.setattr(bot_main, "format_market_status_with_context", lambda value: "fixture")
+    monkeypatch.setattr(bot_main, "run_scheduler_job_async",
+        lambda name, fn, *args, **kw: jobs.append((name, fn, args, kw)))
+    original = repr(report)
+    result = bot_main.dispatch_startup_daily_report("2026-10-30")
+    assert reads == builds == writes == []
+    assert result == dict(status="dispatched", target_date="2026-10-30", as_of=None,
+                         source_revalidated=False)
+    assert len(jobs) == 1 and jobs[0][0] == "daily_report"
+    _, fn, args, kw = jobs[0]
+    assert fn(*args, **kw) is report
+    assert reads == ["2026-10-30"] and repr(report) == original
+    assert builds == ([] if state == "ready" else ["2026-10-30"])
+    assert writes == ([] if state == "ready" else [report])
+
+
+def test_main_entrypoint_never_builds_daily_report_synchronously():
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse(Path(bot_main.__file__).read_text())
+    entry = next(node for node in tree.body if isinstance(node, ast.If)
+        and ast.unparse(node.test) == "__name__ == '__main__'")
+    calls = [node.func.id for node in ast.walk(entry) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
+    assert "generate_daily_report_job" not in calls and "build_daily_report" not in calls
+    assert calls.count("dispatch_startup_daily_report") == 1
+
+
 def test_first_health_waits_for_current_consumption_without_blocking_main_engine(
     monkeypatch,
 ):

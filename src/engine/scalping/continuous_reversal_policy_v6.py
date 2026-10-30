@@ -1815,10 +1815,20 @@ def audit_observation(bundle, observation):
     )
     route = event["venue"]
     cell = f["machine_cells"][key]["routes"][route]
+    from src.engine.scalping.entry_deadline import signal_is_current
+
+    # Audit the same issued, family-bound lifetime used by the live reader.
+    # Unbound/altered lifetimes cannot enlarge the legacy five-second guard.
+    issued_lifetime = event.get("entry_signal_lifetime")
+    if (
+        (issued_lifetime.get("policy") if isinstance(issued_lifetime, dict) else None)
+        != cell.get("signal_lifetime_policy")
+    ):
+        raise ValueError("v6_event_lifetime_policy_mismatch")
     if (
         event["symbol"] != str(context["stock_code"])
         or event["market"] != K.market_bucket(context["session_bucket"])
-        or not 0 <= clock - event["epoch"] <= 5
+        or not signal_is_current(event, clock)
     ):
         raise ValueError("v6_event_scope_or_clock_invalid")
     request = source.get("auxiliary_request") or {}

@@ -1,6 +1,31 @@
 import json
+import pytest
 
 from src.engine import daily_report_service as report_mod
+
+
+def test_saved_report_requires_matching_body_date(tmp_path, monkeypatch):
+    monkeypatch.setattr(report_mod, "REPORT_DIR", tmp_path)
+    path = report_mod.report_path_for_date("2026-10-30")
+    path.write_text(json.dumps({"date": "2026-10-29", "meta": {"schema_version": report_mod.REPORT_SCHEMA_VERSION}}))
+    assert report_mod.load_saved_daily_report("2026-10-30") is None
+
+
+@pytest.mark.parametrize("failed_replace", [False, True])
+def test_report_publication_is_atomic_and_preserves_original_on_failure(tmp_path, monkeypatch, failed_replace):
+    monkeypatch.setattr(report_mod, "REPORT_DIR", tmp_path)
+    report = {"date": "2026-10-30", "meta": {"schema_version": report_mod.REPORT_SCHEMA_VERSION}}
+    path = report_mod.report_path_for_date(report["date"])
+    original = b'{"original": true}\n';path.write_bytes(original)
+    if failed_replace:
+        def reject(*a): raise OSError("controlled_atomic_publication_failure")
+        monkeypatch.setattr(report_mod.os, "replace", reject)
+        with pytest.raises(OSError): report_mod.save_daily_report(report)
+        assert path.read_bytes() == original
+    else:
+        assert report_mod.save_daily_report(report) == path
+        assert json.loads(path.read_text()) == report
+    assert list(tmp_path.glob(".*.tmp")) == []
 
 
 class _FakeResult:

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import uuid
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -97,7 +99,7 @@ def load_saved_daily_report(target_date: str) -> dict | None:
     with open(path, "r", encoding="utf-8") as handle:
         payload = json.load(handle)
     schema_version = _safe_int((payload.get("meta") or {}).get("schema_version"))
-    if schema_version != REPORT_SCHEMA_VERSION:
+    if schema_version != REPORT_SCHEMA_VERSION or payload.get("date") != target_date:
         return None
     return payload
 
@@ -105,8 +107,13 @@ def load_saved_daily_report(target_date: str) -> dict | None:
 def save_daily_report(report: dict) -> Path:
     target_date = str(report.get("date") or datetime.now().strftime("%Y-%m-%d"))
     path = report_path_for_date(target_date)
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(report, handle, ensure_ascii=False, indent=2)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(report, handle, ensure_ascii=False, indent=2)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
     return path
 
 

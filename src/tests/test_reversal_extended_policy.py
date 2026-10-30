@@ -359,7 +359,7 @@ def test_v6_stage_keeps_old_versions_and_adds_exact_thirteen(
 
         sid = "samsung|PRE|ALL|NXT"
         ids = new["continuous_reversal"]["operating_manifest"]["scopes"][sid]
-        bid = next(b for b in ids if C.branch(b)["decision_phase"] == "FIRST_UPTICK")
+        bid = next(b for b in ids if b in FIXTURES and C.branch(b)["decision_phase"] == "FIRST_UPTICK")
         selected = {
             sid: dict(
                 schema="entry_signal_lifetime_policy_v2",
@@ -391,6 +391,59 @@ def test_v6_stage_keeps_old_versions_and_adds_exact_thirteen(
         N.validate(issued_lifetime, target_date="2026-10-12")
         V.validate_sources(issued_lifetime, root)
         intraday.validate_lifetime_parent(issued_lifetime["continuous_reversal"], new)
+        # Exercise the actual producer -> captured native observation -> auditor.
+        # A family-approved lifetime is not the legacy five-second constant.
+        from src.engine.scalping import ai_decision_trace as trace
+        from src.engine.scalping.entry_deadline import bind_signal_lifetime
+        from src.engine.monitoring.submission_bottleneck_monitor import _reversal_observation_receipt
+
+        monkeypatch.setenv("KORSTOCKSCAN_AI_DECISION_TRACE_ENABLED", "1")
+        monkeypatch.setattr(trace, "DATA_DIR", root)
+        for fault, age, accepted in [
+            (None, 0.5, True), (None, 7.0, True), (None, 9.0, False),
+            (None, 9.001, False), (None, -0.1, False),
+            ("foreign_policy", 7.0, False), ("deadline", 7.0, False),
+            ("legacy", 4.0, True), ("legacy", 5.0, False), ("legacy", 6.0, False),
+        ]:
+            audited_bundle = new if fault == "legacy" else issued_lifetime
+            f = audited_bundle["continuous_reversal"]
+            snap = (copy.deepcopy(FIXTURES[bid]["event"]), copy.deepcopy(FIXTURES[bid]["source"]))
+            event = snap[0]
+            if fault != "legacy":
+                policy = copy.deepcopy(selected[sid])
+                if fault == "foreign_policy": policy["branch_max_signal_age_sec"][bid] = 12.0
+                bind_signal_lifetime(event, policy)
+                if fault == "deadline": event["entry_signal_lifetime"]["deadline_epoch"] += 0.1
+            else:
+                event.pop("entry_signal_lifetime", None)
+            assessment, inp, prompt, schema = V.assess(f, snap, symbol=event["symbol"], session=event["market"])
+            clock = event["epoch"] + age
+            captured = datetime.fromtimestamp(clock + 0.02, V.K.KST)
+            monkeypatch.setattr(trace, "_now", lambda captured=captured: captured)
+            native_receipt = dict(
+                family_sha256=f["family_sha256"], source_date=f["source_date"],
+                publication_date=f["publication_date"], effective_date=f["effective_date"],
+                machine_component_sha256=P.digest(f["machine_cells"]),
+                auxiliary_component_sha256=P.digest(f["auxiliary_cells"]),
+                arm=f["auxiliary_cells"][assessment["cell_key"]]["routes"][assessment["route"]]["payload"]["arm"],
+                snapshot_read_at=clock, input_sha256=P.digest(inp),
+                prompt_sha256=P.digest(prompt), response_schema_sha256=P.digest(schema),
+            )
+            trace.capture_machine_observation(
+                exact_payload=dict(stock_code=event["symbol"], session_bucket=event["market"],
+                    evaluation_attempt_id="lifetime-audit-fixture", entry_machine_input_as_of=clock - 0.001),
+                setup_evidence={}, assessment=assessment, bundle_sha256=audited_bundle["bundle_sha256"],
+                reversal_context=native_receipt,
+                reversal_request=dict(input=inp, prompt=prompt, response_schema=schema),
+            )
+            observation = json.loads((root / "ai_decision_payloads" /
+                f"ai_decision_payloads_{captured.date()}.jsonl").read_text().splitlines()[-1])
+            before_audit = copy.deepcopy(observation)
+            if accepted:
+                _reversal_observation_receipt(audited_bundle, observation)
+            else:
+                with pytest.raises(ValueError): _reversal_observation_receipt(audited_bundle, observation)
+            assert observation == before_audit
         from src.engine.scalping import reversal_auxiliary_intraday as auxiliary
 
         expected_bindings = auxiliary.effective_bindings(root, new, day="2026-10-12")

@@ -8132,6 +8132,50 @@ def test_http_capture_timing_preserves_original_deadline(monkeypatch, capture_se
     assert meta["openai_http_lock_wait_ms"] == 0
 
 
+@pytest.mark.parametrize("native_state", ["matched", "missing", "input_mismatch"])
+def test_noncompact_transport_keeps_native_request_binding_in_the_real_writer(tmp_path, monkeypatch, native_state):
+    from src.engine.scalping import ai_decision_trace as trace
+
+    engine = _build_engine()
+    logical = {"schema": "native_source_fixture", "stock_code": "005930"}
+    prompt = engine._wrap_openai_prompt_contract(
+        "PROMPT", require_json=True, schema_name="entry_v1", endpoint_name="analyze_target"
+    )
+    from src.engine.scalping.mechanistic_entry_runtime_policy import digest
+    native = {"pid": 123, "process_start_ticks": "456", "input_sha256": digest(logical), "prompt_sha256": digest(prompt)}
+    metadata = {"selected_prompt_version": next(iter(openai_module.MACHINE_AUXILIARY_COMPACT_ENTRY_PROMPT_VERSIONS))}
+    if native_state != "missing":
+        metadata.update(machine_observation_sha256="a" * 64, continuous_reversal_consumption=native)
+    monkeypatch.setenv("KORSTOCKSCAN_AI_DECISION_TRACE_ENABLED", "1")
+    monkeypatch.setattr(trace, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(openai_module, "capture_ai_request", trace.capture_ai_request)
+    calls = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(output_text='{"action":"WAIT","score":61,"reason":"test"}')
+
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=create))
+    replay = logical if native_state != "input_mismatch" else {**logical, "changed": True}
+    engine._call_openai_safe(prompt, json.dumps(logical), require_json=True,
+        context_name="native-binding-test", schema_name="entry_v1", endpoint_name="analyze_target",
+        symbol="005930", transport_mode_override="http", timeout_ms_override=5000,
+        metadata_extra=metadata, replay_context=replay, model_override="test-model")
+    paths = list((tmp_path / "ai_decision_requests").glob("*.jsonl"))
+    assert len(paths) == 1 and len(calls) == 1
+    request = json.loads(paths[0].read_text().splitlines()[-1])
+    binding = request.get("continuous_reversal_request_binding")
+    if native_state == "missing":
+        assert binding is None
+    else:
+        assert binding["binding_status"] == ("matched" if native_state == "matched" else "mismatch")
+        assert binding["continuous_reversal_consumption"] == native
+        assert binding["machine_observation_sha256"] == "a" * 64
+        assert binding["provider_fact"] == "request_prepared_not_execution"
+    assert request["async_request_id"] is None
+    assert len(calls[0].get("metadata", {})) <= 16
+
+
 def test_openai_call_falls_back_from_ws_to_http(monkeypatch):
     engine = _build_engine()
     engine.client = SimpleNamespace(
@@ -10041,6 +10085,17 @@ def test_full_analyze_target_received_reversal_exception_keeps_raw_and_execution
         assert len(requests) == int(failure_stage == "unsent_deadline")
         if requests:
             assert trace["request_id"] == requests[0]["request_id"]
+            binding = requests[0].get("continuous_reversal_request_binding") or {}
+            assert binding.get("binding_status") == "matched", {
+                "binding_status": binding.get("binding_status"),
+                "input_matches": binding.get("observed_input_sha256") ==
+                    (binding.get("continuous_reversal_consumption") or {}).get("input_sha256"),
+                "prompt_matches": binding.get("observed_logical_prompt_sha256") ==
+                    (binding.get("continuous_reversal_consumption") or {}).get("prompt_sha256"),
+                "request_prompt_sha256": binding.get("observed_prompt_sha256"),
+                "native_prompt_sha256": (binding.get("continuous_reversal_consumption") or {}).get("prompt_sha256"),
+                "original_prompt_sha256": postclose.digest(prompt),
+            }
         else:
             assert engine._consume_last_transport_meta() == {
                 "openai_request_id": "stale-other-call"

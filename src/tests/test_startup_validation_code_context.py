@@ -81,11 +81,11 @@ def _native_releases(tmp_path_factory, *, current=False):
     # This fixture exercises the issued generic AST/docstring admission, not
     # the later exact monitor profile. Keep its native readers together with
     # that original monitor; the new profile has separate native-family tests.
-    for relative in (() if current else (
-        "src/engine/monitoring/submission_bottleneck_monitor.py",
+    for relative in (() if current else dict.fromkeys((
+        *C.REVIEWED_SUBMISSION_MONITOR_TRANSITION,
         "src/engine/infrastructure/startup_validation_code_context.py",
         "src/engine/automation/intraday_release_handoff.py",
-    )):
+    ))):
         (root / relative).write_bytes(subprocess.check_output(
             ["git", "-C", str(ROOT), "show", "003865007:" + relative]
         ))
@@ -4514,3 +4514,28 @@ def test_submission_monitor_pair_keeps_explicit_comparison_root(tmp_path, phase)
     elif phase == "missing":
         comparison = tmp_path / "missing"
     assert C.reviewed_preparation_pair(relative, *pair, root=comparison) is (phase == "candidate")
+
+
+@pytest.mark.parametrize("generation", ["prior", "current"])
+@pytest.mark.parametrize("fault", [None, "missing", "mixed", "unknown_origin"])
+def test_submission_native_generations_preserve_issued_predecessor_and_reject_mixes(tmp_path, generation, fault):
+    profile = C.REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE if generation == "prior" else C.REVIEWED_SUBMISSION_MONITOR_PROFILE
+    for name, expected in profile.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(subprocess.check_output(["git", "-C", str(ROOT), "show", "af07f6f6a:" + name])
+                         if generation == "prior" else (ROOT / name).read_bytes())
+        assert C._sha(path) == expected
+    monitor = "src/engine/monitoring/submission_bottleneck_monitor.py"
+    if fault == "missing": (tmp_path / "src/engine/ai_engine_openai.py").unlink()
+    elif fault == "mixed":
+        changed = "src/engine/scalping/continuous_reversal_policy_v6.py"
+        (tmp_path / changed).write_bytes((ROOT / changed).read_bytes() if generation == "prior" else
+            subprocess.check_output(["git", "-C", str(ROOT), "show", "af07f6f6a:" + changed]))
+    for name in (monitor,) if generation == "prior" else C.REVIEWED_SUBMISSION_MONITOR_TRANSITION:
+        old = C.REVIEWED_SUBMISSION_MONITOR_TRANSITION[name][0]
+        if fault == "unknown_origin": old = "f" * 64
+        assert C.reviewed_preparation_pair(name, old, profile[name], root=tmp_path) is (fault is None)
+    if generation == "current" and fault is None:
+        assert C.reviewed_preparation_pair(monitor,
+            C.REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE[monitor], profile[monitor], root=tmp_path)

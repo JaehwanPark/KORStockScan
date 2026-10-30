@@ -13727,7 +13727,12 @@ REVIEWED_SUBMISSION_MONITOR_HASHES = {
     **{name: pair[1] for name, pair in
        _preparation_code.REVIEWED_SUBMISSION_MONITOR_TRANSITION.items()},
     "src/engine/infrastructure/startup_validation_code_context.py":
-        "39adcc61fd9093a945b11c946052c259a70f1040bd8c35f31b96dca7c1f84708",
+        "108554448f848de547a1d6c64c6dc052592d33ae31c1584162bf2165bbff7c0e",
+}
+REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE = {
+    **REVIEWED_P5_RECHECK_PROFILE,
+    **{name: pair[1] for name, pair in _preparation_code.REVIEWED_SUBMISSION_MONITOR_PRIOR_TRANSITION.items()},
+    "src/engine/infrastructure/startup_validation_code_context.py": "39adcc61fd9093a945b11c946052c259a70f1040bd8c35f31b96dca7c1f84708",
 }
 REVIEWED_SUBMISSION_MONITOR_PROFILE = {
     **REVIEWED_P5_RECHECK_PROFILE,
@@ -13742,7 +13747,7 @@ REVIEWED_SUBMISSION_MONITOR_PAIRS = {
         (origin, current)
         for origin in (
             {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
-            | {REVIEWED_P5_RECHECK_PROFILE[name]}
+            | {REVIEWED_P5_RECHECK_PROFILE[name], REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE[name]}
         )
         if origin != current
     }

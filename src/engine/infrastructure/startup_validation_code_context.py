@@ -3677,10 +3677,28 @@ _suffix_history.update((origin, _suffix_current) for origin in _suffix_origins
 
 # One registration is consumed by both the independent preparation reader and
 # the ordered handoff reader. Historical profiles retain their original bytes.
-REVIEWED_SUBMISSION_MONITOR_TRANSITION = {
+REVIEWED_SUBMISSION_MONITOR_PRIOR_TRANSITION = {
     "src/engine/monitoring/submission_bottleneck_monitor.py": (
         "0a527ad29a96caf0f408db3467e8d407dccb8e552330f8f55e3e09a40dfc198e",
         "6ecdd207980ff3f41b20b873791867f9b14ec84de80731b73e905c1fe4fbb18e",
+    ),
+}
+REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE = {
+    **REVIEWED_P5_RECHECK_PROFILE,
+    **{name: pair[1] for name, pair in REVIEWED_SUBMISSION_MONITOR_PRIOR_TRANSITION.items()},
+}
+REVIEWED_SUBMISSION_MONITOR_TRANSITION = {
+    "src/engine/monitoring/submission_bottleneck_monitor.py": (
+        "0a527ad29a96caf0f408db3467e8d407dccb8e552330f8f55e3e09a40dfc198e",
+        "b2aba0a04e52f47407e99efeddc26cb489ed0562148cf1df799710204994ca25",
+    ),
+    "src/engine/scalping/continuous_reversal_policy_v6.py": (
+        "9f468cb97f07087ed2b714d2deda695f6b6985718ec2fb9eb2fcbe9fce57128e",
+        "1f2812919d27c23bc48e106a6f37ed2db74c9995992f4a98d5d063f51b0043e9",
+    ),
+    "src/engine/ai_engine_openai.py": (
+        "3ef25fb633af75b36f72c2721291c4425dc873bb50255d200928c05fc20598a3",
+        "5d5b66dc3039f3f6e31756bc42d7d91a015f7b5fa8aef9f2dd02cd78538a658e",
     ),
 }
 REVIEWED_SUBMISSION_MONITOR_PROFILE = {
@@ -3704,9 +3722,25 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
         (comparison_root / name).is_file()
         and not (comparison_root / name).is_symlink()
         and _sha(comparison_root / name) == pair[1]
-        for name, pair in REVIEWED_SUBMISSION_MONITOR_TRANSITION.items()
+        for transitions in (REVIEWED_SUBMISSION_MONITOR_TRANSITION,
+                            REVIEWED_SUBMISSION_MONITOR_PRIOR_TRANSITION)
+        for name, pair in transitions.items()
     )
+    monitor_profile = None
     if monitor_generation:
+        # Authenticate a complete issued generation before interpreting a pair.
+        # The current reader may compare a genuine earlier selected generation;
+        # an overlapping source trigger cannot turn it into the latest profile.
+        for profile in (REVIEWED_SUBMISSION_MONITOR_PROFILE,
+                        REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE):
+            if all(not (comparison_root / name).is_symlink()
+                   and (comparison_root / name).is_file()
+                   and _sha(comparison_root / name) == expected
+                   for name, expected in profile.items()):
+                monitor_profile = profile
+                break
+        if monitor_profile is None:
+            return False
         endpoint = comparison_root / relative
         if (
             (relative not in REVIEWED_PREPARATION_SOURCES
@@ -3715,20 +3749,23 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
             or endpoint.is_symlink()
             or not endpoint.is_file()
             or _sha(endpoint) != current
-            or any(
-                (comparison_root / name).is_symlink()
-                or not (comparison_root / name).is_file()
-                or _sha(comparison_root / name) != expected
-                for name, expected in REVIEWED_SUBMISSION_MONITOR_PROFILE.items()
-            )
         ):
             return False
-        transition = REVIEWED_SUBMISSION_MONITOR_TRANSITION.get(relative)
-        if transition is not None:
-            return current == transition[1] and (
-                old == transition[0]
-                or (old, transition[0])
+        transitions = [values[relative] for values in (
+            REVIEWED_SUBMISSION_MONITOR_TRANSITION,
+            REVIEWED_SUBMISSION_MONITOR_PRIOR_TRANSITION,
+        ) if relative in values and values[relative][1] == current]
+        if transitions:
+            origins = {pair[0] for pair in transitions}
+            if monitor_profile is REVIEWED_SUBMISSION_MONITOR_PROFILE:
+                origins.add(REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE[relative])
+            from src.engine.automation.intraday_release_handoff import reviewed_formatting_predecessor
+            origin = reviewed_formatting_predecessor(relative, old)
+            return any(
+                old == predecessor or origin == reviewed_formatting_predecessor(relative, predecessor)
+                or (origin, reviewed_formatting_predecessor(relative, predecessor))
                 in REVIEWED_PREPARATION_HISTORY.get(relative, ())
+                for predecessor in origins
             )
         # Other members retain their original endpoint and reviewed-formatting
         # predicates in the shared cron-profile branch below.
@@ -3743,7 +3780,7 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
                 or any((comparison_root / name).is_symlink() or not (comparison_root / name).is_file()
                        or _sha(comparison_root / name) != expected
                        for name, expected in (
-                           REVIEWED_SUBMISSION_MONITOR_PROFILE if monitor_generation
+                           monitor_profile if monitor_generation
                            else REVIEWED_P5_RECHECK_PROFILE
                        ).items())):
             return False
@@ -3776,7 +3813,7 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
         if any((comparison_root / name).is_symlink() or not (comparison_root / name).is_file()
                or _sha(comparison_root / name) != expected
                for name, expected in (
-                   REVIEWED_SUBMISSION_MONITOR_PROFILE if monitor_generation
+                   monitor_profile if monitor_generation
                    else REVIEWED_CRON_PHASE_BINDING_PROFILE
                ).items()):
             return False

@@ -153,7 +153,7 @@ def test_compact_binding_supplement_proves_original_archive_without_changing_pri
     )
     native = dict(
         input_sha256=hashlib.sha256(trace._json_bytes(logical)).hexdigest(),
-        prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(),
+        prompt_sha256=__import__("src.engine.scalping.mechanistic_entry_runtime_policy", fromlist=["digest"]).digest(prompt),
     )
     capture = trace.capture_ai_request(
         prompt=prompt,
@@ -567,18 +567,19 @@ def test_request_preparation_does_not_hide_other_os_errors(monkeypatch, tmp_path
         trace.prepare_ai_request_capture(trace._date_text())
 
 
+@pytest.mark.parametrize("text", ["observed first uptick", "confirmed \uC0C1\uC2B9"])
 @pytest.mark.parametrize("mismatch", [False, True])
 def test_native_reversal_request_capture_binds_actual_bytes_without_claiming_execution(
-    monkeypatch, tmp_path, mismatch
+    monkeypatch, tmp_path, mismatch, text
 ):
-    import hashlib
+    from src.engine.scalping.mechanistic_entry_runtime_policy import digest
 
     _enable(monkeypatch, tmp_path)
-    inp = dict(context="observed first uptick", stock_code="005930")
+    inp = dict(context=text, stock_code="005930")
     prompt = "Assess the confirmed uptick."
     native = dict(
-        input_sha256=hashlib.sha256(trace._json_bytes(inp)).hexdigest(),
-        prompt_sha256=hashlib.sha256(trace._json_bytes(prompt)).hexdigest(),
+        input_sha256=digest(inp),
+        prompt_sha256=digest(prompt),
     )
     result = trace.capture_ai_request(
         prompt=prompt + "changed" if mismatch else prompt,

@@ -1834,6 +1834,14 @@ def capture_ai_request(
         }
         native = metadata_row.get("continuous_reversal_consumption")
         if isinstance(native, dict):
+            from src.engine.scalping.mechanistic_entry_runtime_policy import digest
+
+            # Native policies seal canonical JSON values. Transport hashes seal
+            # UTF-8 bytes; a string's JSON identity is not its raw byte identity.
+            logical_input_sha256 = (
+                digest(sanitized_replay_context) if replay_context_present else None
+            )
+            logical_prompt_sha256 = digest(prompt)
             binding = dict(
                 machine_observation_sha256=metadata_row.get(
                     "machine_observation_sha256"
@@ -1841,6 +1849,8 @@ def capture_ai_request(
                 continuous_reversal_consumption=native,
                 observed_input_sha256=sanitized_replay_context_sha256,
                 observed_prompt_sha256=prompt_sha256,
+                observed_logical_input_sha256=logical_input_sha256,
+                observed_logical_prompt_sha256=logical_prompt_sha256,
                 request_id=trace_id,
                 provider_fact="request_prepared_not_execution",
             )
@@ -1849,10 +1859,10 @@ def capture_ai_request(
                 binding["auxiliary_wire_envelope"] = wire
                 binding["binding_status"] = (
                     "matched"
-                    if native.get("input_sha256") == sanitized_replay_context_sha256
+                    if native.get("input_sha256") == logical_input_sha256
                     and native.get("input_sha256")
                     == wire.get("hashes", {}).get("logical_input")
-                    and sanitized_user_input_sha256
+                    and digest(sanitized_input)
                     == wire.get("hashes", {}).get("wire_input")
                     and native.get("prompt_sha256")
                     == wire.get("hashes", {}).get("logical_prompt")
@@ -1863,8 +1873,8 @@ def capture_ai_request(
             else:
                 binding["binding_status"] = (
                     "matched"
-                    if native.get("input_sha256") == sanitized_replay_context_sha256
-                    and native.get("prompt_sha256") == prompt_sha256
+                    if native.get("input_sha256") == logical_input_sha256
+                    and native.get("prompt_sha256") == logical_prompt_sha256
                     else "mismatch"
                 )
             request_row["continuous_reversal_request_binding"] = binding

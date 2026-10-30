@@ -894,9 +894,10 @@ def _reversal_provider_lineage(
                 == row.get("payload_semantic_sha256")
                 and digest(native.get("input_sha256"))
                 and native.get("input_sha256")
-                == request.get(
-                    "sanitized_replay_context_sha256",
-                    request.get("sanitized_user_input_sha256"),
+                == binding.get(
+                    "observed_logical_input_sha256",
+                    request.get("sanitized_replay_context_sha256",
+                                request.get("sanitized_user_input_sha256")),
                 )
             )
             request_at, trace_at = stamp(request.get("captured_at")), stamp(
@@ -6718,6 +6719,7 @@ def machine_semantics(
     verified_reversal_generations = {}
     reversal_observations = []
     health_records = []
+    observation_failures = []
     pid_identities = {}
     # Reuse this bounded native read. Include original signed observations,
     # not an age-only exemption or a fabricated economic recovery receipt.
@@ -6809,6 +6811,7 @@ def machine_semantics(
                     continue
                 seen.add(observed_hash)
                 result["observation_count"] += 1
+                failure_actor = None
                 try:
                     if (
                         hashlib.sha256(
@@ -6824,6 +6827,14 @@ def machine_semantics(
                     ):
                         raise ValueError("machine_observation_hash_invalid")
                     receipt = observation["runtime_consumption"]
+                    outer_actor = _row_actor(receipt)
+                    native_actor = receipt.get("continuous_reversal")
+                    if outer_actor and (
+                        native_actor is None
+                        or isinstance(native_actor, dict)
+                        and _row_actor(native_actor) == outer_actor
+                    ):
+                        failure_actor = outer_actor
                     bundle_hash = observation["bundle_sha256"]
                     if (
                         not isinstance(bundle_hash, str)
@@ -7023,6 +7034,7 @@ def machine_semantics(
                 ) as exc:
                     reason = str(exc)[:160]
                     issues[reason] += 1
+                    observation_failures.append((at, failure_actor, reason, observed_hash))
                     if len(result["examples"]) < 3:
                         result["examples"].append(
                             dict(observation_sha256=observed_hash, reason=reason)
@@ -7078,6 +7090,17 @@ def machine_semantics(
         result["status"] = "observed_receipts_match"
     actor = _HEALTH_ACTOR.get()
     if actor:
+        current_native_issues = Counter(native_issues)
+        current_failures = []
+        for at, failure_actor, reason, observed_hash in observation_failures:
+            if failure_actor is not None and (
+                failure_actor != actor
+                or not 0 <= (now - at).total_seconds() <= SOURCE_WINDOW_SEC
+            ):
+                current_native_issues.subtract({reason: 1})
+            else:
+                current_failures.append(dict(observation_sha256=observed_hash, reason=reason))
+        current_native_issues = +current_native_issues
         retained = [
             row
             for row in health_records
@@ -7116,7 +7139,9 @@ def machine_semantics(
             required_feature_guard_count=required_n,
             scopes=scoped,
             source_invalid_blockers=dict(blockers),
-            issues=native_issues,
+            issues=dict(current_native_issues),
+            examples=current_failures[:3],
+            unvalidated_observation_count=len(current_failures),
             observation_role_partition=_machine_role_partition(
                 retained, actor, now, result.get("current_bundle_sha256")
             ),
@@ -7127,7 +7152,7 @@ def machine_semantics(
         if projected:
             view["reversal_provider_lineage"] = projected["view"]
             view["issues"] = dict(
-                Counter(native_issues) + Counter(projected["view"]["issues"])
+                current_native_issues + Counter(projected["view"]["issues"])
             )
             if projected["view"]["status"] == "partial_source_gap":
                 view["provider_lineage_source_status"] = "partial_source_gap"
@@ -7157,7 +7182,8 @@ def machine_semantics(
             view.pop("reversal_provider_lineage", None)
             view.pop("provider_lineage_source_status", None)
         result["current_health_cohort"] = _health_cohort(
-            view, actor, now, excluded=result["observation_count"] - len(retained)
+            view, actor, now,
+            excluded=result["observation_count"] - len(retained) - len(current_failures),
         )
     return result
 

@@ -65,6 +65,7 @@ from src.utils import kiwoom_utils
 from src.database.db_manager import DBManager
 from src.core.event_bus import EventBus
 from src.engine.daily_report_service import (
+    load_saved_daily_report,
     save_daily_report,
     build_daily_report,
     format_market_status_with_context,
@@ -483,9 +484,20 @@ def error_detection_loop(interval: int, event_bus, *, startup_identity=None):
         time.sleep(interval)
 
 
-def generate_daily_report_job(target_date: str | None = None):
+def generate_daily_report_job(target_date: str | None = None, *, reuse_snapshot=False):
     """웹/API용 일일 리포트 JSON을 생성합니다."""
     try:
+        if reuse_snapshot:
+            day = _resolve_target_date(target_date)
+            try:
+                report = load_saved_daily_report(day)
+            except (OSError, ValueError, TypeError, AttributeError) as exc:
+                print(f"⚠️ [시스템] 기존 일일 리포트 읽기 실패: {type(exc).__name__}")
+                report = None
+            if report is not None:
+                as_of = (report.get("meta") or {}).get("report_generated_at")
+                print(f"📘 [시스템] 당일 일일 리포트 재사용: date={day}, as_of={as_of}")
+                return report
         report = build_daily_report(target_date)
         path = save_daily_report(report)
         warnings = report.get("meta", {}).get("warnings", []) or []
@@ -667,6 +679,20 @@ def dispatch_daily_report_if_due(now: datetime, already_sent: bool) -> bool:
     return already_sent
 
 
+def dispatch_startup_daily_report(target_date: str | None = None) -> dict:
+    """Reuse the owner's dated snapshot, or rebuild through its existing worker.
+
+    Reuse preserves the original as-of; it does not assert that mutable inputs
+    were freshly revalidated. Scheduled and explicit refresh keep their scope.
+    """
+    day = _resolve_target_date(target_date)
+    run_scheduler_job_async(
+        "daily_report", generate_daily_report_job, day, reuse_snapshot=True
+    )
+    return dict(status="dispatched", target_date=day, as_of=None,
+                source_revalidated=False)
+
+
 # ==========================================
 # 🎯 메인 실행부 (Main Thread)
 # ==========================================
@@ -678,9 +704,6 @@ if __name__ == "__main__":
 
     db_manager = DBManager()
     db_manager.init_db()
-
-    # 웹/API에서 바로 읽을 수 있도록 부팅 시점에 최신 리포트 1회 생성
-    generate_daily_report_job()
 
     # 전역 이벤트 버스 초기화
     event_bus = EventBus()
@@ -794,6 +817,7 @@ if __name__ == "__main__":
             },
         )
 
+    dispatch_startup_daily_report()
     print("🛡️ 메인 관제탑 루프 진입 (스케줄링 및 무중단 감시 시작)...")
 
     # 💡 [아키텍처 포인트 4] 메인 쓰레드는 오직 시스템 스케줄링과 예외 종료 감시만 수행합니다.
