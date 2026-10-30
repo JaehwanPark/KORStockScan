@@ -13931,11 +13931,15 @@ REVIEWED_STORAGE_INTEGRATION_PAIRS = {
 }
 REVIEWED_STORAGE_INTEGRATION_PAIRS[
     "src/engine/infrastructure/startup_validation_code_context.py"
-] = {(REVIEWED_P5_CONSUMER_UNION_HASHES[
-    "src/engine/infrastructure/startup_validation_code_context.py"
-], REVIEWED_STORAGE_INTEGRATION_HASHES[
-    "src/engine/infrastructure/startup_validation_code_context.py"
-])}
+] = {
+    (origin, REVIEWED_STORAGE_INTEGRATION_HASHES[
+        "src/engine/infrastructure/startup_validation_code_context.py"
+    ])
+    for pair in REVIEWED_P5_CONSUMER_UNION_PAIRS[
+        "src/engine/infrastructure/startup_validation_code_context.py"
+    ]
+    for origin in pair
+}
 REVIEWED_INTERRUPTED_CUSTODY_PRIOR_HASHES = {
     "src/engine/automation/ordered_intraday_deploy.py":
         "d048ed30b231a1076abaaaa79d85f4b655044307c201760ac067cb3e747375b6",

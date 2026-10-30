@@ -4666,6 +4666,13 @@ def test_storage_integration_registered_for_both_native_readers():
         assert hashlib.sha256(compared).hexdigest() == H.REVIEWED_STORAGE_INTEGRATION_PROFILE[name], name
     context = "src/engine/infrastructure/startup_validation_code_context.py"
     assert C._sha(ROOT / context) == H.REVIEWED_STORAGE_INTEGRATION_PROFILE[context]
+    # The actual selected predecessor precedes the P5-only intermediate. The
+    # complete storage generation must inherit both declared P5 endpoints,
+    # without requiring an intermediate release to run merely for custody.
+    for pair in H.REVIEWED_P5_CONSUMER_UNION_PAIRS[context]:
+        for origin in pair:
+            assert (origin, H.REVIEWED_STORAGE_INTEGRATION_HASHES[context]) in H.REVIEWED_STORAGE_INTEGRATION_PAIRS[context]
+    assert ("f" * 64, H.REVIEWED_STORAGE_INTEGRATION_HASHES[context]) not in H.REVIEWED_STORAGE_INTEGRATION_PAIRS[context]
     for (name, digest), variant in H.REVIEWED_STORAGE_INTEGRATION_VARIANTS.items():
         if name in H.REVIEWED_STORAGE_INTEGRATION_PROFILE:
             assert digest == H.REVIEWED_STORAGE_INTEGRATION_PROFILE[name]
