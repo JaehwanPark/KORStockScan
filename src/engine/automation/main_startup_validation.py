@@ -1265,6 +1265,20 @@ def _merge_source_hashes(sources, additions):
     sources.update(additions)
 
 
+def _recheck_consumer_sources(consumers, *, main_preparation=None):
+    """Verify each phase's exact union once, with one native closure check.
+
+    Different consumers may cite the same source, but conflicting byte
+    identities never become an arbitrary winner. The union is constructed
+    afresh for each phase; no source or semantic verdict is cached across the
+    native recheck and final binding checks.
+    """
+    sources = {}
+    for row in consumers.values():
+        _merge_source_hashes(sources, row.get("source_hashes") or {})
+    _recheck(sources, main_preparation=main_preparation)
+
+
 def _ticks(pid):
     return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
 
@@ -1588,11 +1602,10 @@ def run_validation(
             raise ValueError("startup_child_isolation_identity_invalid")
         final["failure_phase"] = "recheck"
         _recheck(sources)
-        for row in final["consumer_results"].values():
-            _recheck(
-                row.get("source_hashes") or {},
-                main_preparation=binding.get("main_preparation"),
-            )
+        _recheck_consumer_sources(
+            final["consumer_results"],
+            main_preparation=binding.get("main_preparation"),
+        )
         logical = {}
         for row in final["consumer_results"].values():
             for path, receipt in (row.get("logical_source_receipts") or {}).items():
@@ -1621,11 +1634,10 @@ def run_validation(
         ):
             raise ValueError("startup_environment_inputs_changed")
         _recheck(sources)
-        for row in final["consumer_results"].values():
-            _recheck(
-                row.get("source_hashes") or {},
-                main_preparation=binding.get("main_preparation"),
-            )
+        _recheck_consumer_sources(
+            final["consumer_results"],
+            main_preparation=binding.get("main_preparation"),
+        )
         from src.engine.automation.intraday_release_handoff import (
             _identity as live_identity,
         )

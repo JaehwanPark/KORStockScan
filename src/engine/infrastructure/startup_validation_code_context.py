@@ -3775,6 +3775,20 @@ REVIEWED_INTERRUPTED_CUSTODY_PROFILE = {
     **REVIEWED_COMMON_SUPPORT_PROFILE,
     **{name: pair[1] for name, pair in REVIEWED_INTERRUPTED_CUSTODY_TRANSITION.items()},
 }
+# The P5 consumer union changes only the selected validation orchestrator.
+# The complete independent preparation profile remains mandatory for all
+# overlapping callers; a changed P5 byte is a generation, not a blanket
+# compatibility exception for the rest of the release.
+REVIEWED_P5_CONSUMER_UNION_TRANSITION = {
+    "src/engine/automation/main_startup_validation.py": (
+        "3874cb131182242f74184dd65ea25629c7ecfb8eeebdecf25eb51fb5e12f5dde",
+        "44cf695431f70748bdef561d3476c95c1a30c0672b3a32dcecd38f95ece6b168",
+    )
+}
+REVIEWED_P5_CONSUMER_UNION_PROFILE = {
+    **REVIEWED_INTERRUPTED_CUSTODY_PROFILE,
+    **{name: pair[1] for name, pair in REVIEWED_P5_CONSUMER_UNION_TRANSITION.items()},
+}
 REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PROFILE = {
     **REVIEWED_COMMON_SUPPORT_PROFILE,
     "src/engine/automation/ordered_intraday_deploy.py":
@@ -3788,6 +3802,25 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
     comparison_root = ROOT if root is None else Path(root)
     if not comparison_root.is_absolute() or comparison_root.resolve() != comparison_root:
         return False
+    union_generation = any(
+        (comparison_root / name).is_file()
+        and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == pair[1]
+        for name, pair in REVIEWED_P5_CONSUMER_UNION_TRANSITION.items()
+    )
+    if union_generation:
+        if any(
+            (comparison_root / name).is_symlink()
+            or not (comparison_root / name).is_file()
+            or _sha(comparison_root / name) != expected
+            for name, expected in REVIEWED_P5_CONSUMER_UNION_PROFILE.items()
+        ):
+            return False
+        transition = REVIEWED_P5_CONSUMER_UNION_TRANSITION.get(relative)
+        if transition is not None:
+            return current == transition[1] and old == transition[0]
+    interrupted_profile = (REVIEWED_P5_CONSUMER_UNION_PROFILE if union_generation
+                           else REVIEWED_INTERRUPTED_CUSTODY_PROFILE)
     prior_owner = "src/engine/automation/ordered_intraday_deploy.py"
     interrupted_prior = (
         (comparison_root / prior_owner).is_file()
@@ -3817,7 +3850,7 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
             (comparison_root / name).is_symlink()
             or not (comparison_root / name).is_file()
             or _sha(comparison_root / name) != expected
-            for name, expected in REVIEWED_INTERRUPTED_CUSTODY_PROFILE.items()
+            for name, expected in interrupted_profile.items()
         ):
             return False
         if relative in REVIEWED_INTERRUPTED_CUSTODY_TRANSITION:
@@ -3836,7 +3869,7 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
             (comparison_root / name).is_symlink()
             or not (comparison_root / name).is_file()
             or _sha(comparison_root / name) != expected
-            for name, expected in (REVIEWED_INTERRUPTED_CUSTODY_PROFILE if interrupted_generation
+            for name, expected in (interrupted_profile if interrupted_generation
                                    else REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PROFILE if interrupted_prior
                                    else REVIEWED_COMMON_SUPPORT_PROFILE).items()
         ):
@@ -3856,7 +3889,7 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
             or not (comparison_root / name).is_file()
             or _sha(comparison_root / name) != expected
             for name, expected in (
-                REVIEWED_INTERRUPTED_CUSTODY_PROFILE if interrupted_generation
+                interrupted_profile if interrupted_generation
                 else REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PROFILE if interrupted_prior
                 else REVIEWED_COMMON_SUPPORT_PROFILE if support_generation
                 else REVIEWED_STOP_INCIDENT_PROFILE
@@ -3884,7 +3917,7 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
         # Authenticate a complete issued generation before interpreting a pair.
         # The current reader may compare a genuine earlier selected generation;
         # an overlapping source trigger cannot turn it into the latest profile.
-        for profile in (REVIEWED_INTERRUPTED_CUSTODY_PROFILE, REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PROFILE, REVIEWED_COMMON_SUPPORT_PROFILE,
+        for profile in (REVIEWED_P5_CONSUMER_UNION_PROFILE, REVIEWED_INTERRUPTED_CUSTODY_PROFILE, REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PROFILE, REVIEWED_COMMON_SUPPORT_PROFILE,
                         REVIEWED_STOP_INCIDENT_PROFILE,
                         REVIEWED_SUBMISSION_MONITOR_PROFILE,
                         REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE):

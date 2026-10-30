@@ -7636,3 +7636,80 @@ def test_interrupted_custody_delta_checks_complete_combined_candidate(tmp_path, 
         assert set(handoff._verify_entry_code_delta(root, commit, origin, paths, expected)) == set(paths)
     else:
         with pytest.raises(ValueError): handoff._verify_entry_code_delta(root, commit, origin, paths, expected)
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "mixed", "dirty", "unknown", "suppressed_triggers", "variant_valid", "variant_missing", "variant_unknown", "variant_new_missing"])
+def test_p5_consumer_union_delta_checks_exact_complete_candidate(tmp_path, fault, monkeypatch):
+    import hashlib, json, subprocess
+    from src.engine.infrastructure import startup_validation_code_context as C
+
+    source = Path(handoff.__file__).resolve().parents[3]
+    root = tmp_path / "candidate"
+    subprocess.run(["git", "clone", "-q", "--shared", "--no-checkout", str(source), str(root)], check=True)
+    commit = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
+    subprocess.run(["git", "-C", str(root), "checkout", "-q", "--detach", commit], check=True)
+    origin = "23fbecf2874e618680883ccf8fd4c0947a52f6a0"
+    paths = {name: name for name in handoff.REVIEWED_P5_CONSUMER_UNION_HASHES}
+    parent = {name: hashlib.sha256(subprocess.check_output(["git", "-C", str(root), "show", origin + ":" + name])).hexdigest() for name in paths}
+    expected = hashlib.sha256(json.dumps(parent, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")).hexdigest()
+    dependency = root / "src/engine/scalping/reversal_auxiliary_intraday.py"
+    if fault == "missing":
+        dependency.unlink()
+    elif fault == "mixed":
+        dependency.write_bytes(subprocess.check_output(["git", "-C", str(root), "show", "3e3d5da2c:src/engine/scalping/reversal_auxiliary_intraday.py"]))
+    elif fault in {"dirty", "unknown"}:
+        dependency.write_bytes(dependency.read_bytes() + b"\n# unreviewed\n")
+        if fault == "unknown":
+            subprocess.run(["git", "-C", str(root), "add", str(dependency)], check=True)
+            subprocess.run(["git", "-C", str(root), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "unknown generation"], check=True)
+            commit = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+    elif fault == "suppressed_triggers":
+        # A reviewed P5 is itself a full-profile trigger even when every
+        # overlapping historical support trigger has been replaced.
+        triggers = [
+            *C.REVIEWED_COMMON_SUPPORT_TRANSITION.items(),
+            *((name, (None, sha)) for name, sha in handoff.REVIEWED_STOP_INCIDENT_HASHES.items()
+              if name != C._STOP_INCIDENT_OFFLINE_OWNER),
+            *((name, (None, sha)) for name, sha in handoff.REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE.items()
+              if sha != handoff.REVIEWED_P5_RECHECK_PROFILE.get(name)),
+            *((name, (None, sha)) for name, sha in handoff.REVIEWED_SUBMISSION_MONITOR_HASHES.items()),
+            *C.REVIEWED_INTERRUPTED_CUSTODY_TRANSITION.items(),
+        ]
+        changed = []
+        for name, (_, current) in triggers:
+            path = root / name
+            if path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == current:
+                path.write_bytes(path.read_bytes() + b"\n# unreviewed generation\n")
+                changed.append(name)
+        assert changed
+        subprocess.run(["git", "-C", str(root), "add", *changed], check=True)
+        subprocess.run(["git", "-C", str(root), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "unknown overlapping generations"], check=True)
+        commit = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+        name = next(iter(C.REVIEWED_P5_CONSUMER_UNION_TRANSITION))
+        paths = {name: name}
+        expected = hashlib.sha256(json.dumps({name: parent[name]}, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")).hexdigest()
+    elif fault in {"variant_valid", "variant_missing", "variant_unknown", "variant_new_missing"}:
+        # This source is deliberately outside the common profile: the selected
+        # sniper trigger owns its separate native dependency verification.
+        trigger, variant = next(iter(handoff.REVIEWED_P5_CONSUMER_UNION_VARIANTS.items()))
+        if fault == "variant_new_missing":
+            monkeypatch.setitem(variant["dependencies"], "src/engine/new_missing_consumer.py", "0" * 64)
+        name = next(n for n in variant["dependencies"] if n not in handoff.REVIEWED_P5_CONSUMER_UNION_PROFILE)
+        extra = root / name
+        if fault == "variant_missing":
+            extra.unlink()
+        elif fault == "variant_unknown":
+            extra.write_bytes(extra.read_bytes() + b"\n# unknown dependency\n")
+            subprocess.run(["git", "-C", str(root), "add", name], check=True)
+            subprocess.run(["git", "-C", str(root), "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "unknown dependency generation"], check=True)
+            commit = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+        name = trigger[0]
+        paths = {name: name}
+        old = hashlib.sha256(subprocess.check_output(["git", "-C", str(root), "show", origin + ":" + name])).hexdigest()
+        expected = hashlib.sha256(json.dumps({name: old}, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")).hexdigest()
+    if fault is None or fault == "variant_valid":
+        result = handoff._verify_entry_code_delta(root, commit, origin, paths, expected)
+        assert set(result) == (set(paths) if fault is None else set())
+    else:
+        with pytest.raises(ValueError):
+            handoff._verify_entry_code_delta(root, commit, origin, paths, expected)

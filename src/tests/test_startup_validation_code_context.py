@@ -77,19 +77,15 @@ def _commit(root, message):
 def _native_releases(tmp_path_factory, *, current=False):
     base = tmp_path_factory.mktemp("native-code-context")
     root, selected = base / "candidate", base / "selected"
-    _source_copy(root)
     # This fixture exercises the issued generic AST/docstring admission, not
-    # the later exact monitor profile. Keep its native readers together with
-    # that original monitor; the new profile has separate native-family tests.
-    for relative in (() if current else dict.fromkeys((
-        *C.REVIEWED_SUBMISSION_MONITOR_TRANSITION,
-        *C.REVIEWED_STOP_INCIDENT_TRANSITION,
-        "src/engine/infrastructure/startup_validation_code_context.py",
-        "src/engine/automation/intraday_release_handoff.py",
-    ))):
-        (root / relative).write_bytes(subprocess.check_output(
-            ["git", "-C", str(ROOT), "show", "003865007:" + relative]
-        ))
+    # a hybrid of the old issued monitor and today's unrelated consumers.
+    # Restore that entire historical source generation through Git so new
+    # transitive consumers cannot silently contaminate the historical profile.
+    if current:
+        _source_copy(root)
+    else:
+        root.mkdir()
+        _historical_code(root, "003865007")
     # Independent preparation profiles include their real shell dispatchers.
     # A Python-only copy cannot exercise a complete candidate generation.
     for relative in dict.fromkeys(("src/run_bot.sh", *(
@@ -97,7 +93,10 @@ def _native_releases(tmp_path_factory, *, current=False):
     ))):
         target = root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes((ROOT / relative).read_bytes())
+        if current:
+            target.write_bytes((ROOT / relative).read_bytes())
+        else:
+            assert target.is_file(), relative
     subprocess.run(["git", "init", "-q", str(root)], check=True)
     original_commit = _commit(root, "genuine source origin")
     _git(root, "worktree", "add", "--detach", str(selected), original_commit)
@@ -4619,7 +4618,10 @@ def test_interrupted_custody_requires_complete_combined_generation(tmp_path, fau
     for name, expected in C.REVIEWED_INTERRUPTED_CUSTODY_PROFILE.items():
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes((ROOT / name).read_bytes())
+        raw = (ROOT / name).read_bytes()
+        if hashlib.sha256(raw).hexdigest() != expected:
+            raw = subprocess.check_output(["git", "-C", str(ROOT), "show", "23fbecf28:" + name])
+        path.write_bytes(raw)
         assert C._sha(path) == expected
     name, (old, current) = next(iter(C.REVIEWED_INTERRUPTED_CUSTODY_TRANSITION.items()))
     dependency = tmp_path / "src/engine/scalping/reversal_auxiliary_intraday.py"
@@ -4628,6 +4630,49 @@ def test_interrupted_custody_requires_complete_combined_generation(tmp_path, fau
     elif fault == "origin": old = "0" * 64
     elif fault == "future": current = "f" * 64
     assert C.reviewed_preparation_pair(name, old, current, root=tmp_path) is (fault is None)
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "mixed", "origin", "future"])
+def test_p5_consumer_union_requires_complete_current_generation(tmp_path, fault):
+    for name, expected in C.REVIEWED_P5_CONSUMER_UNION_PROFILE.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((ROOT / name).read_bytes())
+        assert C._sha(path) == expected
+    name, (old, current) = next(iter(C.REVIEWED_P5_CONSUMER_UNION_TRANSITION.items()))
+    dependency = tmp_path / "src/engine/scalping/reversal_auxiliary_intraday.py"
+    if fault == "missing":
+        dependency.unlink()
+    elif fault == "mixed":
+        dependency.write_bytes(subprocess.check_output([
+            "git", "-C", str(ROOT), "show", "3e3d5da2c:src/engine/scalping/reversal_auxiliary_intraday.py"
+        ]))
+    elif fault == "origin":
+        old = "0" * 64
+    elif fault == "future":
+        current = "f" * 64
+    assert C.reviewed_preparation_pair(name, old, current, root=tmp_path) is (fault is None)
+
+
+def test_p5_consumer_union_registered_for_both_native_readers():
+    """A future profile drift fails before candidate admission, not at launch."""
+    assert set(C.REVIEWED_P5_CONSUMER_UNION_PROFILE) <= set(
+        H.REVIEWED_P5_CONSUMER_UNION_PROFILE
+    )
+    for name, expected in C.REVIEWED_P5_CONSUMER_UNION_PROFILE.items():
+        raw = (ROOT / name).read_bytes()
+        assert hashlib.sha256(raw).hexdigest() == expected, name
+        compared = H.reviewed_formatting_source(name, raw)
+        assert hashlib.sha256(compared).hexdigest() == H.REVIEWED_P5_CONSUMER_UNION_PROFILE[name], name
+    context = "src/engine/infrastructure/startup_validation_code_context.py"
+    assert C._sha(ROOT / context) == H.REVIEWED_P5_CONSUMER_UNION_PROFILE[context]
+    for (name, digest), variant in H.REVIEWED_P5_CONSUMER_UNION_VARIANTS.items():
+        if name in H.REVIEWED_P5_CONSUMER_UNION_PROFILE:
+            assert digest == H.REVIEWED_P5_CONSUMER_UNION_PROFILE[name]
+        assert variant["selector_sha256"] == H.REVIEWED_P5_CONSUMER_UNION_PROFILE[variant["selector_path"]]
+        for name, digest in variant["dependencies"].items():
+            if name in H.REVIEWED_P5_CONSUMER_UNION_PROFILE:
+                assert digest == H.REVIEWED_P5_CONSUMER_UNION_PROFILE[name], name
 
 @pytest.mark.parametrize("fault", [None, "missing", "mixed"])
 def test_interrupted_prior_selected_generation_retains_native_reader(tmp_path, fault):

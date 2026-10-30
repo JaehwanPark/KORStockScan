@@ -163,6 +163,69 @@ def test_source_closure_merge_never_overwrites_original_intake_generation():
         assert sources == before
 
 
+def test_consumer_recheck_unions_sources_per_phase_and_detects_changed_generation(
+    tmp_path, monkeypatch
+):
+    from src.engine.infrastructure import startup_validation_code_context as C
+
+    shared = tmp_path / "policy.json"
+    shared.write_bytes(b"policy" * 1024)
+    shared_sha = validation._sha(shared)
+    closure_source = tmp_path / "prepared-generation.json"
+    closure_source.write_bytes(b"generation" * 1024)
+    closure_sha = validation._sha(closure_source)
+    calls = []
+
+    def native_closure(proof):
+        calls.append(proof)
+        if validation._sha(closure_source) != closure_sha:
+            raise ValueError("native_generation_changed")
+
+    monkeypatch.setattr(C, "_check_native_closure", native_closure)
+    hashes = []
+    native_sha = validation._sha
+
+    def counted_sha(path):
+        hashes.append(str(path))
+        return native_sha(path)
+
+    monkeypatch.setattr(validation, "_sha", counted_sha)
+    consumers = {
+        str(i): {"source_hashes": {str(shared): shared_sha}} for i in range(12)
+    }
+    proof = {"closure": {"digest_entries": {}}}
+    for _ in range(2):
+        validation._recheck_consumer_sources(consumers, main_preparation=proof)
+    assert len(calls) == 2
+    assert hashes.count(str(shared)) == 2
+    assert hashes.count(str(closure_source)) == 2
+
+    # A changed source or prepared generation between phases remains fatal.
+    shared.write_bytes(b"changed")
+    with pytest.raises(ValueError, match="startup_source_changed"):
+        validation._recheck_consumer_sources(consumers, main_preparation=proof)
+    shared.write_bytes(b"policy" * 1024)
+    closure_source.write_bytes(b"new-generation")
+    with pytest.raises(ValueError, match="native_generation_changed"):
+        validation._recheck_consumer_sources(consumers, main_preparation=proof)
+
+
+def test_consumer_recheck_rejects_conflicting_and_missing_sources(tmp_path):
+    source = tmp_path / "source.json"
+    source.write_text("original")
+    original = validation._sha(source)
+    consumers = {
+        "first": {"source_hashes": {str(source): original}},
+        "second": {"source_hashes": {str(source): "a" * 64}},
+    }
+    with pytest.raises(ValueError, match="startup_source_binding_conflict"):
+        validation._recheck_consumer_sources(consumers)
+    consumers["second"]["source_hashes"][str(source)] = original
+    source.unlink()
+    with pytest.raises(ValueError, match="startup_source_changed"):
+        validation._recheck_consumer_sources(consumers)
+
+
 @pytest.fixture
 def native_preparation_cli(tmp_path):
     """Run the unchanged native CLI dispatcher over tiny private source checks.
@@ -970,6 +1033,121 @@ def test_consumer_only_membership_change_at_final_recheck_never_publishes_pass(
     assert final["failure_phase"] == "recheck" and final["child_terminated"] is True
     assert final.get("protected_sources_unchanged") is not True
     assert "startup_source_changed:" + str(shard) in " ".join(final["findings"])
+
+
+@pytest.mark.parametrize("fault", [None, "source", "generation", "conflict"])
+def test_real_child_consumer_union_rechecks_both_native_phases(
+    transaction, monkeypatch, fault
+):
+    from src.engine.infrastructure import startup_validation_code_context as C
+
+    shared = transaction["workspace"] / "shared-consumer-source.json"
+    shared.write_text('{"source": "original"}\n')
+    generation = transaction["workspace"] / "native-generation.json"
+    generation.write_text('{"generation": "original"}\n')
+    original_generation = generation.stat()
+    generation_sha = validation._sha(generation)
+    closure_calls = []
+    read_bytes = {str(shared): 0, str(generation): 0}
+    original_sha = validation._sha
+
+    def count_sha(path):
+        name = str(path)
+        if name in read_bytes:
+            read_bytes[name] += Path(path).stat().st_size
+        return original_sha(path)
+
+    monkeypatch.setattr(validation, "_sha", count_sha)
+    proof = {"closure": {"digest_entries": {}}}
+    transaction["binding"]["main_preparation"] = proof
+    # The actual isolated child still executes its loader. The minimal fixture
+    # supplies only the native delegation boundary, whose full contract has a
+    # separate real native/isolation suite.
+    context = (
+        transaction["code"]
+        / "src/engine/infrastructure/startup_validation_code_context.py"
+    )
+    with context.open("a") as stream:
+        stream.write(
+            "\ndef validation_delegation_receipt(): return {}\n"
+            "def preparation_delay_source_hashes(): return {}\n"
+        )
+    monkeypatch.setattr(validation, "_validate_native_delegation", lambda *a: None)
+    monkeypatch.setattr(C, "verify_preparation_delay_delegation", lambda *a: None)
+    monkeypatch.setattr(C, "verify_preparation_logical_sources", lambda *a: None)
+
+    def check_closure(_proof):
+        closure_calls.append("closure")
+        actual = generation.stat()
+        if (actual.st_dev, actual.st_ino, actual.st_mtime_ns, actual.st_ctime_ns) != (
+            original_generation.st_dev,
+            original_generation.st_ino,
+            original_generation.st_mtime_ns,
+            original_generation.st_ctime_ns,
+        ):
+            raise ValueError("native_generation_changed")
+        if validation._sha(generation) != generation_sha:
+            raise ValueError("native_generation_changed")
+
+    monkeypatch.setattr(C, "_check_native_closure", check_closure)
+    loader = transaction["loader"]
+    text = loader.read_text()
+    marker = "    if mode == 'missing_consumer':"
+    assert text.count(marker) == 1
+    sha = original_sha(shared)
+    other_sha = "0" * 64 if fault == "conflict" else sha
+    loader.write_text(
+        text.replace(
+            marker,
+            f"    rows['entry_split']['source_hashes'][{str(shared)!r}] = {sha!r}\n"
+            f"    rows['main_stop']['source_hashes'][{str(shared)!r}] = {other_sha!r}\n"
+            + marker,
+        )
+    )
+    events = []
+    original_recheck = validation._recheck_consumer_sources
+
+    def record_phase(*args, **kwargs):
+        events.append("consumer_recheck")
+        return original_recheck(*args, **kwargs)
+
+    def native(*args):
+        events.append("native_recheck")
+        if fault == "source":
+            shared.write_text('{"source": "changed"}\n')
+        if fault == "generation":
+            # Same bytes at a new physical epoch must not inherit the old proof.
+            replacement = generation.with_suffix(".new")
+            replacement.write_bytes(generation.read_bytes())
+            replacement.replace(generation)
+        return {"status": "pass"}
+
+    monkeypatch.setattr(validation, "_recheck_consumer_sources", record_phase)
+    monkeypatch.setattr(validation, "_native_preparation_check", native)
+    final, receipt = _run(transaction)
+    child = json.loads((receipt.parent / "child.json").read_text())
+    assert child["status"] == "passed" and final["child_terminated"] is True
+    if fault is None:
+        assert final["status"] == "passed"
+        assert events == ["consumer_recheck", "native_recheck", "consumer_recheck"]
+        assert len(closure_calls) == 2
+        assert read_bytes == {
+            str(shared): shared.stat().st_size * 2,
+            str(generation): generation.stat().st_size * 2,
+        }
+    else:
+        _assert_failed_terminal(final, receipt)
+        expected = {
+            "source": "startup_source_changed",
+            "generation": "native_generation_changed",
+            "conflict": "startup_source_binding_conflict",
+        }[fault]
+        assert expected in " ".join(final["findings"])
+        if fault == "conflict":
+            assert events == ["consumer_recheck"] and not closure_calls
+        else:
+            assert events == ["consumer_recheck", "native_recheck", "consumer_recheck"]
+            assert len(closure_calls) == 2
 
 
 @pytest.mark.parametrize("phase", ["intake", "recheck"])

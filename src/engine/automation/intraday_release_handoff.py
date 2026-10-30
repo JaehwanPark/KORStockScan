@@ -13903,6 +13903,19 @@ REVIEWED_INTERRUPTED_CUSTODY_HASHES = {
 REVIEWED_INTERRUPTED_CUSTODY_PROFILE = {
     **REVIEWED_COMMON_SUPPORT_PROFILE, **REVIEWED_INTERRUPTED_CUSTODY_HASHES,
 }
+REVIEWED_P5_CONSUMER_UNION_HASHES = {
+    **{name: pair[1] for name, pair in
+       _preparation_code.REVIEWED_P5_CONSUMER_UNION_TRANSITION.items()},
+    "src/engine/infrastructure/startup_validation_code_context.py":
+        "f278b8bae163bf6e655c0d95070d486e06d2b603f09b8168494fe9f469bbee49",
+}
+REVIEWED_P5_CONSUMER_UNION_PROFILE = {
+    **REVIEWED_INTERRUPTED_CUSTODY_PROFILE, **REVIEWED_P5_CONSUMER_UNION_HASHES,
+}
+REVIEWED_P5_CONSUMER_UNION_PAIRS = {
+    name: {(REVIEWED_INTERRUPTED_CUSTODY_PROFILE[name], current)}
+    for name, current in REVIEWED_P5_CONSUMER_UNION_HASHES.items()
+}
 REVIEWED_INTERRUPTED_CUSTODY_PRIOR_HASHES = {
     "src/engine/automation/ordered_intraday_deploy.py":
         "d048ed30b231a1076abaaaa79d85f4b655044307c201760ac067cb3e747375b6",
@@ -13942,6 +13955,20 @@ REVIEWED_INTERRUPTED_CUSTODY_VARIANTS = {
             for origin, members in value["contract_extensions"].items()},
     }
     for key, value in REVIEWED_COMMON_SUPPORT_VARIANTS.items()
+}
+REVIEWED_P5_CONSUMER_UNION_VARIANTS = {
+    (key[0], REVIEWED_P5_CONSUMER_UNION_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_sha256": REVIEWED_P5_CONSUMER_UNION_HASHES.get(
+            value["selector_path"], value["selector_sha256"]),
+        "dependencies": {name: REVIEWED_P5_CONSUMER_UNION_HASHES.get(name, sha)
+                         for name, sha in value["dependencies"].items()},
+        "contract_extensions": {
+            origin: {name: REVIEWED_P5_CONSUMER_UNION_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in members.items()}
+            for origin, members in value["contract_extensions"].items()},
+    }
+    for key, value in REVIEWED_INTERRUPTED_CUSTODY_VARIANTS.items()
 }
 REVIEWED_INTERRUPTED_CUSTODY_PAIRS = {
     name: {(origin, current) for origin in (
@@ -15163,7 +15190,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         (source := candidate_bytes("src/engine/automation/ordered_intraday_deploy.py", optional=True)) is not None
         and hashlib.sha256(source).hexdigest() == REVIEWED_INTERRUPTED_CUSTODY_PRIOR_HASHES["src/engine/automation/ordered_intraday_deploy.py"]
     )
-    if common_support_present or stop_incident_present or prior_monitor_present or any(
+    p5_union_present = any(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == pair[1]
+        for name, pair in _preparation_code.REVIEWED_P5_CONSUMER_UNION_TRANSITION.items()
+    )
+    if p5_union_present or interrupted_custody_present or interrupted_custody_prior_present or common_support_present or stop_incident_present or prior_monitor_present or any(
         (source := candidate_bytes(name, optional=True)) is not None
         and hashlib.sha256(source).hexdigest() == sha
         for name, sha in REVIEWED_SUBMISSION_MONITOR_HASHES.items()
@@ -15172,7 +15204,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         # original contract omits one of the historical dependency triggers.
         # A new/partial consumer inventory must not silently skip the census.
         for name, sha in (
-            REVIEWED_INTERRUPTED_CUSTODY_PROFILE if interrupted_custody_present
+            REVIEWED_P5_CONSUMER_UNION_PROFILE if p5_union_present
+            else REVIEWED_INTERRUPTED_CUSTODY_PROFILE if interrupted_custody_present
             else REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PROFILE if interrupted_custody_prior_present
             else REVIEWED_COMMON_SUPPORT_PROFILE if common_support_present
             else REVIEWED_STOP_INCIDENT_PROFILE if stop_incident_present
@@ -15184,13 +15217,15 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                 raise ValueError("entry_consumer_reviewed_dependency_unreviewed:" + name)
             if source != revision_bytes(commit, name):
                 raise ValueError("entry_consumer_reviewed_dependency_dirty:" + name)
-        prepared_hashes = (REVIEWED_INTERRUPTED_CUSTODY_PROFILE if interrupted_custody_present
+        prepared_hashes = (REVIEWED_P5_CONSUMER_UNION_PROFILE if p5_union_present
+                           else REVIEWED_INTERRUPTED_CUSTODY_PROFILE if interrupted_custody_present
                            else REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PROFILE if interrupted_custody_prior_present
                            else REVIEWED_COMMON_SUPPORT_PROFILE if common_support_present
                            else REVIEWED_STOP_INCIDENT_PROFILE if stop_incident_present
                            else REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE if prior_monitor_present
                            else REVIEWED_SUBMISSION_MONITOR_PROFILE)
-        prepared_variants = (REVIEWED_INTERRUPTED_CUSTODY_VARIANTS if interrupted_custody_present
+        prepared_variants = (REVIEWED_P5_CONSUMER_UNION_VARIANTS if p5_union_present
+                             else REVIEWED_INTERRUPTED_CUSTODY_VARIANTS if interrupted_custody_present
                              else REVIEWED_INTERRUPTED_CUSTODY_PRIOR_VARIANTS if interrupted_custody_prior_present
                              else REVIEWED_COMMON_SUPPORT_VARIANTS if common_support_present
                              else REVIEWED_STOP_INCIDENT_VARIANTS if stop_incident_present
@@ -15633,7 +15668,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
         if (
-            pair in REVIEWED_INTERRUPTED_CUSTODY_PAIRS.get(repository_name(name), ())
+            (p5_union_present and pair in REVIEWED_P5_CONSUMER_UNION_PAIRS.get(repository_name(name), ()))
+            or pair in REVIEWED_INTERRUPTED_CUSTODY_PAIRS.get(repository_name(name), ())
             or pair in REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PAIRS.get(repository_name(name), ())
             or pair in REVIEWED_COMMON_SUPPORT_PAIRS.get(repository_name(name), ())
             or pair in REVIEWED_STOP_INCIDENT_PAIRS.get(repository_name(name), ())
