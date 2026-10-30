@@ -1407,7 +1407,8 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
             if observation is not None:
                 # A preparation output cannot authenticate its own predecessor.
                 # Resolve the original policy/code through its native input owner.
-                policy_path, policy_code, native_sha = prepared_code._native_policy(DATA_DIR, day, family)
+                policy_path, policy_code, native_sha = prepared_code._native_policy(
+                    DATA_DIR, day, family, policy_sha=policy_sha, source_bindings=bound_sources)
                 if native_sha != policy_sha or policy_code != expected:
                     raise ValueError("entry_consumer_prepared_policy_unbound")
                 bound_sources[str(policy_path)] = prepared_code._sha(policy_path)
@@ -14264,7 +14265,7 @@ for _name, _current in REVIEWED_STORAGE_ADMISSION_HASHES.items():
 REVIEWED_POSTCLOSE_SCHEDULE_HASHES = {
     **{name: pair[1] for name, pair in _preparation_code.REVIEWED_POSTCLOSE_SCHEDULE_TRANSITION.items()},
     "src/engine/infrastructure/startup_validation_code_context.py":
-        "0af2ab0c7dc3089297c890501c9f2be1540d296be6511f931e1d4057b9e12fd9",
+        "e7d8b0972ff450f9e1aced476d2d450f2db90b8f8b7dfe1205f10254e8b29dbf",
 }
 REVIEWED_POSTCLOSE_NATIVE_HOLD_DEPENDENCIES = {
     'src/engine/scalping/entry_deadline.py': 'd976f683b52d6235b6fa8739f4123c7f667ae12bcb1a2c54d8bb2b6c606ec819',

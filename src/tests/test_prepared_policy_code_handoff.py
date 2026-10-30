@@ -1239,19 +1239,68 @@ def test_native_delay_policy_input_is_independent_of_preparation_output(tmp_path
     monkeypatch.setattr(D, "DATA_DIR", data)
     monkeypatch.setattr(D, "POLICY_DIR", directory)
     body = dict(schema="pre_submit_delay_policy_v2", effective_from="2099-01-01" if fault == "day" else DAY,
-        code_contract_sha256="a" * 64)
+        code_contract_sha256="a" * 64, expires_on=DAY)
     value = {**body, "policy_sha256": "b" * 64 if fault == "digest" else C._digest(body)}
     path = D.policy_path(DAY)
     path.write_text(json.dumps(value))
     if fault == "missing": path.unlink()
-    kwargs = {"policy_path": tmp_path / "outside.json"} if fault == "outside" else {}
+    kwargs = {"policy_path": tmp_path / "outside.json" if fault == "outside" else path}
     if fault:
         with pytest.raises((ValueError, OSError)):
             C._native_policy(data, DAY, "pre_submit_delay", **kwargs)
     else:
         original = path.read_bytes()
-        found, expected, policy_sha = C._native_policy(data, DAY, "pre_submit_delay")
+        found, expected, policy_sha = C._native_policy(data, DAY, "pre_submit_delay", policy_path=path)
         assert (found, expected, policy_sha) == (path, "a" * 64, value["policy_sha256"])
         assert C._policy(data, DAY, "pre_submit_delay", {"target_date":DAY,
             "pre_submit_delay_handoff":{"target_date":DAY,"policy_path":str(path),"policy_sha256":policy_sha}}) == (path, expected)
         assert path.read_bytes() == original and not (data / "runtime/policy_bootstrap").exists()
+
+
+@pytest.mark.parametrize("fault", [None, "old_bad_pointer", "unknown_sha", "expired", "manifest", "report", "registration_race", "inventory"])
+def test_native_delay_resolves_exact_registered_source_across_weekend(tmp_path, monkeypatch, fault):
+    from src.engine.scalping import pre_submit_delay_initial_policy as I
+    data = tmp_path / "data"
+    directory = data / "threshold_cycle/pre_submit_delay_policy"
+    source, target = "2026-10-30", "2026-11-02"
+    report_body = dict(schema=I.REPORT_SCHEMA, source_date=source,
+        source_sha256="b" * 64, code_contract_sha256="a" * 64)
+    body = dict(schema=I.POLICY_SCHEMA, source_date=source,
+        effective_from="2026-10-30", expires_on="2026-11-01" if fault == "expired" else target,
+        source_sha256="b" * 64, code_contract_sha256="a" * 64,
+        report_sha256=I.digest(report_body))
+    policy = {**body, "policy_sha256": I.digest(body)}
+    report = {**report_body, "policy_sha256": policy["policy_sha256"]}
+    generation = I.digest([report, policy])
+    base = directory / "generations" / generation
+    base.mkdir(parents=True)
+    pp, rp = base / "policy.json", base / "report.json"
+    pp.write_text(json.dumps(policy)); rp.write_text(json.dumps(report))
+    ref = dict(schema=I.MANIFEST_SCHEMA, source_date=source, generation=generation,
+        source_sha256="b" * 64, code_contract_sha256="a" * 64,
+        policy_artifact_sha256=I.digest(policy), report_artifact_sha256=I.digest(report))
+    pointer = directory / ("committed_" + source + ".json")
+    pointer.write_text(json.dumps({**ref, "manifest_sha256": I.digest(ref)}))
+    if fault == "manifest": pointer.write_text('{"generation":"' + generation + '"}')
+    if fault == "report": rp.write_text('{"changed":true}')
+    if fault == "inventory":
+        from datetime import date, timedelta
+        for n in range(370):
+            (directory / ("committed_" + (date(2000,1,1)+timedelta(days=n)).isoformat() + ".json")).write_text('{}')
+    if fault == "old_bad_pointer": (directory / "committed_2000-01-01.json").write_text('{}')
+    original = I.committed_paths
+    def raced(*args, **kwargs):
+        result = original(*args, **kwargs)
+        if fault == "registration_race": pointer.write_text('{}')
+        return result
+    monkeypatch.setattr(I, "committed_paths", raced)
+    bindings = {}
+    expected = "c" * 64 if fault == "unknown_sha" else policy["policy_sha256"]
+    if fault not in {None, "old_bad_pointer"}:
+        with pytest.raises((ValueError, OSError)):
+            C._native_policy(data, target, "pre_submit_delay", policy_sha=expected, source_bindings=bindings)
+    else:
+        found, code, actual = C._native_policy(data, target, "pre_submit_delay", policy_sha=expected, source_bindings=bindings)
+        assert found == pp and code == "a" * 64 and actual == expected
+        assert bindings == {str(pointer):C._sha(pointer)}
+        assert not (data / "runtime/policy_bootstrap").exists()

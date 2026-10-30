@@ -128,23 +128,56 @@ def _origin(prepared_path, family, day, snapshots=None):
     return prepared, manifest
 
 
-def _native_policy(data, day, family, *, policy_path=None):
+def _native_policy(data, day, family, *, policy_path=None, policy_sha=None, source_bindings=None):
     """Read the issued policy input, independently of preparation outputs."""
     data = Path(data).resolve()
     if family not in FAMILIES or date.fromisoformat(day).isoformat() != day:
         raise ValueError("prepared_code_family_invalid")
     if family == "pre_submit_delay":
-        from src.engine.scalping import pre_submit_delay_tuning as D
+        from src.engine.scalping import pre_submit_delay_initial_policy as I
 
-        native = D.policy_path(day).relative_to(D.DATA_DIR)
-        path = Path(policy_path) if policy_path is not None else Path(data) / native
+        directory = data / "threshold_cycle/pre_submit_delay_policy"
+        if policy_path is None:
+            if not isinstance(policy_sha, str) or re.fullmatch("[0-9a-f]{64}", policy_sha) is None:
+                raise ValueError("prepared_code_policy_identity_required")
+            pointers = sorted(directory.glob("committed_????-??-??.json"), reverse=True)
+            # Same committed-family bound as the existing bootstrap selector.
+            if len(pointers) > 370:
+                raise ValueError("prepared_code_policy_inventory_invalid")
+            matches = []
+            for pointer in pointers:
+                source_day = pointer.stem.removeprefix("committed_")
+                if source_day >= day:
+                    continue
+                pointer_sha = _sha(pointer)
+                ref = _read(pointer)
+                generation = str(ref.get("generation") or "")
+                if re.fullmatch("[0-9a-f]{64}", generation) is None:
+                    raise ValueError("prepared_code_policy_generation_invalid")
+                candidate = directory / "generations" / generation / "policy.json"
+                if _read(candidate).get("policy_sha256") != policy_sha:
+                    continue
+                _, checked, _, _ = I.committed_paths(data, source_day, validate_selection=False)
+                if checked != candidate or _sha(pointer) != pointer_sha:
+                    raise ValueError("prepared_code_policy_registration_changed")
+                matches.append((candidate, pointer, pointer_sha))
+                # Native pair validation binds source_day into the policy digest,
+                # so a valid second source cannot share this exact identity.
+                break
+            if len(matches) != 1:
+                raise ValueError("prepared_code_policy_identity_unbound")
+            path, pointer, pointer_sha = matches[0]
+            if source_bindings is not None:
+                source_bindings[str(pointer)] = pointer_sha
+        else:
+            path = Path(policy_path)
         if not path.resolve().is_relative_to(Path(data) / "threshold_cycle/pre_submit_delay_policy"):
             raise ValueError("prepared_code_policy_path_invalid")
         before = _sha(path)
         value = _read(path)
         policy_sha = value.get("policy_sha256")
         if (policy_sha != _digest({k: v for k, v in value.items() if k != "policy_sha256"})
-                or value.get("effective_from") != day):
+                or not value.get("effective_from", "") <= day <= value.get("expires_on", "")):
             raise ValueError("prepared_code_policy_changed")
         expected = value["code_contract_sha256"]
     elif family == "holding_vote":
@@ -173,7 +206,8 @@ def _native_policy(data, day, family, *, policy_path=None):
 def _policy(data, day, family, manifest):
     bound = manifest[FAMILIES[family][0]]
     path, expected, policy_sha = _native_policy(data, day, family,
-        policy_path=bound["policy_path"] if family == "pre_submit_delay" else None)
+        policy_path=bound["policy_path"] if family == "pre_submit_delay" else None,
+        policy_sha=_bound(manifest, family))
     if policy_sha != _bound(manifest, family):
         raise ValueError("prepared_code_policy_changed")
     return path, expected
