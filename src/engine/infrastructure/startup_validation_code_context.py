@@ -3706,7 +3706,7 @@ REVIEWED_STOP_INCIDENT_TRANSITION = {
     ),
     "src/engine/sniper_state_handlers.py": (
         "82fa6b5c762e99e644e889ca343cb565caf0f52d62da0b0ca728fca8309414f6",
-        "ddd9c3d20ca2b7a605735a67e61e1432c8c484cdc934f5322727cfbf85904204",
+        "965812f61a97ce966771c29a0430f780536907a568d25ea63de1bd1de1477efd",
     ),
     "src/engine/sniper_trade_review_report.py": (
         "a13e1b73e76120a4ceb87a5c65b2a714bdc6845d9b38c81f3d1d37ce7be12b08",

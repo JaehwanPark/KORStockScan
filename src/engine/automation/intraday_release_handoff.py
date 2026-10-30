@@ -13755,7 +13755,7 @@ REVIEWED_STOP_INCIDENT_HASHES = {
     **{name: pair[1] for name, pair in
        _preparation_code.REVIEWED_STOP_INCIDENT_TRANSITION.items()},
     "src/engine/infrastructure/startup_validation_code_context.py":
-        "a849c125d7382f366669829cd5c8bc478091655d042f957cde83132645f7b892",
+        "4bea57bfb72891e4950212bb77c7d33e932bd1a199941b7a815a7dcbcfede2c0",
 }
 REVIEWED_STOP_INCIDENT_PROFILE = {
     **REVIEWED_SUBMISSION_MONITOR_PROFILE,
@@ -14991,7 +14991,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         for name, sha in REVIEWED_STOP_INCIDENT_HASHES.items()
         if name != _preparation_code._STOP_INCIDENT_OFFLINE_OWNER
     )
-    if any(
+    if stop_incident_present or any(
         (source := candidate_bytes(name, optional=True)) is not None
         and hashlib.sha256(source).hexdigest() == sha
         for name, sha in REVIEWED_SUBMISSION_MONITOR_HASHES.items()

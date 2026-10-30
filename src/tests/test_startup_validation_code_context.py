@@ -4466,7 +4466,9 @@ def test_submission_monitor_registration_reaches_independent_native_reader(
     for name, expected in C.REVIEWED_SUBMISSION_MONITOR_PROFILE.items():
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes((ROOT / name).read_bytes())
+        path.write_bytes(subprocess.check_output([
+            "git", "-C", str(ROOT), "show", "af07f6f6a:" + name
+        ]))
         assert C._sha(path) == expected
     relative, (old, current) = next(iter(C.REVIEWED_SUBMISSION_MONITOR_TRANSITION.items()))
     dependency = tmp_path / "src/engine/infrastructure/validation_digest_session.py"
@@ -4501,7 +4503,9 @@ def test_submission_monitor_pair_keeps_explicit_comparison_root(tmp_path, phase)
     for name in C.REVIEWED_SUBMISSION_MONITOR_PROFILE:
         path = candidate / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes((ROOT / name).read_bytes())
+        path.write_bytes(subprocess.check_output([
+            "git", "-C", str(ROOT), "show", "af07f6f6a:" + name
+        ]))
     relative, pair = next(iter(C.REVIEWED_SUBMISSION_MONITOR_TRANSITION.items()))
     comparison = candidate
     if phase == "predecessor":
@@ -4514,3 +4518,33 @@ def test_submission_monitor_pair_keeps_explicit_comparison_root(tmp_path, phase)
     elif phase == "missing":
         comparison = tmp_path / "missing"
     assert C.reviewed_preparation_pair(relative, *pair, root=comparison) is (phase == "candidate")
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "mixed", "alias", "origin", "future", "unregistered"])
+def test_stop_incident_generation_reaches_independent_reader(tmp_path, fault):
+    assert C._STOP_INCIDENT_OFFLINE_OWNER not in C.REVIEWED_STOP_INCIDENT_PROFILE
+    for name, expected in C.REVIEWED_STOP_INCIDENT_PROFILE.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((ROOT / name).read_bytes())
+        assert C._sha(path) == expected
+    relative = "src/engine/sniper_state_handlers.py"
+    old, current = C.REVIEWED_STOP_INCIDENT_TRANSITION[relative]
+    dependency = tmp_path / "src/engine/scalping/main_stop_quantity_source.py"
+    if fault == "missing":
+        dependency.unlink()
+    elif fault == "mixed":
+        dependency.write_bytes(subprocess.check_output([
+            "git", "-C", str(ROOT), "show", "af07f6f6a:src/engine/scalping/main_stop_quantity_source.py"
+        ]))
+    elif fault == "alias":
+        original = dependency.with_suffix(".original")
+        dependency.rename(original)
+        dependency.symlink_to(original)
+    elif fault == "origin":
+        old = "0" * 64
+    elif fault == "future":
+        current = "f" * 64
+    elif fault == "unregistered":
+        relative = "src/engine/scalping/unknown_generation.py"
+    assert C.reviewed_preparation_pair(relative, old, current, root=tmp_path) is (fault is None)

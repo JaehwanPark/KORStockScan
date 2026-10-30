@@ -22148,7 +22148,8 @@ def _exit_decision_quote_observation(ws_data, *, observed_at):
                 sort_keys=True, separators=(",", ":"), allow_nan=False,
             )
         }
-    except (TypeError, ValueError, OverflowError):
+    except Exception as exc:
+        log_error(f"[EXIT_DECISION_QUOTE_SOURCE] observation unavailable: {type(exc).__name__}")
         return {}
 
 

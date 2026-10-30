@@ -54,6 +54,16 @@ def test_soft_stop_keeps_quote_observation_separate_from_trailing_threshold(monk
     assert receipt["quote"]["item"] == "053800_NX"
 
 
+def test_quote_observation_failure_does_not_interrupt_exit(monkeypatch):
+    errors = []
+    def fail(*args, **kwargs):
+        raise KeyError("malformed quote")
+    monkeypatch.setattr(handlers, "ws_quote_source_receipt", fail)
+    monkeypatch.setattr(handlers, "log_error", errors.append)
+    assert handlers._exit_decision_quote_observation({}, observed_at=1000) == {}
+    assert errors and "KeyError" in errors[0]
+
+
 class DummyFlowAI:
     def __init__(self, action):
         self.action = action
