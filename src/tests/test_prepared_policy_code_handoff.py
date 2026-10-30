@@ -286,6 +286,12 @@ def test_stopped_workflow_consumer_binds_observation_and_prepared_dates(
     )
     if fault == "source":
         (data / "policy.json").write_text('{"changed":true}')
+    index = data / "runtime/policy_bootstrap/prepared" / DAY / "latest.json"
+    native_prepared = index.parent / "fixture-generation/readiness.json"
+    native_prepared.parent.mkdir(parents=True)
+    native_prepared.write_bytes(pp.read_bytes())
+    index.write_text(json.dumps(dict(target_date=DAY, receipt_path=str(native_prepared),
+        receipt_sha256=C._sha(native_prepared))))
     candidate_actual = C._digest({"consumer.py": C._sha(candidate / "consumer.py")})
     if fault == "code":
         candidate_actual = "d" * 64
@@ -1154,3 +1160,67 @@ def test_unprepared_stopped_origin_shared_by_policy_and_startup_readers(prepared
     finally:H._PREDECESSOR_REVIEW.reset(token)
     assert selector.read_bytes()==before
     assert not C.receipt_path(data,DAY,COMMIT,args['family']).exists()
+
+
+@pytest.mark.parametrize("prepared", ["pre_submit_delay", "main_stop", "holding_vote"], indirect=True)
+@pytest.mark.parametrize("fault", [None, "review", "target", "actual", "unreviewed", "source_during", "policy", "missing_index", "manifest"])
+def test_first_postclose_preparation_does_not_require_an_unissued_code_receipt(
+    prepared, monkeypatch, fault
+):
+    """Native original code plus reviewed successor needs no prior directory."""
+    import shutil
+
+    data, root, args, original_actual, receipt, original_prepared = prepared
+    directory = data / "runtime/policy_bootstrap/code_handoffs" / DAY
+    shutil.rmtree(directory)
+    candidate = root.parent / "first-candidate"
+    own = candidate / "src/engine/automation/intraday_release_handoff.py"
+    own.parent.mkdir(parents=True)
+    own.write_text("# candidate verifier\n")
+    consumer = candidate / "consumer.py"
+    consumer.write_text("reviewed future reader\n")
+    selector = data / "runtime/runtime_release_selection.json"
+    selector.parent.mkdir(exist_ok=True)
+    selector.write_text('{"selected":"original"}')
+    monkeypatch.setattr(H, "DATA_DIR", data)
+    monkeypatch.setattr(H, "__file__", str(own))
+    monkeypatch.setattr(H, "_selection", lambda **kw: (root, COMMIT))
+    monkeypatch.setattr(H, "predecessor_review_matches", lambda *a: fault != "review")
+    def delta(*a):
+        if fault == "unreviewed":
+            raise ValueError("unreviewed_candidate")
+        if fault == "source_during":
+            (root / "consumer.py").write_text("changed original")
+        return ["consumer.py"]
+    monkeypatch.setattr(H, "_verify_entry_code_delta", delta)
+    review = dict(code_root=candidate, code_commit="c" * 40,
+        postclose_observation=dict(prepared_target_date="2099-01-01" if fault == "target" else DAY))
+    index = data / "runtime/policy_bootstrap/prepared" / DAY / "latest.json"
+    index.parent.mkdir(parents=True)
+    # Place this fixture under the native generation directory as real prepare does.
+    native_prepared = index.parent / "fixture-generation/readiness.json"
+    native_prepared.parent.mkdir()
+    native_prepared.write_bytes(original_prepared.read_bytes())
+    index.write_text(json.dumps(dict(target_date=DAY, receipt_path=str(native_prepared),
+        receipt_sha256=C._sha(native_prepared))))
+    if fault == "missing_index":
+        index.unlink()
+    if fault == "manifest":
+        (root.parent / "manifest.json").write_text('{"changed":true}')
+    monkeypatch.setattr(C, "_policy", lambda *a: (data / "policy.json", original_actual))
+    actual = C._digest({"consumer.py": C._sha(consumer)})
+    token = H._PREDECESSOR_REVIEW.set(review)
+    before = original_prepared.read_bytes()
+    try:
+        kwargs = {**args, "policy_sha": "foreign" if fault == "policy" else args["policy_sha"], "expected": original_actual, "actual": "d" * 64 if fault == "actual" else actual}
+        if fault:
+            with pytest.raises(ValueError):
+                H.verify_entry_consumer_code(DAY, **kwargs)
+        else:
+            proof = H.verify_entry_consumer_code(DAY, **kwargs)
+            assert proof["verification_basis"] == "verified_prepared_predecessor_consumer_repair"
+            assert proof["origin_commit"] == COMMIT and proof["release_commit"] == "c" * 40
+            assert proof["actual_pid_consumed"] is False
+        assert not directory.exists() and original_prepared.read_bytes() == before
+    finally:
+        H._PREDECESSOR_REVIEW.reset(token)

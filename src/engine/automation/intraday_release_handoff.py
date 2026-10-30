@@ -1362,7 +1362,11 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
     )
     if validation is not None:
         return validation
-    if (DATA_DIR / "runtime/policy_bootstrap/code_handoffs" / day).exists():
+    if ((DATA_DIR / "runtime/policy_bootstrap/code_handoffs" / day).exists()
+            or (_PREDECESSOR_REVIEW.get() or {}).get("postclose_observation") is not None):
+        # First next-session preparation has no issued code-handoff directory.
+        # Its verified cold scope resolves the original code directly; directory
+        # creation is not evidence and must not select a same-day live reader.
         from src.engine.automation import prepared_policy_code_handoff as prepared_code
 
         review = _PREDECESSOR_REVIEW.get()
@@ -1399,10 +1403,33 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
                 review, custody_day, root, commit, candidate
             ):
                 raise ValueError("entry_consumer_prepared_predecessor_unbound")
+            bound_sources = {}
+            if observation is not None:
+                index_path = DATA_DIR / "runtime/policy_bootstrap/prepared" / day / "latest.json"
+                index = prepared_code._read(index_path)
+                prepared_path = Path(index["receipt_path"])
+                if (index.get("target_date") != day
+                        or prepared_path.resolve().parent.parent != index_path.parent.resolve()
+                        or prepared_code._sha(prepared_path) != index.get("receipt_sha256")):
+                    raise ValueError("entry_consumer_prepared_index_invalid")
+                frozen, manifest = prepared_code._origin(prepared_path, family, day)
+                policy_path, policy_code = prepared_code._policy(DATA_DIR, day, family, manifest)
+                if prepared_code._bound(manifest, family) != policy_sha or policy_code != expected:
+                    raise ValueError("entry_consumer_prepared_policy_unbound")
+                bound_sources = {
+                    str(index_path): prepared_code._sha(index_path),
+                    str(prepared_path): index["receipt_sha256"],
+                    str(policy_path): prepared_code._sha(policy_path),
+                    **{str(Path(frozen[field])): frozen[digest] for field, digest in (
+                        ("manifest_path", "manifest_file_sha256"), ("env_path", "env_sha256"),
+                        ("verification_path", "verification_sha256"),
+                        ("controller_path", "controller_sha256"), ("summary_path", "summary_sha256"))},
+                }
             origin = prepared_code.resolve_prepared_code_origin(
                 DATA_DIR, day, family=family, policy_sha=policy_sha, expected=expected,
                 paths=paths, selected_root=root, selected_commit=commit,
             )
+            origin["sources"].update(bound_sources)
             candidate_actual = prepared_code._digest(
                 {key: _sha(candidate / name) for key, name in paths.items()}
             )
