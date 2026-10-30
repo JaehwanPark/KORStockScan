@@ -5643,7 +5643,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
     for name in hashes:
         content = (
             (canonical / name).read_bytes()
-            if generation in ("current", "stop_incident")
+            if generation == "stop_incident"
             else subprocess.check_output(
                 [
                     "git",
@@ -5651,6 +5651,7 @@ def test_entry_cost_handoff_keeps_exact_complete_generation(
                     str(canonical),
                     "show",
                     {
+                        "current": "af07f6f6a",
                         "preopen_validation": "6d9ed3575",
                         "scheduled_suffix": "52425f68f",
                         "cron_phase_binding": "b0b7f47e8",
