@@ -186,6 +186,56 @@ def wire_repair_prepared(prepared, monkeypatch):
     return root, bundle, clock, parent
 
 
+def test_prompt_contract_repair_keeps_mixed_incumbents_and_cas(prepared, monkeypatch):
+    root, bundle, _, scopes, old_id, compact_id = prepared
+    manifest = bundle["continuous_reversal"]["operating_manifest"]
+    manifest.update(scopes=[V.scope_id(k, r) for k, r in V.scopes()], definitions={})
+    N._atomic_write_json(
+        N.root(root) / "current.json", {"bundle_sha256": bundle["bundle_sha256"]}
+    )
+    old = G.load(root, old_id)
+    already_fixed = I._contract_repair_replacement(old, I.CONTRACT_REPAIR_SCHEMA)
+    fixed_id = G.register(root, already_fixed)
+    refs = I.effective_bindings(root, bundle, day="2026-10-08")
+    refs[scopes[0]] = fixed_id
+    refs[scopes[1]] = compact_id
+    report = P.seal(
+        dict(auxiliary_registry_bindings=refs, auxiliary_reader_code_hashes=I.code_hashes())
+    )
+    path = (
+        N.root(root)
+        / "sources"
+        / ("reversal-" + bundle["continuous_reversal"]["auxiliary_report_sha256"] + ".json")
+    )
+    P.write(path, report)
+    bundle["continuous_reversal"]["report_file_sha256"]["auxiliary"] = P.file_hash(path)
+    P.write(N.root(root) / "generations" / (bundle["bundle_sha256"] + ".json"), bundle)
+    monkeypatch.setattr(N, "validate", lambda *args, **kwargs: None)
+    clock = datetime(2026, 10, 8, 15, 1, tzinfo=I.K.KST)
+    before = {str(p): p.read_bytes() for p in root.rglob("*.json")}
+    repair = I.prepare_contract_repair(root, bundle, expected_parent=None, now=clock)
+    assert before == {str(p): p.read_bytes() for p in root.rglob("*.json")}
+    assert repair["scope_count"] == 128 and repair["old_bindings"] == refs
+    assert repair["new_bindings"][scopes[0]] == fixed_id
+    assert repair["new_bindings"][scopes[1]] == compact_id
+    assert repair["registry_mapping"][old_id] == already_fixed
+    assert repair["registry_mapping"][compact_id] == G.load(root, compact_id)
+    overlay = I.publish_contract_repair(
+        root,
+        repair,
+        expected_parent=None,
+        confirm=I.CONTRACT_REPAIR_AUTHORITY,
+        now=clock,
+    )
+    assert overlay["bindings"] == repair["new_bindings"]
+    assert overlay["changes"] == {
+        s: fixed_id for s, ident in refs.items() if ident == old_id
+    }
+    assert I.current(root, bundle, day="2026-10-08") == overlay
+    with pytest.raises(ValueError, match="cas"):
+        I.prepare_contract_repair(root, bundle, expected_parent=None, now=clock)
+
+
 def test_wire_contract_repair_preserves_incumbent_policy_and_frozen_prompt_history(
     wire_repair_prepared,
 ):

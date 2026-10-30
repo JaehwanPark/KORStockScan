@@ -99,6 +99,10 @@ def source(carry, tmp_path, monkeypatch):
     origin_commit = commit(origin)
     current_commit = commit(current)
     monkeypatch.setattr(H, "ROOT", current)
+    # Preparation comparisons must inspect the same private candidate tree as
+    # the handoff. The real repository root may belong to a newer complete
+    # monitor profile, which cannot authenticate this synthetic source tree.
+    monkeypatch.setattr(C, "ROOT", current)
     monkeypatch.setattr(A, "FROZEN_COMMIT", frozen_commit)
     pairs = {
         str(H._code_path(current, name).relative_to(current)): (

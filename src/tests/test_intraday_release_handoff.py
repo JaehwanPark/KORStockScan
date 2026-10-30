@@ -5494,13 +5494,74 @@ def test_monitor_and_p5_recheck_share_complete_final_candidate_profile():
         | (set(handoff._preparation_code.REVIEWED_STOP_INCIDENT_TRANSITION)
            - {handoff._preparation_code._STOP_INCIDENT_OFFLINE_OWNER}))
     for name, expected in handoff.REVIEWED_STOP_INCIDENT_PROFILE.items():
-        raw = (root / name).read_bytes()
+        raw = subprocess.check_output([
+            "git", "-C", str(root), "show", "3e3d5da2c:" + name
+        ])
         projected = handoff.reviewed_formatting_source(name, raw, review=review)
         assert hashlib.sha256(projected).hexdigest() == expected, name
         if name not in {**handoff.REVIEWED_SUBMISSION_MONITOR_HASHES, **handoff.REVIEWED_STOP_INCIDENT_HASHES}:
             assert raw == subprocess.check_output([
                 "git", "-C", str(root), "show", "003865007:" + name
             ]), name
+
+
+def test_common_support_profile_preserves_the_complete_stop_parent():
+    import hashlib
+    import subprocess
+
+    root = Path(handoff.__file__).resolve().parents[3]
+    old = handoff.REVIEWED_STOP_INCIDENT_PROFILE
+    new = handoff.REVIEWED_COMMON_SUPPORT_PROFILE
+    assert set(new) == set(old)
+    assert set(handoff.REVIEWED_COMMON_SUPPORT_HASHES) == {
+        "src/engine/scalping/reversal_auxiliary_intraday.py",
+        "src/engine/infrastructure/startup_validation_code_context.py",
+    }
+    for name, expected in new.items():
+        raw = (root / name).read_bytes()
+        compared = handoff.reviewed_formatting_source(name, raw)
+        assert hashlib.sha256(compared).hexdigest() == expected, name
+        if name not in handoff.REVIEWED_COMMON_SUPPORT_HASHES:
+            assert raw == subprocess.check_output([
+                "git", "-C", str(root), "show", "3e3d5da2c:" + name
+            ]), name
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "mixed", "dirty"])
+def test_common_support_delta_checks_the_actual_complete_candidate(tmp_path, fault):
+    import hashlib
+    import json
+    import subprocess
+
+    source = Path(handoff.__file__).resolve().parents[3]
+    root = tmp_path / "candidate"
+    subprocess.run(["git", "clone", "-q", "--shared", "--no-checkout", str(source), str(root)], check=True)
+    commit = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
+    subprocess.run(["git", "-C", str(root), "checkout", "-q", "--detach", commit], check=True)
+    origin = "3e3d5da2c3f35c8672efd9d58545f9d19a7b20e6"
+    paths = {name: name for name in handoff.REVIEWED_COMMON_SUPPORT_HASHES}
+    parent = {
+        name: hashlib.sha256(subprocess.check_output([
+            "git", "-C", str(root), "show", origin + ":" + name
+        ])).hexdigest()
+        for name in paths
+    }
+    expected = hashlib.sha256(json.dumps(parent, sort_keys=True, separators=(",", ":"),
+                                          ensure_ascii=True).encode("ascii")).hexdigest()
+    dependency = root / "src/engine/scalping/main_stop_quantity_source.py"
+    if fault == "missing":
+        dependency.unlink()
+    elif fault == "mixed":
+        dependency.write_bytes(subprocess.check_output([
+            "git", "-C", str(root), "show", "af07f6f6a:src/engine/scalping/main_stop_quantity_source.py"
+        ]))
+    elif fault == "dirty":
+        dependency.write_bytes(dependency.read_bytes() + b"\n# unreviewed\n")
+    if fault is None:
+        assert set(handoff._verify_entry_code_delta(root, commit, origin, paths, expected)) == set(paths)
+    else:
+        with pytest.raises(ValueError):
+            handoff._verify_entry_code_delta(root, commit, origin, paths, expected)
 
 
 @pytest.mark.parametrize("family", ["main_stop", "holding_vote", "pre_submit_delay"])

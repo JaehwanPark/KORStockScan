@@ -3750,6 +3750,19 @@ REVIEWED_STOP_INCIDENT_PROFILE = {
        if name != _STOP_INCIDENT_OFFLINE_OWNER},
 }
 
+# Preserve the complete issued stop/monitor generation while admitting only
+# the reviewed mixed-registry common-support publisher successor.
+REVIEWED_COMMON_SUPPORT_TRANSITION = {
+    "src/engine/scalping/reversal_auxiliary_intraday.py": (
+        "02ec66f262e98123de56165890cb11c1a0464d44e4cff227845637be6e130ff9",
+        "4269e0bbb543fbf042f364f4f57bc9bf3b4c607f46a6431ba00241920877ed1f",
+    ),
+}
+REVIEWED_COMMON_SUPPORT_PROFILE = {
+    **REVIEWED_STOP_INCIDENT_PROFILE,
+    **{name: pair[1] for name, pair in REVIEWED_COMMON_SUPPORT_TRANSITION.items()},
+}
+
 
 def reviewed_preparation_pair(relative, old, current, *, root=None):
     # A predecessor comparison uses its selected origin; candidate comparisons
@@ -3757,6 +3770,22 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
     comparison_root = ROOT if root is None else Path(root)
     if not comparison_root.is_absolute() or comparison_root.resolve() != comparison_root:
         return False
+    support_generation = any(
+        (comparison_root / name).is_file()
+        and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == pair[1]
+        for name, pair in REVIEWED_COMMON_SUPPORT_TRANSITION.items()
+    )
+    if support_generation:
+        if any(
+            (comparison_root / name).is_symlink()
+            or not (comparison_root / name).is_file()
+            or _sha(comparison_root / name) != expected
+            for name, expected in REVIEWED_COMMON_SUPPORT_PROFILE.items()
+        ):
+            return False
+        if relative in REVIEWED_COMMON_SUPPORT_TRANSITION:
+            return (old, current) == REVIEWED_COMMON_SUPPORT_TRANSITION[relative]
     stop_generation = any(
         (comparison_root / name).is_file()
         and not (comparison_root / name).is_symlink()
@@ -3769,7 +3798,10 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
             (comparison_root / name).is_symlink()
             or not (comparison_root / name).is_file()
             or _sha(comparison_root / name) != expected
-            for name, expected in REVIEWED_STOP_INCIDENT_PROFILE.items()
+            for name, expected in (
+                REVIEWED_COMMON_SUPPORT_PROFILE if support_generation
+                else REVIEWED_STOP_INCIDENT_PROFILE
+            ).items()
         ):
             return False
         transition = REVIEWED_STOP_INCIDENT_TRANSITION.get(relative)
@@ -3793,7 +3825,8 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
         # Authenticate a complete issued generation before interpreting a pair.
         # The current reader may compare a genuine earlier selected generation;
         # an overlapping source trigger cannot turn it into the latest profile.
-        for profile in (REVIEWED_STOP_INCIDENT_PROFILE,
+        for profile in (REVIEWED_COMMON_SUPPORT_PROFILE,
+                        REVIEWED_STOP_INCIDENT_PROFILE,
                         REVIEWED_SUBMISSION_MONITOR_PROFILE,
                         REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE):
             if all(not (comparison_root / name).is_symlink()

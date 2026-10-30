@@ -13854,6 +13854,47 @@ REVIEWED_STOP_INCIDENT_PAIRS[
     )
 }
 
+# This successor retains the entire issued stop/monitor inventory. Its only
+# runtime change is the exact common-support publisher and its preparation
+# reader registration; the existing policy and execution guards remain bound.
+REVIEWED_COMMON_SUPPORT_HASHES = {
+    **{name: pair[1] for name, pair in
+       _preparation_code.REVIEWED_COMMON_SUPPORT_TRANSITION.items()},
+    "src/engine/infrastructure/startup_validation_code_context.py":
+        "62ffaf60621e7cd5bc31a8ee47fb1ba8ead20e53e85982f22c6a20f491c8da56",
+}
+REVIEWED_COMMON_SUPPORT_PROFILE = {
+    **REVIEWED_STOP_INCIDENT_PROFILE, **REVIEWED_COMMON_SUPPORT_HASHES,
+}
+REVIEWED_COMMON_SUPPORT_VARIANTS = {
+    (key[0], REVIEWED_COMMON_SUPPORT_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_sha256": REVIEWED_COMMON_SUPPORT_HASHES.get(
+            value["selector_path"], value["selector_sha256"]
+        ),
+        "dependencies": {
+            name: REVIEWED_COMMON_SUPPORT_HASHES.get(name, sha)
+            for name, sha in value["dependencies"].items()
+        },
+        "contract_extensions": {
+            origin: {name: REVIEWED_COMMON_SUPPORT_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in members.items()}
+            for origin, members in value["contract_extensions"].items()
+        },
+    }
+    for key, value in REVIEWED_STOP_INCIDENT_VARIANTS.items()
+}
+REVIEWED_COMMON_SUPPORT_PAIRS = {
+    name: {pair} for name, pair in
+    _preparation_code.REVIEWED_COMMON_SUPPORT_TRANSITION.items()
+}
+REVIEWED_COMMON_SUPPORT_PAIRS[
+    "src/engine/infrastructure/startup_validation_code_context.py"
+] = {(
+    REVIEWED_STOP_INCIDENT_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
+    REVIEWED_COMMON_SUPPORT_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
+)}
+
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
@@ -15044,7 +15085,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         for name, sha in REVIEWED_STOP_INCIDENT_HASHES.items()
         if name != _preparation_code._STOP_INCIDENT_OFFLINE_OWNER
     )
-    if stop_incident_present or prior_monitor_present or any(
+    common_support_present = any(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == pair[1]
+        for name, pair in _preparation_code.REVIEWED_COMMON_SUPPORT_TRANSITION.items()
+    )
+    if common_support_present or stop_incident_present or prior_monitor_present or any(
         (source := candidate_bytes(name, optional=True)) is not None
         and hashlib.sha256(source).hexdigest() == sha
         for name, sha in REVIEWED_SUBMISSION_MONITOR_HASHES.items()
@@ -15053,7 +15099,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         # original contract omits one of the historical dependency triggers.
         # A new/partial consumer inventory must not silently skip the census.
         for name, sha in (
-            REVIEWED_STOP_INCIDENT_PROFILE if stop_incident_present
+            REVIEWED_COMMON_SUPPORT_PROFILE if common_support_present
+            else REVIEWED_STOP_INCIDENT_PROFILE if stop_incident_present
             else REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE if prior_monitor_present
             else REVIEWED_SUBMISSION_MONITOR_PROFILE
         ).items():
@@ -15062,10 +15109,12 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                 raise ValueError("entry_consumer_reviewed_dependency_unreviewed:" + name)
             if source != revision_bytes(commit, name):
                 raise ValueError("entry_consumer_reviewed_dependency_dirty:" + name)
-        prepared_hashes = (REVIEWED_STOP_INCIDENT_PROFILE if stop_incident_present
+        prepared_hashes = (REVIEWED_COMMON_SUPPORT_PROFILE if common_support_present
+                           else REVIEWED_STOP_INCIDENT_PROFILE if stop_incident_present
                            else REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE if prior_monitor_present
                            else REVIEWED_SUBMISSION_MONITOR_PROFILE)
-        prepared_variants = (REVIEWED_STOP_INCIDENT_VARIANTS if stop_incident_present
+        prepared_variants = (REVIEWED_COMMON_SUPPORT_VARIANTS if common_support_present
+                             else REVIEWED_STOP_INCIDENT_VARIANTS if stop_incident_present
                              else REVIEWED_SUBMISSION_MONITOR_PRIOR_VARIANTS if prior_monitor_present
                              else REVIEWED_SUBMISSION_MONITOR_VARIANTS)
     entry_cost_hashes = (
@@ -15505,7 +15554,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
         if (
-            pair in REVIEWED_STOP_INCIDENT_PAIRS.get(repository_name(name), ())
+            pair in REVIEWED_COMMON_SUPPORT_PAIRS.get(repository_name(name), ())
+            or pair in REVIEWED_STOP_INCIDENT_PAIRS.get(repository_name(name), ())
             or pair in REVIEWED_SUBMISSION_MONITOR_PAIRS.get(repository_name(name), ())
             or pair in REVIEWED_SUBMISSION_MONITOR_PRIOR_PAIRS.get(repository_name(name), ())
             or pair in REVIEWED_OPERATOR_MARKET_PAIRS.get(repository_name(name), ())
