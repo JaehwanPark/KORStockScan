@@ -4905,7 +4905,7 @@ def test_interrupted_prior_selected_generation_retains_native_reader(tmp_path, f
 
 
 @pytest.mark.parametrize("relative", sorted(set(C.REVIEWED_POSTCLOSE_NATIVE_HOLD_DEPENDENCIES) | {
-    "src/engine/scalping/reversal_code_handoff.py"}))
+    "src/engine/scalping/reversal_code_handoff.py", "src/engine/automation/prepared_policy_code_handoff.py"}))
 @pytest.mark.parametrize("fault", ["missing", "unknown"])
 def test_native_hold_direct_dependencies_reach_both_code_readers(current_releases, relative, fault):
     release = current_releases

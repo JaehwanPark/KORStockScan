@@ -1405,26 +1405,12 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
                 raise ValueError("entry_consumer_prepared_predecessor_unbound")
             bound_sources = {}
             if observation is not None:
-                index_path = DATA_DIR / "runtime/policy_bootstrap/prepared" / day / "latest.json"
-                index = prepared_code._read(index_path)
-                prepared_path = Path(index["receipt_path"])
-                if (index.get("target_date") != day
-                        or prepared_path.resolve().parent.parent != index_path.parent.resolve()
-                        or prepared_code._sha(prepared_path) != index.get("receipt_sha256")):
-                    raise ValueError("entry_consumer_prepared_index_invalid")
-                frozen, manifest = prepared_code._origin(prepared_path, family, day)
-                policy_path, policy_code = prepared_code._policy(DATA_DIR, day, family, manifest)
-                if prepared_code._bound(manifest, family) != policy_sha or policy_code != expected:
+                # A preparation output cannot authenticate its own predecessor.
+                # Resolve the original policy/code through its native input owner.
+                policy_path, policy_code, native_sha = prepared_code._native_policy(DATA_DIR, day, family)
+                if native_sha != policy_sha or policy_code != expected:
                     raise ValueError("entry_consumer_prepared_policy_unbound")
-                bound_sources = {
-                    str(index_path): prepared_code._sha(index_path),
-                    str(prepared_path): index["receipt_sha256"],
-                    str(policy_path): prepared_code._sha(policy_path),
-                    **{str(Path(frozen[field])): frozen[digest] for field, digest in (
-                        ("manifest_path", "manifest_file_sha256"), ("env_path", "env_sha256"),
-                        ("verification_path", "verification_sha256"),
-                        ("controller_path", "controller_sha256"), ("summary_path", "summary_sha256"))},
-                }
+                bound_sources[str(policy_path)] = prepared_code._sha(policy_path)
             origin = prepared_code.resolve_prepared_code_origin(
                 DATA_DIR, day, family=family, policy_sha=policy_sha, expected=expected,
                 paths=paths, selected_root=root, selected_commit=commit,
@@ -14278,7 +14264,7 @@ for _name, _current in REVIEWED_STORAGE_ADMISSION_HASHES.items():
 REVIEWED_POSTCLOSE_SCHEDULE_HASHES = {
     **{name: pair[1] for name, pair in _preparation_code.REVIEWED_POSTCLOSE_SCHEDULE_TRANSITION.items()},
     "src/engine/infrastructure/startup_validation_code_context.py":
-        "e9f6f94bc8a1bb7fa8f3993aa2972469c4e0704df8febc0d860b6c6fc54ba275",
+        "0af2ab0c7dc3089297c890501c9f2be1540d296be6511f931e1d4057b9e12fd9",
 }
 REVIEWED_POSTCLOSE_NATIVE_HOLD_DEPENDENCIES = {
     'src/engine/scalping/entry_deadline.py': 'd976f683b52d6235b6fa8739f4123c7f667ae12bcb1a2c54d8bb2b6c606ec819',

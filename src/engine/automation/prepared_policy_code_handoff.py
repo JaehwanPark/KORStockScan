@@ -128,40 +128,54 @@ def _origin(prepared_path, family, day, snapshots=None):
     return prepared, manifest
 
 
-def _policy(data, day, family, manifest):
-    bound = manifest[FAMILIES[family][0]]
+def _native_policy(data, day, family, *, policy_path=None):
+    """Read the issued policy input, independently of preparation outputs."""
+    data = Path(data).resolve()
+    if family not in FAMILIES or date.fromisoformat(day).isoformat() != day:
+        raise ValueError("prepared_code_family_invalid")
     if family == "pre_submit_delay":
-        path = Path(bound["policy_path"])
-        if not path.resolve().is_relative_to(
-            Path(data) / "threshold_cycle/pre_submit_delay_policy"
-        ):
+        from src.engine.scalping import pre_submit_delay_tuning as D
+
+        native = D.policy_path(day).relative_to(D.DATA_DIR)
+        path = Path(policy_path) if policy_path is not None else Path(data) / native
+        if not path.resolve().is_relative_to(Path(data) / "threshold_cycle/pre_submit_delay_policy"):
             raise ValueError("prepared_code_policy_path_invalid")
+        before = _sha(path)
         value = _read(path)
-        if value.get("policy_sha256") != _bound(manifest, family) or value.get(
-            "policy_sha256"
-        ) != _digest({k: v for k, v in value.items() if k != "policy_sha256"}):
+        policy_sha = value.get("policy_sha256")
+        if (policy_sha != _digest({k: v for k, v in value.items() if k != "policy_sha256"})
+                or value.get("effective_from") != day):
             raise ValueError("prepared_code_policy_changed")
         expected = value["code_contract_sha256"]
     elif family == "holding_vote":
         from src.engine.scalping import holding_path_vote_policy as V
 
         path = V.policy_path(data, day)
+        before = _sha(path)
         value = V.load_bundle(data, day, require_current_code=False)
-        if value.get("selection_mode") != "incumbent_carry" or value[
-            "bundle_sha256"
-        ] != _bound(manifest, family):
+        if value.get("selection_mode") != "incumbent_carry":
             raise ValueError("prepared_code_numeric_successor_forbidden")
-        expected = value["code_sha256"]
+        policy_sha, expected = value["bundle_sha256"], value["code_sha256"]
     else:
         from src.engine.scalping import main_stop_policy as S
 
         path = S.policy_path(data, day)
-        value = S.load_bundle(path, _sha(path), day, require_current_code=False)
-        if value["policy_sha256"] != _bound(manifest, family) or any(
-            cell["status"] == "selected" for cell in value["cells"].values()
-        ):
+        before = _sha(path)
+        value = S.load_bundle(path, before, day, require_current_code=False)
+        if any(cell["status"] == "selected" for cell in value["cells"].values()):
             raise ValueError("prepared_code_numeric_successor_forbidden")
-        expected = value["code_sha256"]
+        policy_sha, expected = value["policy_sha256"], value["code_sha256"]
+    if _sha(path) != before:
+        raise ValueError("prepared_code_policy_changed")
+    return path, expected, policy_sha
+
+
+def _policy(data, day, family, manifest):
+    bound = manifest[FAMILIES[family][0]]
+    path, expected, policy_sha = _native_policy(data, day, family,
+        policy_path=bound["policy_path"] if family == "pre_submit_delay" else None)
+    if policy_sha != _bound(manifest, family):
+        raise ValueError("prepared_code_policy_changed")
     return path, expected
 
 

@@ -88,6 +88,7 @@ def prepared(tmp_path, monkeypatch, request):
     pp = write("prepared.json", body)
     monkeypatch.setattr(C, "_clock", lambda day, now=None: None)
     monkeypatch.setattr(C, "_policy", lambda *a: (policy, "expected"))
+    monkeypatch.setattr(C, "_native_policy", lambda *a, **kw: (policy, "expected", "policy"))
     monkeypatch.setattr(H, "_verify_entry_code_delta", lambda *a: ["consumer.py"])
     monkeypatch.setattr(R, "selected_release", lambda *a: (root, COMMIT))
     monkeypatch.setattr(R, "validate_release", lambda *a: (root, COMMIT))
@@ -1163,7 +1164,7 @@ def test_unprepared_stopped_origin_shared_by_policy_and_startup_readers(prepared
 
 
 @pytest.mark.parametrize("prepared", ["pre_submit_delay", "main_stop", "holding_vote"], indirect=True)
-@pytest.mark.parametrize("fault", [None, "review", "target", "actual", "unreviewed", "source_during", "policy", "missing_index", "manifest"])
+@pytest.mark.parametrize("fault", [None, "review", "target", "actual", "unreviewed", "source_during", "policy", "phase_no_index", "phase_unissued_manifest"])
 def test_first_postclose_preparation_does_not_require_an_unissued_code_receipt(
     prepared, monkeypatch, fault
 ):
@@ -1203,17 +1204,20 @@ def test_first_postclose_preparation_does_not_require_an_unissued_code_receipt(
     native_prepared.write_bytes(original_prepared.read_bytes())
     index.write_text(json.dumps(dict(target_date=DAY, receipt_path=str(native_prepared),
         receipt_sha256=C._sha(native_prepared))))
-    if fault == "missing_index":
+    if fault == "phase_no_index":
         index.unlink()
-    if fault == "manifest":
+    if fault == "phase_unissued_manifest":
         (root.parent / "manifest.json").write_text('{"changed":true}')
-    monkeypatch.setattr(C, "_policy", lambda *a: (data / "policy.json", original_actual))
+    monkeypatch.setattr(C, "_native_policy", lambda *a, **kw: (data / "policy.json", original_actual, "policy"))
+    def no_output_custody(*a, **kw):
+        pytest.fail("preparation output must not authenticate original policy input")
+    monkeypatch.setattr(C, "_origin", no_output_custody)
     actual = C._digest({"consumer.py": C._sha(consumer)})
     token = H._PREDECESSOR_REVIEW.set(review)
     before = original_prepared.read_bytes()
     try:
         kwargs = {**args, "policy_sha": "foreign" if fault == "policy" else args["policy_sha"], "expected": original_actual, "actual": "d" * 64 if fault == "actual" else actual}
-        if fault:
+        if fault not in {None, "phase_no_index", "phase_unissued_manifest"}:
             with pytest.raises(ValueError):
                 H.verify_entry_consumer_code(DAY, **kwargs)
         else:
@@ -1224,3 +1228,30 @@ def test_first_postclose_preparation_does_not_require_an_unissued_code_receipt(
         assert not directory.exists() and original_prepared.read_bytes() == before
     finally:
         H._PREDECESSOR_REVIEW.reset(token)
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "day", "digest", "outside"])
+def test_native_delay_policy_input_is_independent_of_preparation_output(tmp_path, monkeypatch, fault):
+    from src.engine.scalping import pre_submit_delay_tuning as D
+    data = tmp_path / "data"
+    directory = data / "threshold_cycle/pre_submit_delay_policy"
+    directory.mkdir(parents=True)
+    monkeypatch.setattr(D, "DATA_DIR", data)
+    monkeypatch.setattr(D, "POLICY_DIR", directory)
+    body = dict(schema="pre_submit_delay_policy_v2", effective_from="2099-01-01" if fault == "day" else DAY,
+        code_contract_sha256="a" * 64)
+    value = {**body, "policy_sha256": "b" * 64 if fault == "digest" else C._digest(body)}
+    path = D.policy_path(DAY)
+    path.write_text(json.dumps(value))
+    if fault == "missing": path.unlink()
+    kwargs = {"policy_path": tmp_path / "outside.json"} if fault == "outside" else {}
+    if fault:
+        with pytest.raises((ValueError, OSError)):
+            C._native_policy(data, DAY, "pre_submit_delay", **kwargs)
+    else:
+        original = path.read_bytes()
+        found, expected, policy_sha = C._native_policy(data, DAY, "pre_submit_delay")
+        assert (found, expected, policy_sha) == (path, "a" * 64, value["policy_sha256"])
+        assert C._policy(data, DAY, "pre_submit_delay", {"target_date":DAY,
+            "pre_submit_delay_handoff":{"target_date":DAY,"policy_path":str(path),"policy_sha256":policy_sha}}) == (path, expected)
+        assert path.read_bytes() == original and not (data / "runtime/policy_bootstrap").exists()
