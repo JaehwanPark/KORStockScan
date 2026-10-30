@@ -1108,3 +1108,49 @@ def test_resolve_live_intraday_origin_preserves_native_custody(
         assert result["sources"][str(cp)] == C._sha(cp)
     assert selector.read_bytes() == before
     assert not C.receipt_path(data, DAY, COMMIT, args["family"]).exists()
+
+@pytest.mark.parametrize('prepared', ['pre_submit_delay','main_stop','holding_vote'], indirect=True)
+@pytest.mark.parametrize('fault', [None,'policy','code','source','appeared','origin','unreviewed'])
+@pytest.mark.parametrize('outside', [False,True])
+def test_unprepared_stopped_origin_shared_by_policy_and_startup_readers(prepared,monkeypatch,fault,outside):
+    from contextlib import contextmanager
+    data,root,args,selector=_origin_resolution_arguments(prepared)
+    C.receipt_path(data,DAY,COMMIT,args['family']).unlink()
+    selector.write_text(json.dumps(dict(actual_pid_consumed=False,deployment_transition='native-failed-transition')))
+    mp=Path(json.loads(prepared[-1].read_text())['manifest_path'])
+    preopen=data/'preopen.json';preopen.write_text(json.dumps(dict(selected_release_commit=ORIGIN)))
+    predecessor=data/'original-handoff.json';predecessor.write_text('original consumed predecessor')
+    absent=data/'unissued-handoff.json'
+    sources={str(p):C._sha(p) for p in (mp,preopen,predecessor)}
+    proof=dict(target_date=DAY,release_commit=COMMIT,source_hashes=sources,
+        unprepared_selected_handoff=dict(path=str(absent),predecessor_path=str(predecessor),predecessor_sha256=C._sha(predecessor)),
+        runtime_effect=False,actual_pid_consumed=False,allowed_runtime_apply=False)
+    review=dict(day=DAY,root=root,commit=COMMIT,code_root=Path(H.__file__).resolve().parents[3],code_commit='c'*40,prepared_observation=proof)
+    monkeypatch.setattr(H.bootstrap,'manifest_path',lambda *a:mp)
+    monkeypatch.setattr(H,'_preopen_path',lambda *a:preopen)
+    monkeypatch.setattr(H,'_preopen',lambda *a:C._read(preopen))
+    @contextmanager
+    def scope(*a):
+        token=H._PREDECESSOR_REVIEW.set(review)
+        try:yield proof
+        finally:H._PREDECESSOR_REVIEW.reset(token)
+    monkeypatch.setattr(H,'stopped_preparation_review',scope)
+    if fault=='policy':args['policy_sha']='wrong'
+    elif fault=='code':args['expected']='wrong'
+    elif fault=='source':predecessor.write_text('changed')
+    elif fault=='appeared':absent.write_text('{}')
+    elif fault=='origin':preopen.write_text(json.dumps(dict(selected_release_commit='d'*40)));sources[str(preopen)]=C._sha(preopen)
+    elif fault=='unreviewed':monkeypatch.setattr(H,'_verify_entry_code_delta',lambda *a:(_ for _ in ()).throw(ValueError('unknown code')))
+    token=H._PREDECESSOR_REVIEW.set(None if outside else review)
+    before=selector.read_bytes()
+    try:
+        if fault:
+            with pytest.raises(ValueError):C.resolve_prepared_code_origin(data,DAY,**args)
+        else:
+            result=C.resolve_prepared_code_origin(data,DAY,**args)
+            assert result['origin_commit']==ORIGIN
+            assert result['basis']=='verified_unprepared_stopped_original_contract'
+            assert result['sources'].items()>=sources.items()
+    finally:H._PREDECESSOR_REVIEW.reset(token)
+    assert selector.read_bytes()==before
+    assert not C.receipt_path(data,DAY,COMMIT,args['family']).exists()

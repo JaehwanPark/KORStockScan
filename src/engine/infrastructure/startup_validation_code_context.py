@@ -3818,6 +3818,9 @@ REVIEWED_STORAGE_INTEGRATION_TRANSITION = {
     "src/engine/automation/next_preopen_readiness.py": (
         "c89c5869690c7a17c2f3b631a5a6cb2ca0319b11e4a04b426b09e4a5bd128895",
         "0ddfad84543a2c31d011cdeb00333806b9de8715332982f649ad143542cc3ff5"),
+    "src/engine/automation/prepared_policy_code_handoff.py": (
+        "78bf869dd6b417956782c6f471a2b92b2a7d24a5d2570ca9b6f747f0bd6dc14a",
+        "a117cad10a6d9e244b91d6322db859beda5d1802f89e188bcf1a07159bc4c8fa"),
 }
 REVIEWED_STORAGE_INTEGRATION_PROFILE = {
     **REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE,

@@ -6086,22 +6086,6 @@ def test_stopped_preparation_analysis_preserves_expired_launch_guard(
                 if unprepared:
                     assert proof["unprepared_selected_handoff"]["predecessor_path"] == str(predecessor_path)
                     assert handoff.verify(DAY, NEW, now=expired)["status"] == "fail"
-                    from src.engine.automation import prepared_policy_code_handoff as C
-                    (data / "runtime/policy_bootstrap/code_handoffs" / DAY).mkdir(parents=True, exist_ok=True)
-                    monkeypatch.setattr(C, "_policy", lambda *a: (source, "e" * 64))
-                    monkeypatch.setattr(C, "_bound", lambda *a: "f" * 64)
-                    calls = []
-                    monkeypatch.setattr(handoff, "_verify_entry_code_delta", lambda *a: calls.append(a) or [])
-                    paths = {"stop": "src/engine/scalping/main_stop_policy.py"}
-                    code_root = Path(handoff.__file__).resolve().parents[3]
-                    actual = C._digest({key: handoff._sha(code_root / name) for key, name in paths.items()})
-                    result = handoff.verify_entry_consumer_code(DAY, family="main_stop", policy_sha="f" * 64,
-                        expected="e" * 64, paths=paths, actual=actual)
-                    assert result["actual_pid_consumed"] is False
-                    assert calls[-1][2] == OLD
-                    with pytest.raises(ValueError, match="original_policy_unbound"):
-                        handoff.verify_entry_consumer_code(DAY, family="main_stop", policy_sha="0" * 64,
-                            expected="e" * 64, paths=paths, actual=actual)
                 else:
                     assert handoff.verify(DAY, NEW, now=expired)["status"] == "pass"
                 with pytest.raises(ValueError, match="not_launch_authority"):

@@ -1399,35 +1399,10 @@ def verify_entry_consumer_code(day, *, family, policy_sha, expected, paths, actu
                 review, custody_day, root, commit, candidate
             ):
                 raise ValueError("entry_consumer_prepared_predecessor_unbound")
-            unprepared = (review.get("prepared_observation") or {}).get("unprepared_selected_handoff")
-            if unprepared is not None:
-                # No policy-code receipt was issued for this failed selection.
-                # The native stopped owner has verified the original consumed
-                # predecessor and frozen its PREOPEN manifest and policy.
-                manifest_path = bootstrap.manifest_path(day)
-                manifest = _read(manifest_path)
-                policy_path, policy_code = prepared_code._policy(DATA_DIR, day, family, manifest)
-                source_commit = manifest.get("selected_release_sha")
-                sources = review["prepared_observation"]["source_hashes"]
-                if (prepared_code._bound(manifest, family) != policy_sha
-                    or policy_code != expected
-                    or source_commit != _preopen(day).get("selected_release_commit")
-                    or sources.get(str(manifest_path)) != _sha(manifest_path)
-                    or sources.get(str(_preopen_path(day))) != _sha(_preopen_path(day))):
-                    raise ValueError("entry_consumer_unprepared_original_policy_unbound")
-                origin = dict(origin_commit=source_commit,
-                              sources={**sources, str(policy_path): _sha(policy_path)})
-            else:
-                origin = prepared_code.resolve_prepared_code_origin(
-                    DATA_DIR,
-                    day,
-                    family=family,
-                    policy_sha=policy_sha,
-                    expected=expected,
-                    paths=paths,
-                    selected_root=root,
-                    selected_commit=commit,
-                )
+            origin = prepared_code.resolve_prepared_code_origin(
+                DATA_DIR, day, family=family, policy_sha=policy_sha, expected=expected,
+                paths=paths, selected_root=root, selected_commit=commit,
+            )
             candidate_actual = prepared_code._digest(
                 {key: _sha(candidate / name) for key, name in paths.items()}
             )
@@ -13984,7 +13959,7 @@ REVIEWED_STORAGE_INTEGRATION_HASHES = {
     **{name: pair[1] for name, pair in
        _preparation_code.REVIEWED_STORAGE_INTEGRATION_TRANSITION.items()},
     "src/engine/infrastructure/startup_validation_code_context.py":
-        "0b97c7dfd72af9e6fc03ae72df47df4cfd64a595734367f0be251b08dbd5a965",
+        "308a12143e59f828ac327a273ed6fdbf1976b7198e4675279ff8a4c173810ad2",
 }
 REVIEWED_STORAGE_INTEGRATION_PROFILE = {
     **REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE, **REVIEWED_STORAGE_INTEGRATION_HASHES,

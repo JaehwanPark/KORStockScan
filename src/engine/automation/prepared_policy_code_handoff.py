@@ -259,6 +259,15 @@ def resolve_prepared_code_origin(
     selector_sha = _sha(selector)
     if selected_release(data.parent) != (root, selected_commit):
         raise ValueError("prepared_code_origin_selection_mismatch")
+    from src.engine.automation import intraday_release_handoff as H
+    review = H._PREDECESSOR_REVIEW.get()
+    selection = _read(selector)
+    if (review is None and selection.get("actual_pid_consumed") is False
+        and selection.get("deployment_transition")
+        and Path(H.__file__).resolve().parents[3] != root):
+        with H.stopped_preparation_review(day):
+            return resolve_prepared_code_origin(data, day, family=family, policy_sha=policy_sha,
+                expected=expected, paths=paths, selected_root=root, selected_commit=selected_commit)
 
     def selected_hashes(inventory, *, missing_allowed=False):
         result = {}
@@ -289,6 +298,33 @@ def resolve_prepared_code_origin(
     )
     if actual != expected:
         from src.engine.automation import intraday_release_handoff as H
+
+        unprepared = ((review or {}).get("prepared_observation") or {}).get("unprepared_selected_handoff")
+        if unprepared is not None:
+            candidate = Path(H.__file__).resolve().parents[3]
+            manifest_path = H.bootstrap.manifest_path(day)
+            manifest = _read(manifest_path)
+            policy_path, policy_code = _policy(data, day, family, manifest)
+            origin = manifest.get("selected_release_sha")
+            custody = review["prepared_observation"]["source_hashes"]
+            preopen_path = H._preopen_path(day)
+            if (not H.predecessor_review_matches(review, day, root, selected_commit, candidate)
+                or _bound(manifest, family) != policy_sha or policy_code != expected
+                or origin != H._preopen(day).get("selected_release_commit")
+                or custody.get(str(manifest_path)) != _sha(manifest_path)
+                or custody.get(str(preopen_path)) != _sha(preopen_path)):
+                raise ValueError("prepared_code_unprepared_original_policy_unbound")
+            H._verify_entry_code_delta(root, selected_commit, origin, paths, expected)
+            sources.update(custody)
+            sources[str(policy_path)] = _sha(policy_path)
+            sources.update({str(root / name): code_hashes[key] for key, name in paths.items()})
+            if (not H.predecessor_review_matches(review, day, root, selected_commit, candidate)
+                or _sha(selector) != selector_sha
+                or any(_sha(name) != sha for name, sha in sources.items())):
+                raise ValueError("prepared_code_origin_sources_changed")
+            return {**result, "origin_commit": origin,
+                    "basis": "verified_unprepared_stopped_original_contract",
+                    "selected_paths": paths, "sources": sources}
 
         path = receipt_path(data, day, selected_commit, family)
         if not path.exists() and not path.is_symlink():
