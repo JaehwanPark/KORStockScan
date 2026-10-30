@@ -2614,7 +2614,7 @@ assert_no_forbidden_attempts()
 )
 @pytest.mark.parametrize(
     "consumed_ancestry",
-    [False, True, "native", "native_closed", "prepared_intraday", "prepared_stopped"],
+    [False, True, "native", "native_closed", "prepared_intraday", "prepared_stopped", "unprepared_stopped"],
 )
 def test_isolated_prepared_native_closure_keeps_full_bootstrap_and_exact_sources(
     request_fixture, monkeypatch, fault, consumed_ancestry
@@ -2629,7 +2629,7 @@ def test_isolated_prepared_native_closure_keeps_full_bootstrap_and_exact_sources
     prepared_commit = (
         "a" * 40
         if consumed_ancestry is True
-        or consumed_ancestry in {"prepared_intraday", "prepared_stopped"}
+        or consumed_ancestry in {"prepared_intraday", "prepared_stopped", "unprepared_stopped"}
         else commit
     )
     closure = proof["closure"]
@@ -2766,7 +2766,7 @@ def test_isolated_prepared_native_closure_keeps_full_bootstrap_and_exact_sources
                 str(consumed): C._sha(consumed),
             },
         )
-    if consumed_ancestry in {"prepared_intraday", "prepared_stopped"}:
+    if consumed_ancestry in {"prepared_intraday", "prepared_stopped", "unprepared_stopped"}:
         native.update(
             validation_scope="intraday_preserved_historical_generation",
             actual_pid_consumed=False,
@@ -2845,6 +2845,39 @@ def test_isolated_prepared_native_closure_keeps_full_bootstrap_and_exact_sources
         )
         native["stopped_preparation_observation"] = observation
         binding["sources"].update(observation["source_hashes"])
+    if consumed_ancestry == "unprepared_stopped":
+        previous = "d" * 40
+        original_path = path.with_name(previous + ".json")
+        handoff.update(selected_release_commit=previous, release_root=str(f["selected"].parent / "previous"))
+        original_path.write_text(json.dumps(handoff))
+        path.unlink()
+        consumed = original_path.with_name(previous + ".consumed.json")
+        identity = dict(pid=123, start_ticks="456", cwd=handoff["release_root"] + "/src")
+        consumed.write_text(json.dumps(dict(schema="intraday_policy_preserving_consumption_v1",status="pass",
+            target_date=DAY,selected_release_commit=previous,release_root=handoff["release_root"],
+            actual_pid_consumed=True,pid_identity=identity,handoff_sha256=C._sha(original_path))))
+        failed = data / "original-failed-transition.json"
+        failed.write_text(json.dumps(dict(schema="ordered_intraday_deployment_v1",authority="APPROVED_ORDERED_INTRADAY_DEPLOY_AND_RESTART",
+            error="deployment_validation_failed:src.engine.automation.intraday_release_handoff",target_date=DAY,
+            phase="failed",failed_phase="selected",candidate_commit=commit,
+            previous_commit=previous,predecessor_identity=identity)))
+        selection=data / "runtime/runtime_release_selection.json"
+        selected=json.loads(selection.read_text())
+        selected.update(previous_git_commit=previous,previous_release_root=handoff["release_root"],deployment_transition=str(failed))
+        selection.write_text(json.dumps(selected))
+        observation=dict(target_date=DAY,release_commit=commit,runtime_effect=False,actual_pid_consumed=False,
+            allowed_runtime_apply=False,original_first_launch_before=None,
+            unprepared_selected_handoff=dict(path=str(path),predecessor_path=str(original_path),predecessor_sha256=C._sha(original_path)),
+            source_hashes={str(p):C._sha(p) for p in (original_path,consumed,failed,selection)})
+        native["stopped_preparation_observation"]=observation
+        native.pop("prepared_intraday_handoff")
+        native["unprepared_stopped_handoff"]=dict(path=str(original_path),sha256=C._sha(original_path),
+            role="native_consumed_predecessor_for_unprepared_selection",full_native_validation=True,
+            sources={**handoff["frozen_files"],**observation["source_hashes"]})
+        proof["delegation_basis"]=C._native_main_basis(native)
+        for consumer in request["candidate_code_handoffs"].values():
+            consumer["source_hashes"][str(selection)]=C._sha(selection)
+            if str(selection) in consumer["origin"]["sources"]:consumer["origin"]["sources"][str(selection)]=C._sha(selection)
     if consumed_ancestry in {"native", "native_closed"}:
         request["manifest"]["selected_release_sha"] = commit
         identity = dict(pid=123, start_ticks="456", cwd=str(f["selected"] / "src"))

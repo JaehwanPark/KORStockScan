@@ -5501,6 +5501,9 @@ def _native_main_basis(native):
         and _hex(native.get("preserved_preopen_commit"), 40)
     ):
         return (
+            "same_invocation_selected_unprepared_stopped_native_validation"
+            if native.get("unprepared_stopped_handoff")
+            else
             "same_invocation_selected_prepared_intraday_native_validation"
             if native.get("prepared_intraday_handoff")
             else "same_invocation_selected_intraday_native_validation"
@@ -5531,9 +5534,11 @@ def _preserved_native_sources(proof):
         _native_main_basis(native)
         == "same_invocation_selected_prepared_intraday_native_validation"
     )
+    native_unprepared = (_native_main_basis(native)
+        == "same_invocation_selected_unprepared_stopped_native_validation")
     prepared_commit = (
         native.get("preserved_preopen_commit")
-        if native_prepared
+        if native_prepared or native_unprepared
         else proof["selected_release_commit"]
     )
     if (
@@ -5541,6 +5546,7 @@ def _preserved_native_sources(proof):
         or native_consumed
         or native_closed
         or native_prepared
+        or native_unprepared
     ):
         if not isinstance(records, dict) or len(records) != 1:
             raise ValueError("startup_prepared_native_scope_invalid")
@@ -5608,8 +5614,8 @@ def _preserved_native_sources(proof):
         ):
             raise ValueError("startup_prepared_full_bootstrap_unbound")
         refs[str(index)] = _sha(index)
-        if native_prepared:
-            binding = native["prepared_intraday_handoff"]
+        if native_prepared or native_unprepared:
+            binding = native["unprepared_stopped_handoff"] if native_unprepared else native["prepared_intraday_handoff"]
             observation = native.get("stopped_preparation_observation")
             if observation is not None:
                 if (
@@ -5633,11 +5639,14 @@ def _preserved_native_sources(proof):
                     raise ValueError("startup_stopped_preparation_observation_invalid")
                 _check_sources(observation["source_hashes"])
 
+            selected = _json(data / "runtime/runtime_release_selection.json")
+            handoff_commit = selected.get("previous_git_commit") if native_unprepared else proof["selected_release_commit"]
+            handoff_root = selected.get("previous_release_root") if native_unprepared else proof["selected_release_root"]
             path = (
                 data
                 / "runtime/policy_bootstrap/intraday_handoff"
                 / day
-                / (proof["selected_release_commit"] + ".json")
+                / (handoff_commit + ".json")
             )
             handoff = _json(path)
             expected_sources = {
@@ -5645,11 +5654,39 @@ def _preserved_native_sources(proof):
                 str(path): _sha(path),
                 **((observation or {}).get("source_hashes") or {}),
             }
-            if observation is not None and observation.get(
+            if not native_unprepared and observation is not None and observation.get(
                 "original_first_launch_before"
             ) != handoff.get("first_launch_before"):
                 raise ValueError("startup_stopped_preparation_expiry_changed")
-            selected = _json(data / "runtime/runtime_release_selection.json")
+            if native_unprepared:
+                absent = data / "runtime/policy_bootstrap/intraday_handoff" / day / (proof["selected_release_commit"] + ".json")
+                unprepared = (observation or {}).get("unprepared_selected_handoff") or {}
+                consumed = path.with_name(handoff_commit + ".consumed.json")
+                body = _json(consumed)
+                failed_path = Path(selected.get("deployment_transition") or "")
+                failed = _json(failed_path)
+                if (binding.get("role") != "native_consumed_predecessor_for_unprepared_selection"
+                    or unprepared != dict(path=str(absent), predecessor_path=str(path), predecessor_sha256=_sha(path))
+                    or absent.exists() or absent.is_symlink()
+                    or (absent_consumed := absent.with_name(proof["selected_release_commit"] + ".consumed.json")).exists()
+                    or absent_consumed.is_symlink()
+                    or failed.get("schema") != "ordered_intraday_deployment_v1"
+                    or failed.get("authority") != "APPROVED_ORDERED_INTRADAY_DEPLOY_AND_RESTART"
+                    or failed.get("phase") != "failed" or failed.get("failed_phase") != "selected"
+                    or failed.get("error") != "deployment_validation_failed:src.engine.automation.intraday_release_handoff"
+                    or failed.get("target_date") != day
+                    or failed.get("candidate_commit") != proof["selected_release_commit"]
+                    or failed.get("previous_commit") != handoff_commit
+                    or body.get("schema") != "intraday_policy_preserving_consumption_v1"
+                    or body.get("status") != "pass" or body.get("target_date") != day
+                    or body.get("selected_release_commit") != handoff_commit
+                    or body.get("release_root") != handoff_root
+                    or body.get("actual_pid_consumed") is not True
+                    or body.get("pid_identity") != failed.get("predecessor_identity")
+                    or body.get("handoff_sha256") != _sha(path)
+                    or expected_sources.get(str(consumed)) != _sha(consumed)
+                    or expected_sources.get(str(failed_path)) != _sha(failed_path)):
+                    raise ValueError("startup_unprepared_original_consumption_unbound")
             active = (
                 data
                 / "runtime/policy_bootstrap"
@@ -5669,8 +5706,8 @@ def _preserved_native_sources(proof):
                 or handoff.get("status") != "prepared_verified"
                 or handoff.get("target_date") != day
                 or handoff.get("selected_release_commit")
-                != proof["selected_release_commit"]
-                or handoff.get("release_root") != proof["selected_release_root"]
+                != handoff_commit
+                or handoff.get("release_root") != handoff_root
                 or handoff.get("actual_pid_consumed") is not False
                 or handoff.get("policy_effect") != "unchanged"
                 or handoff.get("prepared_receipt_path") != str(prepared)
@@ -5857,19 +5894,25 @@ def bind_main_preparation(root, commit, data_root, intake):
         path, consumed = H._paths(day, original_commit)
         if not consumed.exists():
             observation = native.get("stopped_preparation_observation")
+            unprepared = (observation or {}).get("unprepared_selected_handoff")
             if observation is not None:
                 with H.stopped_preparation_review(day) as current:
                     if current != observation:
                         raise ValueError("startup_stopped_preparation_proof_changed")
-                    checked = H._verify_handoff(day, original_commit)
+                    if unprepared is not None:
+                        path = Path(unprepared["predecessor_path"])
+                        handoff = _json(path)
+                    else:
+                        checked = H._verify_handoff(day, original_commit)
             else:
                 checked = H._verify_handoff(day, original_commit)
-            if checked.get("status") != "pass":
-                raise ValueError("startup_prepared_intraday_native_validation_failed")
-            handoff = checked["handoff"]
+            if unprepared is None:
+                if checked.get("status") != "pass":
+                    raise ValueError("startup_prepared_intraday_native_validation_failed")
+                handoff = checked["handoff"]
             native = dict(
                 native,
-                prepared_intraday_handoff=dict(
+                **{("unprepared_stopped_handoff" if unprepared is not None else "prepared_intraday_handoff"): dict(
                     path=str(path),
                     sha256=_sha(path),
                     sources={
@@ -5883,7 +5926,8 @@ def bind_main_preparation(root, commit, data_root, intake):
                         ),
                     },
                     full_native_validation=True,
-                ),
+                    **({"role": "native_consumed_predecessor_for_unprepared_selection"} if unprepared is not None else {}),
+                )},
             )
     if (
         native.get("status") != "pass"
