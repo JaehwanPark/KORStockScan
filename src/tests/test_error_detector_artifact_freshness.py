@@ -7370,8 +7370,9 @@ def test_pending_is_warning_and_cannot_clear_prior_daemon_failure(
     assert "artifact_freshness" in state
 
 
+@pytest.mark.parametrize("projection", [None,"native","legacy","unknown","missing","changed","writable","symlink","reader_changed"])
 def test_current_observer_generation_requires_exact_selector_and_code(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, projection
 ):
     from src.engine.monitoring import submission_bottleneck_monitor as monitor
 
@@ -7404,6 +7405,32 @@ def test_current_observer_generation_requires_exact_selector_and_code(
         "observer_generation": generation,
     }
     assert mod._submission_observer_generation_issue(payload, root) is None
+    if projection is not None:
+        import subprocess
+        from src.engine.monitoring import sentinel_source_window as window
+        source_path=code_path.with_name("sentinel_source_window.py")
+        source_path.write_bytes(Path(window.__file__).read_bytes())
+        current=hashlib.sha256(source_path.read_bytes()).hexdigest()
+        contract="012d290ace2bd5e6cd16a4e0f8564f8082e03dc55851959a67a0418f010c5737"
+        issuer=root / "data/runtime/sentinel_event_cache/issuers" / (contract+".py")
+        issuer.parent.mkdir(parents=True)
+        raw=subprocess.check_output(['git','-C',str(Path(window.__file__).resolve().parents[3]),'show','23fbecf28:src/engine/monitoring/sentinel_source_window.py'])
+        assert hashlib.sha256(raw).hexdigest()==contract
+        issuer.write_bytes(raw)
+        issuer.chmod(0o444)
+        if projection=="native":contract=current
+        elif projection=="unknown":contract="f"*64
+        elif projection=="missing":issuer.unlink()
+        elif projection=="changed":issuer.chmod(0o644);issuer.write_bytes(raw+b'\n# changed\n');issuer.chmod(0o444)
+        elif projection=="writable":issuer.chmod(0o644)
+        elif projection=="symlink":
+            target=issuer.with_suffix('.original');issuer.rename(target);issuer.symlink_to(target)
+        elif projection=="reader_changed":source_path.write_bytes(source_path.read_bytes()+b'\n# unreviewed\n')
+        payload['source_gap_semantics']=dict(sources=dict(probe=dict(
+            coverage_basis='verified_forward_sentinel_source_window_v1',projection_contract=contract)))
+        issue=mod._submission_observer_generation_issue(payload,root)
+        assert issue==(None if projection in {'native','legacy'} else 'observer_source_window_code_mismatch')
+        if issue is not None:return
     generation["sha256"] = "0" * 64
     assert (
         mod._submission_observer_generation_issue(payload, root)

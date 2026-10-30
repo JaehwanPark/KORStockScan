@@ -508,10 +508,20 @@ def _submission_observer_generation_issue(payload, root, *, selection_path=None)
             source_sha = _observer_small_object(
                 source_path, limit=1024 * 1024, hash_only=True
             )[1]
-            if any(
-                source.get("projection_contract") != source_sha for source in indexed
-            ):
-                return "observer_source_window_code_mismatch"
+            for source in indexed:
+                contract = source.get("projection_contract")
+                if contract == source_sha:
+                    continue
+                # The native reader can consume an exact preserved writer's
+                # index. Authenticate that original issuer; its physical hash
+                # is distinct from this archive-compatible reader's hash.
+                from src.engine.monitoring import sentinel_source_window as window
+                if window._contract() != source_sha:
+                    return "observer_source_window_code_mismatch"
+                try:
+                    window._predecessor_issuer(Path(root) / "data", contract)
+                except (OSError, ValueError, TypeError, KeyError):
+                    return "observer_source_window_code_mismatch"
     except (OSError, ValueError, TypeError):
         return "observer_generation_selection_unavailable"
     return None

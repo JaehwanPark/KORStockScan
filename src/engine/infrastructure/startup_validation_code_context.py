@@ -3826,6 +3826,15 @@ REVIEWED_STORAGE_INTEGRATION_PROFILE = {
     **REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE,
     **{name: pair[1] for name, pair in REVIEWED_STORAGE_INTEGRATION_TRANSITION.items()},
 }
+REVIEWED_STORAGE_HEALTH_TRANSITION = {
+    "src/engine/error_detectors/artifact_freshness.py": (
+        "2b3302868f445aece1a0e853cae2e248c30a9c4aa76ddfbc2bd86022a0d1386a",
+        "29be2dedbf2b58b86d7b2c066aec6288b6292391123a54f16079405cfefe1e45"),
+}
+REVIEWED_STORAGE_HEALTH_PROFILE = {
+    **REVIEWED_STORAGE_INTEGRATION_PROFILE,
+    **{name: pair[1] for name, pair in REVIEWED_STORAGE_HEALTH_TRANSITION.items()},
+}
 
 
 def reviewed_predecessor_origins(endpoint, edges):
@@ -3838,10 +3847,11 @@ def reviewed_predecessor_origins(endpoint, edges):
         origins.update(predecessors)
 
 
-def reviewed_storage_origins(relative, *, prior=False):
+def reviewed_storage_origins(relative, *, prior=False, health=False):
     """Compose only registered predecessor edges for this exact successor."""
-    transition = (REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION if prior else
-                  REVIEWED_STORAGE_INTEGRATION_TRANSITION).get(relative)
+    transition = ((REVIEWED_STORAGE_HEALTH_TRANSITION.get(relative) if health else None)
+                  or (REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION if prior else
+                      REVIEWED_STORAGE_INTEGRATION_TRANSITION).get(relative))
     if transition is None:
         return frozenset()
     edges = set(REVIEWED_PREPARATION_HISTORY.get(relative, ()))
@@ -3870,6 +3880,10 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
     comparison_root = ROOT if root is None else Path(root)
     if not comparison_root.is_absolute() or comparison_root.resolve() != comparison_root:
         return False
+    storage_health = any((comparison_root / name).is_file()
+        and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == pair[1]
+        for name, pair in REVIEWED_STORAGE_HEALTH_TRANSITION.items())
     storage_latest = any(
         (comparison_root / name).is_file()
         and not (comparison_root / name).is_symlink()
@@ -3884,7 +3898,8 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
         for name, pair in REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION.items()
     )
     storage_generation = storage_latest or storage_prior
-    storage_profile = (REVIEWED_STORAGE_INTEGRATION_PROFILE if storage_latest
+    storage_profile = (REVIEWED_STORAGE_HEALTH_PROFILE if storage_health else
+                       REVIEWED_STORAGE_INTEGRATION_PROFILE if storage_latest
                        else REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE)
     if storage_generation:
         if any(
@@ -3894,10 +3909,11 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
             for name, expected in storage_profile.items()
         ):
             return False
-        transition = (REVIEWED_STORAGE_INTEGRATION_TRANSITION if storage_latest
-                      else REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION).get(relative)
+        transition = ((REVIEWED_STORAGE_HEALTH_TRANSITION.get(relative) if storage_health else None)
+                      or (REVIEWED_STORAGE_INTEGRATION_TRANSITION if storage_latest
+                          else REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION).get(relative))
         if transition is not None:
-            return current == transition[1] and old in reviewed_storage_origins(relative, prior=not storage_latest)
+            return current == transition[1] and old in reviewed_storage_origins(relative, prior=not storage_latest, health=storage_health)
     union_generation = any(
         (comparison_root / name).is_file()
         and not (comparison_root / name).is_symlink()

@@ -7709,10 +7709,10 @@ def test_p5_consumer_union_delta_checks_exact_complete_candidate(tmp_path, fault
         # sniper trigger owns its separate native dependency verification.
         variants = (handoff.REVIEWED_P5_CONSUMER_UNION_VARIANTS if generation == "issued_p5" else
                     handoff.REVIEWED_STORAGE_INTEGRATION_PRIOR_VARIANTS if generation == "issued_storage" else
-                    handoff.REVIEWED_STORAGE_INTEGRATION_VARIANTS)
+                    handoff.REVIEWED_STORAGE_HEALTH_VARIANTS)
         profile = (handoff.REVIEWED_P5_CONSUMER_UNION_PROFILE if generation == "issued_p5" else
                    handoff.REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE if generation == "issued_storage" else
-                   handoff.REVIEWED_STORAGE_INTEGRATION_PROFILE)
+                   handoff.REVIEWED_STORAGE_HEALTH_PROFILE)
         trigger, variant = next(iter(variants.items()))
         if fault == "variant_new_missing":
             monkeypatch.setitem(variant["dependencies"], "src/engine/new_missing_consumer.py", "0" * 64)
