@@ -5518,7 +5518,7 @@ def test_common_support_profile_preserves_the_complete_stop_parent():
         "src/engine/infrastructure/startup_validation_code_context.py",
     }
     for name, expected in new.items():
-        raw = (root / name).read_bytes()
+        raw = subprocess.check_output(["git", "-C", str(root), "show", "73efe4115:" + name])
         compared = handoff.reviewed_formatting_source(name, raw)
         assert hashlib.sha256(compared).hexdigest() == expected, name
         if name not in handoff.REVIEWED_COMMON_SUPPORT_HASHES:
@@ -7614,3 +7614,25 @@ def test_interrupted_recovery_prepare_binds_retained_custody(fixture, monkeypatc
     if damage == "changed":
         original.write_text("changed")
         assert handoff.verify(DAY, commit, now=NOW)["status"] == "fail"
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "mixed", "dirty"])
+def test_interrupted_custody_delta_checks_complete_combined_candidate(tmp_path, fault):
+    import hashlib, json, subprocess
+    source = Path(handoff.__file__).resolve().parents[3]
+    root = tmp_path / "candidate"
+    subprocess.run(["git", "clone", "-q", "--shared", "--no-checkout", str(source), str(root)], check=True)
+    commit = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
+    subprocess.run(["git", "-C", str(root), "checkout", "-q", "--detach", commit], check=True)
+    origin = "3e3d5da2c3f35c8672efd9d58545f9d19a7b20e6"
+    paths = {name: name for name in handoff.REVIEWED_INTERRUPTED_CUSTODY_HASHES}
+    parent = {name: hashlib.sha256(subprocess.check_output(["git", "-C", str(root), "show", origin + ":" + name])).hexdigest() for name in paths}
+    expected = hashlib.sha256(json.dumps(parent, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")).hexdigest()
+    dependency = root / "src/engine/scalping/reversal_auxiliary_intraday.py"
+    if fault == "missing": dependency.unlink()
+    elif fault == "mixed": dependency.write_bytes(subprocess.check_output(["git", "-C", str(root), "show", origin + ":src/engine/scalping/reversal_auxiliary_intraday.py"]))
+    elif fault == "dirty": dependency.write_bytes(dependency.read_bytes() + b"\n# unreviewed\n")
+    if fault is None:
+        assert set(handoff._verify_entry_code_delta(root, commit, origin, paths, expected)) == set(paths)
+    else:
+        with pytest.raises(ValueError): handoff._verify_entry_code_delta(root, commit, origin, paths, expected)

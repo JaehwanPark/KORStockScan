@@ -3763,6 +3763,19 @@ REVIEWED_COMMON_SUPPORT_PROFILE = {
     **{name: pair[1] for name, pair in REVIEWED_COMMON_SUPPORT_TRANSITION.items()},
 }
 
+# Complete common-support generation with the reviewed interrupted custody
+# transition owner. Historical roots retain their own original full profile.
+REVIEWED_INTERRUPTED_CUSTODY_TRANSITION = {
+    "src/engine/automation/ordered_intraday_deploy.py": (
+        "223c7f3346eb847fa6e1ea17895429a1d680fe5e4e56fd6b7c17d2249e6fd5dc",
+        "d048ed30b231a1076abaaaa79d85f4b655044307c201760ac067cb3e747375b6",
+    )
+}
+REVIEWED_INTERRUPTED_CUSTODY_PROFILE = {
+    **REVIEWED_COMMON_SUPPORT_PROFILE,
+    **{name: pair[1] for name, pair in REVIEWED_INTERRUPTED_CUSTODY_TRANSITION.items()},
+}
+
 
 def reviewed_preparation_pair(relative, old, current, *, root=None):
     # A predecessor comparison uses its selected origin; candidate comparisons
@@ -3770,6 +3783,22 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
     comparison_root = ROOT if root is None else Path(root)
     if not comparison_root.is_absolute() or comparison_root.resolve() != comparison_root:
         return False
+    interrupted_generation = any(
+        (comparison_root / name).is_file()
+        and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == pair[1]
+        for name, pair in REVIEWED_INTERRUPTED_CUSTODY_TRANSITION.items()
+    )
+    if interrupted_generation:
+        if any(
+            (comparison_root / name).is_symlink()
+            or not (comparison_root / name).is_file()
+            or _sha(comparison_root / name) != expected
+            for name, expected in REVIEWED_INTERRUPTED_CUSTODY_PROFILE.items()
+        ):
+            return False
+        if relative in REVIEWED_INTERRUPTED_CUSTODY_TRANSITION:
+            return (old, current) == REVIEWED_INTERRUPTED_CUSTODY_TRANSITION[relative]
     support_generation = any(
         (comparison_root / name).is_file()
         and not (comparison_root / name).is_symlink()
@@ -3781,7 +3810,8 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
             (comparison_root / name).is_symlink()
             or not (comparison_root / name).is_file()
             or _sha(comparison_root / name) != expected
-            for name, expected in REVIEWED_COMMON_SUPPORT_PROFILE.items()
+            for name, expected in (REVIEWED_INTERRUPTED_CUSTODY_PROFILE if interrupted_generation
+                                   else REVIEWED_COMMON_SUPPORT_PROFILE).items()
         ):
             return False
         if relative in REVIEWED_COMMON_SUPPORT_TRANSITION:
@@ -3799,7 +3829,8 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
             or not (comparison_root / name).is_file()
             or _sha(comparison_root / name) != expected
             for name, expected in (
-                REVIEWED_COMMON_SUPPORT_PROFILE if support_generation
+                REVIEWED_INTERRUPTED_CUSTODY_PROFILE if interrupted_generation
+                else REVIEWED_COMMON_SUPPORT_PROFILE if support_generation
                 else REVIEWED_STOP_INCIDENT_PROFILE
             ).items()
         ):
@@ -3825,7 +3856,7 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
         # Authenticate a complete issued generation before interpreting a pair.
         # The current reader may compare a genuine earlier selected generation;
         # an overlapping source trigger cannot turn it into the latest profile.
-        for profile in (REVIEWED_COMMON_SUPPORT_PROFILE,
+        for profile in (REVIEWED_INTERRUPTED_CUSTODY_PROFILE, REVIEWED_COMMON_SUPPORT_PROFILE,
                         REVIEWED_STOP_INCIDENT_PROFILE,
                         REVIEWED_SUBMISSION_MONITOR_PROFILE,
                         REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE):

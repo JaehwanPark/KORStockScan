@@ -13895,6 +13895,35 @@ REVIEWED_COMMON_SUPPORT_PAIRS[
     REVIEWED_COMMON_SUPPORT_HASHES["src/engine/infrastructure/startup_validation_code_context.py"],
 )}
 
+REVIEWED_INTERRUPTED_CUSTODY_HASHES = {
+    **{name: pair[1] for name, pair in _preparation_code.REVIEWED_INTERRUPTED_CUSTODY_TRANSITION.items()},
+    "src/engine/infrastructure/startup_validation_code_context.py":
+        "4603eddbd2477548aa383eaed6d8bb02ad26ea1e6197a6d9e48fe4d52102ffae",
+}
+REVIEWED_INTERRUPTED_CUSTODY_PROFILE = {
+    **REVIEWED_COMMON_SUPPORT_PROFILE, **REVIEWED_INTERRUPTED_CUSTODY_HASHES,
+}
+REVIEWED_INTERRUPTED_CUSTODY_VARIANTS = {
+    (key[0], REVIEWED_INTERRUPTED_CUSTODY_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_sha256": REVIEWED_INTERRUPTED_CUSTODY_HASHES.get(value["selector_path"], value["selector_sha256"]),
+        "dependencies": {name: REVIEWED_INTERRUPTED_CUSTODY_HASHES.get(name, sha)
+                         for name, sha in value["dependencies"].items()},
+        "contract_extensions": {
+            origin: {name: REVIEWED_INTERRUPTED_CUSTODY_HASHES.get(os.path.normpath(name), sha)
+                     for name, sha in members.items()}
+            for origin, members in value["contract_extensions"].items()},
+    }
+    for key, value in REVIEWED_COMMON_SUPPORT_VARIANTS.items()
+}
+REVIEWED_INTERRUPTED_CUSTODY_PAIRS = {
+    name: {(origin, current) for origin in (
+        {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
+        | {REVIEWED_COMMON_SUPPORT_PROFILE[name]}
+    ) if origin != current}
+    for name, current in REVIEWED_INTERRUPTED_CUSTODY_HASHES.items()
+}
+
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
@@ -15090,6 +15119,11 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         and hashlib.sha256(source).hexdigest() == pair[1]
         for name, pair in _preparation_code.REVIEWED_COMMON_SUPPORT_TRANSITION.items()
     )
+    interrupted_custody_present = any(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == pair[1]
+        for name, pair in _preparation_code.REVIEWED_INTERRUPTED_CUSTODY_TRANSITION.items()
+    )
     if common_support_present or stop_incident_present or prior_monitor_present or any(
         (source := candidate_bytes(name, optional=True)) is not None
         and hashlib.sha256(source).hexdigest() == sha
@@ -15099,7 +15133,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         # original contract omits one of the historical dependency triggers.
         # A new/partial consumer inventory must not silently skip the census.
         for name, sha in (
-            REVIEWED_COMMON_SUPPORT_PROFILE if common_support_present
+            REVIEWED_INTERRUPTED_CUSTODY_PROFILE if interrupted_custody_present
+            else REVIEWED_COMMON_SUPPORT_PROFILE if common_support_present
             else REVIEWED_STOP_INCIDENT_PROFILE if stop_incident_present
             else REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE if prior_monitor_present
             else REVIEWED_SUBMISSION_MONITOR_PROFILE
@@ -15109,11 +15144,13 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                 raise ValueError("entry_consumer_reviewed_dependency_unreviewed:" + name)
             if source != revision_bytes(commit, name):
                 raise ValueError("entry_consumer_reviewed_dependency_dirty:" + name)
-        prepared_hashes = (REVIEWED_COMMON_SUPPORT_PROFILE if common_support_present
+        prepared_hashes = (REVIEWED_INTERRUPTED_CUSTODY_PROFILE if interrupted_custody_present
+                           else REVIEWED_COMMON_SUPPORT_PROFILE if common_support_present
                            else REVIEWED_STOP_INCIDENT_PROFILE if stop_incident_present
                            else REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE if prior_monitor_present
                            else REVIEWED_SUBMISSION_MONITOR_PROFILE)
-        prepared_variants = (REVIEWED_COMMON_SUPPORT_VARIANTS if common_support_present
+        prepared_variants = (REVIEWED_INTERRUPTED_CUSTODY_VARIANTS if interrupted_custody_present
+                             else REVIEWED_COMMON_SUPPORT_VARIANTS if common_support_present
                              else REVIEWED_STOP_INCIDENT_VARIANTS if stop_incident_present
                              else REVIEWED_SUBMISSION_MONITOR_PRIOR_VARIANTS if prior_monitor_present
                              else REVIEWED_SUBMISSION_MONITOR_VARIANTS)
@@ -15554,7 +15591,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
         if (
-            pair in REVIEWED_COMMON_SUPPORT_PAIRS.get(repository_name(name), ())
+            pair in REVIEWED_INTERRUPTED_CUSTODY_PAIRS.get(repository_name(name), ())
+            or pair in REVIEWED_COMMON_SUPPORT_PAIRS.get(repository_name(name), ())
             or pair in REVIEWED_STOP_INCIDENT_PAIRS.get(repository_name(name), ())
             or pair in REVIEWED_SUBMISSION_MONITOR_PAIRS.get(repository_name(name), ())
             or pair in REVIEWED_SUBMISSION_MONITOR_PRIOR_PAIRS.get(repository_name(name), ())

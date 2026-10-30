@@ -4590,7 +4590,10 @@ def test_common_support_successor_requires_complete_preparation_generation(tmp_p
     for name, expected in C.REVIEWED_COMMON_SUPPORT_PROFILE.items():
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes((ROOT / name).read_bytes())
+        raw = (ROOT / name).read_bytes()
+        if hashlib.sha256(raw).hexdigest() != expected:
+            raw = subprocess.check_output(["git", "-C", str(ROOT), "show", "73efe4115:" + name])
+        path.write_bytes(raw)
         assert C._sha(path) == expected
     relative, (old, current) = next(iter(C.REVIEWED_COMMON_SUPPORT_TRANSITION.items()))
     dependency = tmp_path / "src/engine/scalping/main_stop_quantity_source.py"
@@ -4609,3 +4612,19 @@ def test_common_support_successor_requires_complete_preparation_generation(tmp_p
     elif fault == "future":
         current = "f" * 64
     assert C.reviewed_preparation_pair(relative, old, current, root=tmp_path) is (fault is None)
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "mixed", "origin", "future"])
+def test_interrupted_custody_requires_complete_combined_generation(tmp_path, fault):
+    for name, expected in C.REVIEWED_INTERRUPTED_CUSTODY_PROFILE.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((ROOT / name).read_bytes())
+        assert C._sha(path) == expected
+    name, (old, current) = next(iter(C.REVIEWED_INTERRUPTED_CUSTODY_TRANSITION.items()))
+    dependency = tmp_path / "src/engine/scalping/reversal_auxiliary_intraday.py"
+    if fault == "missing": dependency.unlink()
+    elif fault == "mixed": dependency.write_bytes(subprocess.check_output(["git", "-C", str(ROOT), "show", "3e3d5da2c:src/engine/scalping/reversal_auxiliary_intraday.py"]))
+    elif fault == "origin": old = "0" * 64
+    elif fault == "future": current = "f" * 64
+    assert C.reviewed_preparation_pair(name, old, current, root=tmp_path) is (fault is None)
