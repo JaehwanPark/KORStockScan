@@ -1268,6 +1268,7 @@ def _observer_lifecycle_diagnostic(row, receipt):
         from src.engine.scalping.continuous_reversal import good_quote
         from src.engine.scalping.reversal_extended_catalog import cell_key
         from src.engine.scalping.entry_machine_source_recovery import _digest
+        from src.engine.scalping.entry_deadline import LEGACY_SIGNAL_MAX_AGE_SEC
 
         root = receipt["original_root"]
         selection = receipt["native_selection"]
@@ -1368,7 +1369,12 @@ def _observer_lifecycle_diagnostic(row, receipt):
             or not at
             < receipt["original_deadline_epoch"]
             == life["original_deadline"]
-            == root["epoch"] + 5
+            # Older rejection receipts do not include the issued lifetime
+            # policy.  They can still prove a terminal within the original
+            # legacy observation window, provided both native records agree
+            # on a deadline that has not elapsed.  Do not infer or extend the
+            # deadline, or classify later events without their policy proof.
+            or not at < root["epoch"] + LEGACY_SIGNAL_MAX_AGE_SEC
             or trace_at - at > 5
             or latest[0] != ended
             or not good_quote(latest)

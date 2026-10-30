@@ -1709,17 +1709,63 @@ def test_hold_rejection_consumes_exact_native_terminal_only(
 
 
 @pytest.mark.parametrize(
+    "mode, expected",
+    [
+        ("extended", "reversal_first_price_hold_invalidated"),
+        ("conflicting_deadlines", None),
+        ("after_legacy_window", None),
+        ("past_issued_deadline", None),
+    ],
+)
+@pytest.mark.parametrize(
+    "hold_invalidation",
+    ["manual_cumulative_59846db468e4602a246ef839"],
+    indirect=True,
+)
+def test_observer_lifetime_classification_preserves_issued_boundary(
+    hold_invalidation, monkeypatch, mode, expected
+):
+    from src.engine.monitoring.submission_bottleneck_monitor import (
+        _reversal_lifecycle_diagnostic,
+    )
+    from src.engine.scalping.entry_machine_source_recovery import _digest
+
+    trace = _hold_rejection(hold_invalidation, monkeypatch)
+    receipt = trace["continuous_reversal_rejected_claim_receipt"]
+    selection = receipt["native_selection"]
+    life = selection["original_signal_lifecycle"]
+    receipt["original_deadline_epoch"] = T + 9.6
+    life["original_deadline"] = T + 9.6
+    if mode == "conflicting_deadlines":
+        life["original_deadline"] = T + 8
+    elif mode == "after_legacy_window":
+        receipt["observed_epoch"] = selection["observed_epoch"] = T + 5.1
+        selection["native_last_received_epoch"] = T + 5
+        trace["decision_ts"] = K.iso(T + 5.2)
+    elif mode == "past_issued_deadline":
+        receipt["original_deadline_epoch"] = life["original_deadline"] = T + 0.15
+    receipt["sha256"] = _digest({k: v for k, v in receipt.items() if k != "sha256"})
+    assert _reversal_lifecycle_diagnostic(trace) == expected
+
+
+@pytest.mark.parametrize(
     "hold_invalidation",
     ["manual_residual_0d7e29b0230e5b49", "manual_cumulative_59846db468e4602a246ef839"],
     indirect=True,
 )
+@pytest.mark.parametrize("lifetime", [5, 9.6])
 def test_same_hold_attempt_probe_and_trace_are_diagnostics_not_source_loss(
-    hold_invalidation, monkeypatch, tmp_path
+    hold_invalidation, monkeypatch, tmp_path, lifetime
 ):
     from src.engine.monitoring import submission_bottleneck_monitor as monitor
+    from src.engine.scalping.entry_machine_source_recovery import _digest
     from src.tests.test_submission_bottleneck_monitor import _source_gap_files
 
     trace = _hold_rejection(hold_invalidation, monkeypatch)
+    receipt = trace["continuous_reversal_rejected_claim_receipt"]
+    receipt["original_deadline_epoch"] = T + lifetime
+    receipt["native_selection"]["original_signal_lifecycle"]["original_deadline"] = T + lifetime
+    receipt["sha256"] = _digest({k: v for k, v in receipt.items() if k != "sha256"})
     probe = dict(
         emitted_at=K.iso(T + 0.4),
         pipeline="ENTRY_PIPELINE",
@@ -1733,7 +1779,7 @@ def test_same_hold_attempt_probe_and_trace_are_diagnostics_not_source_loss(
                 observer_pid=R.os.getpid(),
                 observer_start_ticks=R._PROCESS_START_TICKS,
                 family_sha256="a" * 64,
-                deadline_epoch=T + 5,
+                deadline_epoch=T + lifetime,
             ),
             zero_base_route=trace["market_data_route"],
             zero_base_machine_contract_error=trace["machine_contract_error"],
