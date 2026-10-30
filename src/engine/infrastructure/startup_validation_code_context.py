@@ -3896,6 +3896,12 @@ REVIEWED_STORAGE_ADMISSION_PROFILE = {
 # The current artifact reader consumes the native schedule resolver as well as
 # the detector. Require both physical sources; preserve every issued profile.
 REVIEWED_POSTCLOSE_SCHEDULE_TRANSITION = {
+    'src/engine/monitoring/runtime_performance.py': (
+        '397c11bf4cc06f74b2d904afe187d765284e543c17d27ed1cf92f8bd5b86640a',
+        'c2f66441d70493f9ada0cae40a465d167fc6315007365b276fd63e3ecd6ceeaf'),
+    'src/engine/monitoring/submission_bottleneck_monitor.py': (
+        '858db84b920533dc4fa39430a5ea70468dae92c0552924582624e20154b2f240',
+        'e79c7463023e24ff89c1ffc5b4cd1fa5f11183033b686f8bf4a49b9a6622122a'),
     "src/engine/automation/ordered_intraday_deploy.py": (
         "1585a3085529d6ab3c86fcac108e2bddb24b1c524aa5f62c62e83e0fbe98dddc",
         "0170cd63bbc0b62e7a83e78845d527226a24ecc6a32be99eda1371fe680abae4"),
@@ -3906,8 +3912,14 @@ REVIEWED_POSTCLOSE_SCHEDULE_TRANSITION = {
         "e7984bb957012a7bad59e58c6d81fcb274986a8b0c4bc4738c7cc01fca726273",
         "75784baa8b7b0fd1903b94559ad4393a8fb8a73f915bf17025664220fce701a2"),
 }
+REVIEWED_POSTCLOSE_NATIVE_HOLD_DEPENDENCIES = {
+    'src/engine/scalping/entry_deadline.py': 'd976f683b52d6235b6fa8739f4123c7f667ae12bcb1a2c54d8bb2b6c606ec819',
+    "src/engine/scalping/reversal_cumulative_runtime.py": "8efef32edd2cfd4d5b442a223b3ec07fe8d04a97325a14e969dbd0286b345d21",
+    "src/engine/scalping/reversal_cumulative_catalog.py": "4a55f8c4fe8535e733faa48d4dc5665f1797275891a342f8617af87ad7b51139",
+}
 REVIEWED_POSTCLOSE_SCHEDULE_PROFILE = {
     **REVIEWED_STORAGE_ADMISSION_PROFILE,
+    **REVIEWED_POSTCLOSE_NATIVE_HOLD_DEPENDENCIES,
     **{name: pair[1] for name, pair in REVIEWED_POSTCLOSE_SCHEDULE_TRANSITION.items()},
 }
 

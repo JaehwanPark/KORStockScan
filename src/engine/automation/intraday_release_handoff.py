@@ -14251,10 +14251,16 @@ for _name, _current in REVIEWED_STORAGE_ADMISSION_HASHES.items():
 REVIEWED_POSTCLOSE_SCHEDULE_HASHES = {
     **{name: pair[1] for name, pair in _preparation_code.REVIEWED_POSTCLOSE_SCHEDULE_TRANSITION.items()},
     "src/engine/infrastructure/startup_validation_code_context.py":
-        "55d983d83c4c706d25aa4f3d2fda642b4f5d0c42ee5c9735c26d715d11950020",
+        "1558f92184cf6714795afafac8da4dbb4c2f63ec84fb0b4ce7727586f2ead92d",
+}
+REVIEWED_POSTCLOSE_NATIVE_HOLD_DEPENDENCIES = {
+    'src/engine/scalping/entry_deadline.py': 'd976f683b52d6235b6fa8739f4123c7f667ae12bcb1a2c54d8bb2b6c606ec819',
+    "src/engine/scalping/reversal_cumulative_runtime.py": "9dc374d6f3d16964f460af70bec3ca01de19a3b3573084a76f2b99384e66b32e",
+    "src/engine/scalping/reversal_cumulative_catalog.py": "ae9ea88415044fb5d688a11f7975e698d9536475d7f3ee11f3e88b5c7eeec161",
 }
 REVIEWED_POSTCLOSE_SCHEDULE_PROFILE = {
     **REVIEWED_STORAGE_ADMISSION_PROFILE, **REVIEWED_POSTCLOSE_SCHEDULE_HASHES,
+    **REVIEWED_POSTCLOSE_NATIVE_HOLD_DEPENDENCIES,
 }
 REVIEWED_POSTCLOSE_SCHEDULE_VARIANTS = {
     (key[0], REVIEWED_POSTCLOSE_SCHEDULE_HASHES.get(key[0], key[1])): {

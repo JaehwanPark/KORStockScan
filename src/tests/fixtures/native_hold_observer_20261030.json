@@ -1,0 +1,348 @@
+{
+  "original_line_sha256": "3b9dab8ddc42964c493a5bb11a0f76d9e80f5d64be024d6ae7b2f0c78a966173",
+  "scope": "Exact native rejection and the trace fields read by its diagnostic consumer; no account/provider/order authority",
+  "row": {
+    "schema": "ai_decision_trace_v1",
+    "stock_code": "328130",
+    "decision_stage": "entry_screen",
+    "decision_ts": "2026-10-30T18:26:04.593051+09:00",
+    "action": "DROP",
+    "result_source": "mechanistic_pre_adjudication_rejected",
+    "provider_called": false,
+    "machine_evaluation_status": "assessment_contract_invalid",
+    "machine_contract_error": "machine_source_quote_observer_native_root_changed",
+    "evaluation_attempt_id": "aims-e0a77fd3c288c5f832bf",
+    "machine_bundle_sha256": "3e2586485ac4a7c9432d9750238bde0b4b475170ff4d2d0c5ffdfe2f73cbaf76",
+    "async_producer_pid": null,
+    "async_producer_start_ticks": null,
+    "continuous_reversal_rejected_claim_receipt": {
+      "schema": "entry_source_quote_observer_rejection_v1",
+      "status": "observed",
+      "failure_cause": "machine_source_quote_observer_native_root_changed",
+      "evaluation_attempt_id": "aims-e0a77fd3c288c5f832bf",
+      "machine_bundle_sha256": "3e2586485ac4a7c9432d9750238bde0b4b475170ff4d2d0c5ffdfe2f73cbaf76",
+      "process_pid": 1521909,
+      "process_start_ticks": "99553153",
+      "family_sha256": "734d7370d8263ebae26f7a854a0c1a47741e6dc7e3dfe9725a716285495721d1",
+      "observed_epoch": 1793352364.5917754,
+      "original_deadline_epoch": 1793352372.6501389,
+      "original_root": {
+        "symbol": "328130",
+        "venue": "SOR",
+        "market": "AFTER",
+        "event_id": "2026-10-30:SOR:SOR_AFTERMARKET:328130:1793351011967107:131",
+        "signal_id": "2026-10-30:SOR:SOR_AFTERMARKET:328130:1793351011967107:131",
+        "epoch": 1793352363.050139,
+        "native_epoch": 1793351011967107,
+        "native_sequence": 131,
+        "source_item": "328130_AL",
+        "entry_ask": 15420,
+        "branch_signals": {
+          "manual_cumulative_59846db468e4602a246ef839": {
+            "event_id": "2026-10-30:SOR:SOR_AFTERMARKET:328130:1793351011967107:131",
+            "signal_id": "2026-10-30:SOR:SOR_AFTERMARKET:328130:1793351011967107:131",
+            "symbol": "328130",
+            "venue": "SOR",
+            "session": "SOR_AFTERMARKET",
+            "market": "AFTER",
+            "source_item": "328130_AL",
+            "epoch": 1793352363.050139,
+            "at": "2026-10-30T18:26:03.050+09:00",
+            "confirmation_price": 15430.0,
+            "entry_ask": 15420,
+            "spread_pct": 0.06480881399870382,
+            "drawdown_5m_pct": 0.0,
+            "volume_ratio_60s": null,
+            "branch_features": {
+              "ret": 0.06485084306095956,
+              "session": -1.7823042647994947,
+              "vwap": 0.1135442011354515,
+              "buy10": 64.28571428571429,
+              "volume": null,
+              "dd": 0.0,
+              "structure": "MIXED",
+              "spread": 0.06480881399870382
+            },
+            "native_epoch": 1793351011967107,
+            "native_sequence": 131,
+            "registry_generation": "fd7692f128b5205beb8b2456ac4d6c6c7c7459154dec6d885bea2ca4e585ff5f",
+            "extended_definition_id": "manual_cumulative_59846db468e4602a246ef839",
+            "branch_definition_sha256": "59846db468e4602a246ef839350986444207ae5ba3c78e758833de11065e82ec",
+            "decision_phase": "FIRST_PRICE_HOLD",
+            "signal_kind": "FIRST_PRICE_HOLD",
+            "signal_proof": {
+              "root_confirmation": "FIRST_HOLD3",
+              "root_contract": {
+                "signal": "native_first_turn",
+                "confirmation": "HOLD",
+                "condition_trigger": "native_first_turn",
+                "hold_seconds": 3
+              },
+              "epoch": 1793352359.34972,
+              "price": 15430.0,
+              "native_epoch": 1793351011967107,
+              "native_sequence": 129,
+              "previous_condition": true,
+              "minimum_price": 15430.0,
+              "low": 15420.0,
+              "anchor_event_id": "2026-10-30:SOR:SOR_AFTERMARKET:328130:1793351011967107:129",
+              "feature_version": "manual_cumulative_confirmation_prefix_v2"
+            }
+          },
+          "manual_cumulative_6824067d3769bdd90d25759a": {
+            "event_id": "2026-10-30:SOR:SOR_AFTERMARKET:328130:1793351011967107:131",
+            "signal_id": "2026-10-30:SOR:SOR_AFTERMARKET:328130:1793351011967107:131",
+            "symbol": "328130",
+            "venue": "SOR",
+            "session": "SOR_AFTERMARKET",
+            "market": "AFTER",
+            "source_item": "328130_AL",
+            "epoch": 1793352363.050139,
+            "at": "2026-10-30T18:26:03.050+09:00",
+            "confirmation_price": 15430.0,
+            "entry_ask": 15420,
+            "spread_pct": 0.06480881399870382,
+            "drawdown_5m_pct": 0.0,
+            "volume_ratio_60s": null,
+            "branch_features": {
+              "ret": 0.06485084306095956,
+              "session": -1.7823042647994947,
+              "vwap": 0.1135442011354515,
+              "buy10": 64.28571428571429,
+              "volume": null,
+              "dd": 0.0,
+              "structure": "MIXED",
+              "spread": 0.06480881399870382
+            },
+            "decision_phase": "FIRST_PRICE_HOLD",
+            "signal_kind": "FIRST_PRICE_HOLD",
+            "signal_proof": {
+              "root_contract": {
+                "signal": "original_confirmation"
+              },
+              "original_definition_ref": {
+                "branch_id": "manual_residual_503ffaf24ebfe783",
+                "definition_sha256": "503ffaf24ebfe783ad5bd46467244775666230c86ef831c3291a9c33c5edbac2"
+              },
+              "original_confirmation": {
+                "event_id": "2026-10-30:SOR:SOR_AFTERMARKET:328130:1793351011967107:131",
+                "signal_id": "2026-10-30:SOR:SOR_AFTERMARKET:328130:1793351011967107:131",
+                "symbol": "328130",
+                "venue": "SOR",
+                "session": "SOR_AFTERMARKET",
+                "market": "AFTER",
+                "source_item": "328130_AL",
+                "epoch": 1793352363.050139,
+                "at": "2026-10-30T18:26:03.050+09:00",
+                "confirmation_price": 15430.0,
+                "entry_ask": 15420,
+                "spread_pct": 0.06480881399870382,
+                "drawdown_5m_pct": 0.0,
+                "volume_ratio_60s": null,
+                "branch_features": {
+                  "ret60": 0.06485084306095956,
+                  "session": -1.7823042647994947,
+                  "low_rising": false,
+                  "session_anchor_epoch": 1793343602.237,
+                  "session_anchor_price": 15710.0,
+                  "ret": 0.06485084306095956,
+                  "structure": "MIXED",
+                  "session_trend": "DOWN",
+                  "high_rising": true,
+                  "vwap": 0.1135442011354515,
+                  "buy10": 64.28571428571429,
+                  "dd": 0.0,
+                  "volume": null
+                },
+                "decision_phase": "FIRST_PRICE_HOLD",
+                "signal_kind": "FIRST_PRICE_HOLD",
+                "signal_proof": {
+                  "bid": "manual_residual_503ffaf24ebfe783",
+                  "epoch": 1793352359.34972,
+                  "price": 15430.0,
+                  "native_sequence": 129,
+                  "native_epoch": 1793351011967107,
+                  "anchor_event_id": "2026-10-30:SOR:SOR_AFTERMARKET:328130:1793351011967107:129",
+                  "low": 15420.0,
+                  "peak": 15430.0,
+                  "minimum_price": 15430.0,
+                  "root_contract": {
+                    "comparison": "greater_or_equal_original_first_price",
+                    "confirmation": "FIRST_PRICE_HOLD",
+                    "confirmation_tick": "first_received_at_or_after_hold",
+                    "hold_seconds": 3,
+                    "maximum_wait_seconds": null,
+                    "pending_limit": "existing_MAX_PENDING",
+                    "signal": "native_first_turn",
+                    "source_continuity": "same_native_interval_and_epoch"
+                  },
+                  "confirmation_sequence": 131
+                },
+                "native_epoch": 1793351011967107,
+                "native_sequence": 131,
+                "registry_generation": "fd7692f128b5205beb8b2456ac4d6c6c7c7459154dec6d885bea2ca4e585ff5f",
+                "branch_definition_sha256": "503ffaf24ebfe783ad5bd46467244775666230c86ef831c3291a9c33c5edbac2",
+                "extended_definition_id": "manual_residual_503ffaf24ebfe783"
+              },
+              "refinement_truth": "UNKNOWN",
+              "feature_version": "manual_cumulative_confirmation_prefix_v2",
+              "refinement_features": {
+                "ret": 0.06485084306095956,
+                "session": -1.7823042647994947,
+                "vwap": 0.1135442011354515,
+                "buy10": 64.28571428571429,
+                "volume": null,
+                "dd": 0.0,
+                "structure": "MIXED",
+                "spread": 0.06480881399870382
+              }
+            },
+            "native_epoch": 1793351011967107,
+            "native_sequence": 131,
+            "registry_generation": "fd7692f128b5205beb8b2456ac4d6c6c7c7459154dec6d885bea2ca4e585ff5f",
+            "branch_definition_sha256": "6824067d3769bdd90d25759ac445f176a1e4b78fb1c95486657cf296f7752894",
+            "extended_definition_id": "manual_cumulative_6824067d3769bdd90d25759a"
+          }
+        },
+        "registry_generation": "fd7692f128b5205beb8b2456ac4d6c6c7c7459154dec6d885bea2ca4e585ff5f",
+        "confirmation_price": 15430.0
+      },
+      "current_root": null,
+      "native_selection": {
+        "schema": "native_observation_selection_v1",
+        "observed_epoch": 1793352364.5917754,
+        "evaluation_role": "probe_observation",
+        "process_pid": 1521909,
+        "process_start_ticks": "99553153",
+        "item": "328130_AL",
+        "venue": "SOR",
+        "family_sha256": "734d7370d8263ebae26f7a854a0c1a47741e6dc7e3dfe9725a716285495721d1",
+        "reason": "no_matching_pattern",
+        "runtime_effect": false,
+        "raw_ready_count": 0,
+        "selected_ready_count": 0,
+        "selected_scope": "other_non_fixed|AFTER|LT_20000",
+        "scope_execution_hash": "fd7692f128b5205beb8b2456ac4d6c6c7c7459154dec6d885bea2ca4e585ff5f",
+        "selected_branch_truth": {
+          "manual_cumulative_5201661cf56a82183fd53a52": "FALSE",
+          "manual_cumulative_59846db468e4602a246ef839": "FALSE",
+          "manual_cumulative_6824067d3769bdd90d25759a": "FALSE",
+          "manual_cumulative_be9df87d7e19e6799fe53b39": "FALSE"
+        },
+        "native_epoch": 1793351011967107,
+        "native_sequence": 132,
+        "native_last_received_epoch": 1793352364.551188,
+        "native_source_current": true,
+        "native_quote_current": true,
+        "observed_seconds": 65.4009039402008,
+        "selected_pending_count": 2,
+        "selected_lifecycle_counts": {
+          "manual_cumulative_5201661cf56a82183fd53a52": {
+            "TRUE": 0,
+            "FALSE": 27,
+            "UNKNOWN": 1
+          },
+          "manual_cumulative_59846db468e4602a246ef839": {
+            "TRUE": 1,
+            "FALSE": 25,
+            "UNKNOWN": 2
+          },
+          "manual_cumulative_6824067d3769bdd90d25759a": {
+            "TRUE": 1,
+            "FALSE": 24,
+            "UNKNOWN": 3
+          },
+          "manual_cumulative_be9df87d7e19e6799fe53b39": {
+            "TRUE": 0,
+            "FALSE": 23,
+            "UNKNOWN": 5
+          }
+        },
+        "source_censored_count": 0,
+        "original_signal_lifecycle": {
+          "epoch": 1793352363.050139,
+          "original_deadline": 1793352372.6501389,
+          "signal_id": "2026-10-30:SOR:SOR_AFTERMARKET:328130:1793351011967107:131",
+          "native_event_id": "2026-10-30:SOR:SOR_AFTERMARKET:328130:1793351011967107:131",
+          "native_epoch": 1793351011967107,
+          "native_sequence": 131,
+          "branch_membership": {
+            "manual_cumulative_59846db468e4602a246ef839": null,
+            "manual_cumulative_6824067d3769bdd90d25759a": null
+          },
+          "branch_hold_floors": {
+            "manual_cumulative_59846db468e4602a246ef839": 15430.0,
+            "manual_cumulative_6824067d3769bdd90d25759a": null
+          },
+          "selector_claimed": false,
+          "family_sha256": "734d7370d8263ebae26f7a854a0c1a47741e6dc7e3dfe9725a716285495721d1",
+          "process_pid": 1521909,
+          "process_start_ticks": "99553153",
+          "bundle_sha256": "3e2586485ac4a7c9432d9750238bde0b4b475170ff4d2d0c5ffdfe2f73cbaf76",
+          "scope": [
+            "328130",
+            "SOR",
+            "328130_AL",
+            "AFTER",
+            "2026-10-30",
+            "other_non_fixed|AFTER|LT_20000"
+          ],
+          "scope_execution_hash": "fd7692f128b5205beb8b2456ac4d6c6c7c7459154dec6d885bea2ca4e585ff5f",
+          "claimed": false,
+          "first_native_seen": 1793352363.050139,
+          "first_seen_perf": 996909.697705325,
+          "terminal": "unobservable",
+          "first_eligible_seen": 1793352363.050139,
+          "last_eligible_seen": 1793352363.050139,
+          "first_ineligible_seen": 1793352364.551188,
+          "main_first_visit": null,
+          "claim_attempt": null,
+          "claimed_epoch": null,
+          "last_observed_sequence": 132,
+          "continuous_ingress": true,
+          "latest_native_observation": [
+            1793352364.551188,
+            1793351011967107,
+            132,
+            15420.0,
+            15410,
+            15420,
+            32,
+            1,
+            1,
+            "328130_AL",
+            0
+          ],
+          "ready_membership_present": false,
+          "branch_survival": {
+            "manual_cumulative_59846db468e4602a246ef839": true,
+            "manual_cumulative_6824067d3769bdd90d25759a": true
+          },
+          "first_eligible_perf": 996909.697717841,
+          "main_phase_at_first_eligible": {
+            "name": "idle_wait",
+            "epoch": 1793352362.8186893,
+            "perf": 996909.464647018,
+            "code": null
+          },
+          "native_wake_event_installed": true,
+          "terminal_reason": "ready_removed_without_terminal_receipt",
+          "transition_interval": [
+            1793352363.050139,
+            1793352364.551188
+          ]
+        }
+      },
+      "runtime_effect": false,
+      "allowed_runtime_apply": false,
+      "actual_order_submitted": false,
+      "broker_order_forbidden": true,
+      "sha256": "4a67e071387d3fc3c50992607ca74dcc733a4a3af3410302dd8b591904012928"
+    },
+    "actual_order_submitted": false,
+    "runtime_effect": false,
+    "allowed_runtime_apply": false,
+    "broker_order_forbidden": true,
+    "market_data_route": "krx_nxt_integrated"
+  }
+}

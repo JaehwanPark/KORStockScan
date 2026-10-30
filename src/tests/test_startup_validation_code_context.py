@@ -4902,3 +4902,23 @@ def test_interrupted_prior_selected_generation_retains_native_reader(tmp_path, f
     if fault == "missing": dependency.unlink()
     elif fault == "mixed": dependency.write_bytes(subprocess.check_output(["git", "-C", str(ROOT), "show", "3e3d5da2c:src/engine/scalping/reversal_auxiliary_intraday.py"]))
     assert C.reviewed_preparation_pair(name, old, current, root=tmp_path) is (fault is None)
+
+
+@pytest.mark.parametrize("relative", sorted(C.REVIEWED_POSTCLOSE_NATIVE_HOLD_DEPENDENCIES))
+@pytest.mark.parametrize("fault", ["missing", "unknown"])
+def test_native_hold_direct_dependencies_reach_both_code_readers(current_releases, relative, fault):
+    release = current_releases
+    root = release["root"]
+    path = root / relative
+    original = path.read_bytes()
+    detector = "src/engine/error_detectors/artifact_freshness.py"
+    old, current = C.REVIEWED_POSTCLOSE_SCHEDULE_TRANSITION[detector]
+    try:
+        if fault == "missing": path.unlink()
+        else: path.write_bytes(b"unreviewed native hold dependency\n")
+        assert not C.reviewed_preparation_pair(detector, old, current, root=root)
+        expected = "entry_consumer_code_source_missing:" if fault == "missing" else "entry_consumer_reviewed_dependency_unreviewed:"
+        with pytest.raises(ValueError, match=expected):
+            H._verify_entry_code_delta(root,release["commit"],release["original_commit"],release["paths"],release["expected"])
+    finally:
+        path.write_bytes(original)

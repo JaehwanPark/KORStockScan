@@ -801,8 +801,28 @@ def test_native_wake_only_first_eligibility_and_no_authority(native, monkeypatch
     assert not event.is_set()
 
 
-def test_worker_rechecks_generation_before_physical_registration(monkeypatch):
-    from src.engine import kiwoom_sniper_v2 as main
+@pytest.fixture
+def main_worker(monkeypatch):
+    # These worker races do not use the optional scanner/model initializer.
+    # Keep the real Main functions without an unrelated model import writing
+    # to the source checkout. Unexpected scanner use has no fake success.
+    import sys
+    from types import ModuleType
+
+    monkeypatch.setitem(
+        sys.modules,
+        "src.scanners.final_ensemble_scanner",
+        ModuleType("src.scanners.final_ensemble_scanner"),
+    )
+    from src.engine import kiwoom_sniper_v2
+
+    return kiwoom_sniper_v2
+
+
+def test_worker_rechecks_generation_before_physical_registration(
+    monkeypatch, main_worker
+):
+    main = main_worker
 
     current = {"ready": True, "runtime_generation": "one"}
     tasks, results = [], []
@@ -1255,8 +1275,10 @@ def test_bad_quote_cannot_be_labeled_as_delivery_miss(native):
     assert observe(native)["terminal"] == "source_or_guard_blocked_before_claim"
 
 
-def test_readiness_race_releases_only_before_any_physical_worker(monkeypatch):
-    from src.engine import kiwoom_sniper_v2 as main
+def test_readiness_race_releases_only_before_any_physical_worker(
+    monkeypatch, main_worker
+):
+    main = main_worker
 
     monkeypatch.setattr(main, "_zero_base_runtime_enabled", lambda: True)
     monkeypatch.setattr(main, "_zero_base_active_conflict", lambda code: False)
@@ -1451,6 +1473,15 @@ def hold_invalidation(native, monkeypatch, request):
             )
         },
     )
+    from src.engine.scalping.reversal_cumulative_catalog import REFINEMENTS
+
+    if bid in REFINEMENTS:
+        event["branch_signals"][bid]["signal_proof"] = {
+            "original_confirmation": {
+                "decision_phase": "FIRST_PRICE_HOLD",
+                "signal_proof": {"price": 100100},
+            }
+        }
     state.ready.append(dict(event=deepcopy(event), claimed=False, path_inputs={}))
     carried = SimpleNamespace(
         _LOCK=threading.RLock(), _STATES={}, _GENERATION="d" * 64, __name__="registered"
@@ -1555,26 +1586,66 @@ def test_hold_terminal_never_upgrades_invalid_or_unobserved_source(
     assert life["terminal_reason"] != "first_price_hold_breached"
 
 
-def _hold_rejection(hold_invalidation, monkeypatch):
+def _hold_rejection(hold_invalidation, monkeypatch, *, lifetime=None, breach_seq=1):
     from src.engine.scalping import entry_machine_source_recovery as recovery
 
     backend, state, event, tick = hold_invalidation
-    tick(1, 100000)
+    from src.engine.scalping.entry_deadline import (
+        bind_signal_lifetime,
+        signal_deadline_epoch,
+    )
+
+    if lifetime is not None:
+        monkeypatch.setattr(D.time, "time", lambda: T)
+        bind_signal_lifetime(
+            event,
+            {
+                "schema": "entry_signal_lifetime_policy_v1",
+                "version": "native-diagnostic-fixture-v1",
+                "max_signal_age_sec": lifetime,
+            },
+            live_clock=True,
+        )
+        state.ready[0]["event"] = deepcopy(event)
+        R._SELECTED_READY.clear()
+        R._ACTIVE_SELECTED.clear()
+        R.record_native_ready(
+            backend,
+            event["symbol"],
+            event["venue"],
+            event["source_item"],
+            event["market"],
+            T,
+        )
+        for seq in range(1, breach_seq):
+            tick(seq, 100100)
+            R.record_native_ready(
+                backend,
+                event["symbol"],
+                event["venue"],
+                event["source_item"],
+                event["market"],
+                T + seq * 0.1,
+            )
+    breach = T + breach_seq * 0.1
+    tick(breach_seq, 100000)
     R.record_native_ready(
         backend,
         event["symbol"],
         event["venue"],
         event["source_item"],
         event["market"],
-        T + 0.1,
+        breach,
     )
-    monkeypatch.setattr(D.time, "time", lambda: T + 0.2)
+    monkeypatch.setattr(D.time, "time", lambda: breach + 0.1)
     observation = dict(
         schema="entry_source_quote_observer_v1",
         snapshot=[event, {}],
         family_sha256=backend._GENERATION,
-        deadline_epoch=T + 5,
-        deadline_perf=R.time.perf_counter() + 5,
+        deadline_epoch=signal_deadline_epoch(event),
+        deadline_perf=(
+            (event.get("entry_signal_lifetime") or {}).get("clock") or {}
+        ).get("deadline_perf", R.time.perf_counter() + 5),
         observer_pid=R.os.getpid(),
         observer_start_ticks=R._PROCESS_START_TICKS,
     )
@@ -1583,12 +1654,12 @@ def _hold_rejection(hold_invalidation, monkeypatch):
     ) as caught:
         recovery.validated_observer_snapshot(
             observation,
-            now=T + 0.2,
+            now=breach + 0.1,
             evaluation_attempt_id="hold-attempt",
             machine_bundle_sha256="b" * 64,
         )
     return dict(
-        decision_ts=K.iso(T + 0.3),
+        decision_ts=K.iso(breach + 0.2),
         decision_stage="entry_screen",
         stock_code="066970",
         evaluation_attempt_id="hold-attempt",
@@ -2238,3 +2309,171 @@ def test_websocket_cycle_distinguishes_handler_delay_wait_and_wall_clock_change(
         R.snapshot()["websocket_receive_cycles"]["slow_recent"][-1]["dispatch_seconds"]
         == 2.0
     )
+
+
+@pytest.mark.parametrize("damage", [None, "hash", "quote", "sequence", "ready", "claimed", "floor", "proof", "deadline", "unknown", "survivor", "pid", "source", "generation"])
+def test_observed_missing_nested_hold_terminal_remains_unverified(damage):
+    from pathlib import Path
+    from src.engine.monitoring.submission_bottleneck_monitor import (
+        _reversal_lifecycle_diagnostic,
+    )
+    from src.engine.scalping.entry_machine_source_recovery import _digest
+    from src.engine.scalping.reversal_cumulative_catalog import REFINEMENTS
+
+    trace = json.loads(
+        (
+            Path(__file__).parent / "fixtures/native_hold_observer_20261030.json"
+        ).read_text()
+    )["row"]
+    receipt = trace["continuous_reversal_rejected_claim_receipt"]
+    life = receipt["native_selection"]["original_signal_lifecycle"]
+    branches = receipt["original_root"]["branch_signals"]
+    nested = next(b for b in branches if b in REFINEMENTS)
+    if damage == "quote":
+        receipt["native_selection"]["native_quote_current"] = False
+    elif damage == "sequence":
+        life["latest_native_observation"][2] += 1
+    elif damage == "ready":
+        life["ready_membership_present"] = True
+    elif damage == "claimed":
+        life["claimed"] = True
+    elif damage == "floor":
+        life["branch_hold_floors"][nested] = 1
+    elif damage == "pid":
+        life["process_pid"] += 1
+    elif damage == "source":
+        receipt["native_selection"]["native_source_current"] = False
+    elif damage == "generation":
+        receipt["original_root"]["registry_generation"] = "0" * 64
+    elif damage == "proof":
+        branches[nested]["signal_proof"]["original_confirmation"][
+            "branch_definition_sha256"
+        ] = ("0" * 64)
+    elif damage == "deadline":
+        receipt["original_deadline_epoch"] = receipt["observed_epoch"]
+    elif damage == "unknown":
+        life["terminal_reason"] = "UNKNOWN"
+    elif damage == "survivor":
+        life["latest_native_observation"][3] = 15430
+    receipt["sha256"] = _digest({k: v for k, v in receipt.items() if k != "sha256"})
+    if damage == "hash":
+        receipt["sha256"] = "0" * 64
+    original = deepcopy(trace)
+    assert _reversal_lifecycle_diagnostic(trace) is None
+    assert trace == original
+
+
+@pytest.mark.parametrize(
+    "hold_invalidation", ["manual_cumulative_6824067d3769bdd90d25759a"], indirect=True
+)
+@pytest.mark.parametrize("missing", [False, True])
+def test_nested_native_hold_floor_publisher_matches_actual_removal(hold_invalidation, missing):
+    from src.engine.scalping.reversal_cumulative_catalog import REFINEMENTS
+
+    backend, state, event, tick = hold_invalidation
+    bid = next(iter(event["branch_signals"]))
+    assert bid in REFINEMENTS
+    branch = event["branch_signals"][bid]
+    branch["signal_proof"] = {
+        "original_confirmation": {
+            "decision_phase": "FIRST_PRICE_HOLD",
+            "signal_proof": {"price": 100100},
+        }
+    }
+    if missing:
+        branch["signal_proof"] = {}
+    state.ready[0]["event"] = deepcopy(event)
+    R._SELECTED_READY.clear()
+    R._ACTIVE_SELECTED.clear()
+    R.record_native_ready(
+        backend,
+        event["symbol"],
+        event["venue"],
+        event["source_item"],
+        event["market"],
+        T,
+    )
+    life = next(iter(R._SELECTED_READY.values()))
+    assert life["branch_hold_floors"] == {bid: None if missing else 100100}
+    if missing:
+        assert life.get("terminal_reason") != "first_price_hold_breached"
+        assert life["terminal"] is None
+        return
+    tick(1, 100000)
+    R.record_native_ready(
+        backend,
+        event["symbol"],
+        event["venue"],
+        event["source_item"],
+        event["market"],
+        T + 0.1,
+    )
+    assert life["terminal"] == "invalidated_before_claim"
+    assert life["terminal_reason"] == "first_price_hold_breached"
+    assert not state.ready
+
+
+@pytest.mark.parametrize(
+    "damage", [None, "missing", "hash", "generation", "deadline", "clock_actor"]
+)
+@pytest.mark.parametrize(
+    "hold_invalidation", ["manual_cumulative_59846db468e4602a246ef839"], indirect=True
+)
+def test_native_published_lifetime_proof_closes_late_guard_without_renewal(
+    hold_invalidation, monkeypatch, damage
+):
+    from src.engine.monitoring.submission_bottleneck_monitor import (
+        _reversal_lifecycle_diagnostic,
+    )
+    from src.engine.scalping.entry_machine_source_recovery import _digest
+
+    trace = _hold_rejection(hold_invalidation, monkeypatch, lifetime=9.6, breach_seq=51)
+    receipt = trace["continuous_reversal_rejected_claim_receipt"]
+    life = receipt["native_selection"]["original_signal_lifecycle"]
+    issued = life["entry_signal_lifetime"]
+    assert issued is not hold_invalidation[2]["entry_signal_lifetime"]
+    assert issued == hold_invalidation[2]["entry_signal_lifetime"]
+    if damage == "missing":
+        life.pop("entry_signal_lifetime")
+    elif damage == "hash":
+        issued["policy_sha256"] = "0" * 64
+    elif damage == "generation":
+        issued["generation"] = "0" * 64
+    elif damage == "deadline":
+        issued["deadline_epoch"] += 1
+    elif damage == "clock_actor":
+        issued["clock"] = {
+            "pid": receipt["process_pid"] + 1,
+            "issued_epoch": T,
+            "issued_perf": 1.0,
+            "deadline_perf": 1.0 + (issued["deadline_epoch"] - T),
+        }
+    receipt["sha256"] = _digest({k: v for k, v in receipt.items() if k != "sha256"})
+    original = deepcopy(trace)
+    assert _reversal_lifecycle_diagnostic(trace) == (
+        "reversal_first_price_hold_invalidated" if damage is None else None
+    )
+    assert trace == original
+
+
+@pytest.mark.parametrize(
+    "hold_invalidation", ["manual_cumulative_6824067d3769bdd90d25759a"], indirect=True
+)
+def test_nested_hold_native_producer_and_rejection_reader_agree(
+    hold_invalidation, monkeypatch
+):
+    from src.engine.monitoring.submission_bottleneck_monitor import (
+        _reversal_lifecycle_diagnostic,
+    )
+
+    trace = _hold_rejection(hold_invalidation, monkeypatch)
+    original = deepcopy(trace)
+    life = trace["continuous_reversal_rejected_claim_receipt"]["native_selection"][
+        "original_signal_lifecycle"
+    ]
+    assert life["terminal"] == "invalidated_before_claim"
+    assert life["terminal_reason"] == "first_price_hold_breached"
+    assert (
+        _reversal_lifecycle_diagnostic(trace) == "reversal_first_price_hold_invalidated"
+    )
+    assert trace == original

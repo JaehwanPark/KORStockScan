@@ -1114,6 +1114,8 @@ def record_native_ready(B, symbol, venue, item, market, epoch):
 
 def _record_native_ready_locked(B, symbol, venue, item, market, epoch):
     """Peek sealed native ready membership, before Main claim admission."""
+    from src.engine.scalping.reversal_cumulative_runtime import hold_floor
+
     day = (
         __import__("datetime")
         .datetime.fromtimestamp(epoch, __import__("zoneinfo").ZoneInfo("Asia/Seoul"))
@@ -1177,11 +1179,33 @@ def _record_native_ready_locked(B, symbol, venue, item, market, epoch):
                         family = getattr(B, "_FAMILY", None) or {}
                         if selection["reason"] == "selected":
                             branches = set(selection["matched_branches"])
+                            hold_floors = {}
+                            for bid, signal in event.get("branch_signals", {}).items():
+                                if (
+                                    bid in branches
+                                    and signal.get("decision_phase")
+                                    == "FIRST_PRICE_HOLD"
+                                ):
+                                    try:
+                                        floor = hold_floor(signal)
+                                    except (
+                                        KeyError,
+                                        TypeError,
+                                        AttributeError,
+                                        RecursionError,
+                                    ):
+                                        # Diagnostic custody only. Missing native proof
+                                        # remains unknown; never substitute a price.
+                                        floor = None
+                                    hold_floors[bid] = floor
                             selected.append(
                                 (
                                     dict(
                                         epoch=event["epoch"],
                                         original_deadline=signal_deadline_epoch(event),
+                                        entry_signal_lifetime=event.get(
+                                            "entry_signal_lifetime"
+                                        ),
                                         signal_id=event.get("signal_id")
                                         or event["event_id"],
                                         native_event_id=event["event_id"],
@@ -1201,17 +1225,7 @@ def _record_native_ready_locked(B, symbol, venue, item, market, epoch):
                                             ).items()
                                             if bid in branches
                                         },
-                                        branch_hold_floors={
-                                            bid: (signal.get("signal_proof") or {}).get(
-                                                "price"
-                                            )
-                                            for bid, signal in event.get(
-                                                "branch_signals", {}
-                                            ).items()
-                                            if bid in branches
-                                            and signal.get("decision_phase")
-                                            == "FIRST_PRICE_HOLD"
-                                        },
+                                        branch_hold_floors=hold_floors,
                                         selector_claimed=bool(ready.get("claimed")),
                                     ),
                                     family["family_sha256"],
@@ -1277,6 +1291,8 @@ def _record_native_ready_locked(B, symbol, venue, item, market, epoch):
                     claimed=False,
                     first_native_seen=epoch,
                     first_seen_perf=time.perf_counter(),
+                    # Freeze issued custody once, not on every callback.
+                    entry_signal_lifetime=deepcopy(event.get("entry_signal_lifetime")),
                     original_deadline=event["original_deadline"],
                     terminal=None,
                     first_eligible_seen=None,

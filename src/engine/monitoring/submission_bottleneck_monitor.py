@@ -1268,8 +1268,17 @@ def _observer_lifecycle_diagnostic(row, receipt):
         from src.engine.scalping.continuous_reversal import good_quote
         from src.engine.scalping.reversal_extended_catalog import cell_key
         from src.engine.scalping.entry_machine_source_recovery import _digest
-        from src.engine.scalping.entry_deadline import LEGACY_SIGNAL_MAX_AGE_SEC
+        from src.engine.scalping.entry_deadline import (
+            LEGACY_SIGNAL_MAX_AGE_SEC,
+            signal_deadline_epoch,
+        )
+        from src.engine.scalping.reversal_cumulative_runtime import hold_floor
 
+        # Authenticate issued bytes before any read-only comparison projection.
+        if receipt["sha256"] != _digest(
+            {k: v for k, v in receipt.items() if k != "sha256"}
+        ):
+            return None
         root = receipt["original_root"]
         selection = receipt["native_selection"]
         life = selection["original_signal_lifecycle"]
@@ -1280,6 +1289,24 @@ def _observer_lifecycle_diagnostic(row, receipt):
         actor = [str(receipt[k]) for k in ("process_pid", "process_start_ticks")]
         scope = life["scope"]
         branches, floors = root["branch_signals"], life["branch_hold_floors"]
+        diagnostic_deadline = root["epoch"] + LEGACY_SIGNAL_MAX_AGE_SEC
+        issued = life.get("entry_signal_lifetime")
+        if issued is not None:
+            if root.get("entry_signal_lifetime") not in (None, issued):
+                return None
+            diagnostic_deadline = signal_deadline_epoch(
+                {**root, "entry_signal_lifetime": issued}
+            )
+            if diagnostic_deadline != receipt["original_deadline_epoch"]:
+                return None
+            if (
+                issued.get("clock") is not None
+                and str(issued["clock"]["pid"]) != actor[0]
+            ):
+                return None
+        # A historical missing floor or native terminal stays unverified.
+        # The corrected producer must publish the actual terminal; prices alone
+        # cannot create a replacement runtime receipt.
         route = {
             "KRX": ("", "krx_only"),
             "NXT": ("_NX", "nxt_only"),
@@ -1309,8 +1336,6 @@ def _observer_lifecycle_diagnostic(row, receipt):
                 )
             )
             or receipt["status"] != "observed"
-            or receipt["sha256"]
-            != _digest({k: v for k, v in receipt.items() if k != "sha256"})
             or not all(
                 re.fullmatch("[0-9a-f]{64}", str(v))
                 for v in (family, bundle, root["registry_generation"])
@@ -1366,15 +1391,10 @@ def _observer_lifecycle_diagnostic(row, receipt):
             <= ended
             <= at
             <= trace_at
-            or not at
-            < receipt["original_deadline_epoch"]
-            == life["original_deadline"]
-            # Older rejection receipts do not include the issued lifetime
-            # policy.  They can still prove a terminal within the original
-            # legacy observation window, provided both native records agree
-            # on a deadline that has not elapsed.  Do not infer or extend the
-            # deadline, or classify later events without their policy proof.
-            or not at < root["epoch"] + LEGACY_SIGNAL_MAX_AGE_SEC
+            or not at < receipt["original_deadline_epoch"] == life["original_deadline"]
+            # Missing issued-policy proof retains the original legacy window.
+            # A preserved binding uses the native reader and exact old deadline.
+            or not at < diagnostic_deadline
             or trace_at - at > 5
             or latest[0] != ended
             or not good_quote(latest)
@@ -1408,7 +1428,7 @@ def _observer_lifecycle_diagnostic(row, receipt):
                     or not 0
                     < latest[3]
                     < floors[bid]
-                    == signal["signal_proof"]["price"]
+                    == hold_floor(signal)
                     for bid, signal in branches.items()
                 )
             ):
