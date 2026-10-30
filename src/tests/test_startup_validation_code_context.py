@@ -2617,9 +2617,9 @@ assert_no_forbidden_attempts()
     [False, True, "native", "native_closed", "prepared_intraday", "prepared_stopped", "unprepared_stopped"],
 )
 def test_isolated_prepared_native_closure_keeps_full_bootstrap_and_exact_sources(
-    request_fixture, monkeypatch, fault, consumed_ancestry
+    current_request_fixture, monkeypatch, fault, consumed_ancestry
 ):
-    f = request_fixture
+    f = current_request_fixture
     main = _main_fixture(f, monkeypatch)
     proof = main["proof"]
     request = f["request"]
@@ -3003,6 +3003,34 @@ def test_isolated_prepared_native_closure_keeps_full_bootstrap_and_exact_sources
         closure["preserved_generations"]["e" * 64] = dict(record)
     elif fault == "schema":
         record["schema"] = "startup_native_preserved_preopen_closure_v1"
+    if consumed_ancestry == "unprepared_stopped" and fault is None:
+        # Exercise the new phase's semantic negatives with freshly rebound
+        # byte hashes; unchanged hash rejection alone would not cover them.
+        import copy
+        original_request=copy.deepcopy(request)
+        original_failed=failed.read_bytes()
+        for damage in ("appeared", "consumed", "failed_phase", "role"):
+            damaged=copy.deepcopy(original_request)
+            damaged_proof=damaged["main_preparation_code_handoff"]
+            n=damaged_proof["native_verification"]
+            if damage=="appeared":path.write_text("{}")
+            elif damage=="consumed":
+                value=C._json(consumed);value["actual_pid_consumed"]=False;consumed.write_text(json.dumps(value))
+                for refs in (n["stopped_preparation_observation"]["source_hashes"],n["unprepared_stopped_handoff"]["sources"],damaged_proof["source_hashes"],damaged["source_hashes"]):refs[str(consumed)]=C._sha(consumed)
+            elif damage=="failed_phase":
+                value=C._json(failed);value["failed_phase"]="starting";failed.write_text(json.dumps(value))
+                for refs in (n["stopped_preparation_observation"]["source_hashes"],n["unprepared_stopped_handoff"]["sources"],damaged_proof["source_hashes"],damaged["source_hashes"]):refs[str(failed)]=C._sha(failed)
+            else:n["unprepared_stopped_handoff"]["role"]="unknown"
+            _write_request(f,damaged)
+            (f["run"] / "audit.jsonl").unlink(missing_ok=True)
+            negative=_child(f,MAIN_CHILD_SETUP)
+            assert negative.returncode!=0 and "startup_unprepared_original_consumption_unbound" in negative.stderr, negative.stderr
+            if path.exists():path.unlink()
+            consumed.write_text(json.dumps(dict(schema="intraday_policy_preserving_consumption_v1",status="pass",
+                target_date=DAY,selected_release_commit=previous,release_root=handoff["release_root"],
+                actual_pid_consumed=True,pid_identity=identity,handoff_sha256=C._sha(original_path))))
+            failed.write_bytes(original_failed)
+        (f["run"] / "audit.jsonl").unlink(missing_ok=True)
     _write_request(f, request)
     result = _child(
         f,
