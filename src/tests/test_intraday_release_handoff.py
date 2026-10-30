@@ -7624,7 +7624,7 @@ def test_interrupted_custody_delta_checks_complete_combined_candidate(tmp_path, 
     subprocess.run(["git", "clone", "-q", "--shared", "--no-checkout", str(source), str(root)], check=True)
     commit = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "--detach", commit], check=True)
-    origin = "3e3d5da2c3f35c8672efd9d58545f9d19a7b20e6"
+    origin = "82ecab8fc5930af34053b94bf6257694b9180b32"
     paths = {name: name for name in handoff.REVIEWED_INTERRUPTED_CUSTODY_HASHES}
     parent = {name: hashlib.sha256(subprocess.check_output(["git", "-C", str(root), "show", origin + ":" + name])).hexdigest() for name in paths}
     expected = hashlib.sha256(json.dumps(parent, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")).hexdigest()

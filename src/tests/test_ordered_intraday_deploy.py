@@ -4262,6 +4262,10 @@ def test_interrupted_hold_phase_and_failed_recovery_preserve_native_consumption(
     assert origin["interrupted_observation"] == observation
     before = failed_path.read_bytes(), d.hold.read_bytes(), d.selection.read_bytes()
     d.preflight()
+    assert str(collector) not in d.frozen and str(heartbeat) not in d.frozen
+    assert d.stopped_collector_source == {
+        str(collector): D.H._sha(collector), str(heartbeat): D.H._sha(heartbeat)
+    }
     assert (failed_path.read_bytes(), d.hold.read_bytes(), d.selection.read_bytes()) == before
     d.acquire_hold()
     assert d.hold.read_bytes() != before[1]
@@ -4286,3 +4290,71 @@ def test_interrupted_hold_phase_and_failed_recovery_preserve_native_consumption(
         D.verify_interrupted_transition_hold(
             tmp_path, day, identity, failed_path, adopted_transition=d.directory / "status.json"
         )
+    d.phase = "prepared"
+    with pytest.raises(ValueError, match="deployment_stopped_collector_changed_before_start"):
+        d.start()
+    heartbeat.write_text("new successor heartbeat")
+    successor = dict(pid=2147483603, start_ticks="456", cwd=str(d.candidate / "src"))
+    selected = json.loads(d.selection.read_bytes())
+    selected.update(actual_pid_consumed=True, actual_pid_receipt={"pid": successor["pid"]})
+    d.selection.write_bytes(D._json_bytes(selected))
+    monkeypatch.setattr(D.H, "_identity", lambda pid: successor)
+    monkeypatch.setattr(D, "_main_pids", lambda: [successor["pid"]])
+    monkeypatch.setattr(d, "run_json", lambda *a, **kw: {"status": "pass"})
+    monkeypatch.setattr(d, "observe_report_consumers", lambda *_: None)
+    d.phase = "starting"
+    assert d.attest()["status"] == "pass"
+
+@pytest.mark.parametrize("damage", [None, "parent", "old_status", "proof", "p5", "current_pid", "no_advance", "unbound", "foreign_hold"])
+def test_live_interrupted_custody_failure_admits_exact_owned_hold(driver, monkeypatch, damage):
+    d = driver
+    hold, failed, failed_path, prior_path = _failed_hold_fixture(d, monkeypatch)
+    prior = json.loads(prior_path.read_bytes())
+    old_identity = hold["old_pid_identity"]
+    origin = d.workspace / "data/runtime/release_transitions" / d.day / ("d"*40) / "status.json"
+    origin.parent.mkdir(parents=True)
+    collector = d.workspace / "data/runtime/collector-latest.json"
+    heartbeat = d.workspace / "tmp/error_detector_heartbeat.json"
+    heartbeat.parent.mkdir()
+    collector.write_text("new collector")
+    heartbeat.write_text("new heartbeat")
+    observation = dict(basis="interrupted_consumed_process", collector_path=str(collector), source_hashes={str(collector): D._digest(b"old collector"), str(heartbeat): D._digest(b"old heartbeat")})
+    proof = dict(closed_observation=observation)
+    proof_path = origin.with_name("closed-predecessor.json")
+    proof_path.write_bytes(D._json_bytes(proof))
+    original = dict(phase="failed", status="fail", failed_phase="startup_held", error="deployment_stopped_recovery_source_invalid", predecessor_identity=old_identity, closed_predecessor=proof)
+    origin.write_bytes(D._json_bytes(original))
+    parent = dict(source_failure=original["error"], failed_transition_path=str(origin), failed_transition_sha256=D._digest(origin.read_bytes()), failed_selected_commit="d"*40, transfer_status="transferred_exact_owned_hold", intraday_predecessor_proof_sha256=D._digest(proof_path.read_bytes()))
+    p5_dir = d.workspace / "data/report/main_startup_validation" / d.day / ("e"*32)
+    p5_dir.mkdir(parents=True)
+    p5_path = p5_dir / "final.json"
+    p5_path.write_bytes(D._json_bytes(dict(schema="main_policy_load_exit_validation_v1", run_id=p5_dir.name, status="passed", findings=[], target_date=d.day, child_exit_code=0, failure_phase=None, execution_release_root=str(d.previous), execution_release_commit=d.previous_commit, selected_release_root=prior["release_root"], selected_release_commit=prior["git_commit"], child_terminated=True, load_check_passed=True, protected_sources_unchanged=True, runtime_effect=False, allowed_runtime_apply=False, actual_pid_consumed=False)))
+    p5 = D.verify_candidate_p5(d.workspace, d.day, d.previous, d.previous_commit, p5_path, D.H._sha(p5_path), prior)
+    failed.update(error="deployment_original_policy_generation_changed", failed_hold_adoption=parent, candidate_p5=p5)
+    failed_path.write_bytes(D._json_bytes(failed))
+    saved = origin.with_name("interrupted-collector-original.json")
+    saved.write_text("old collector")
+    custody = {str(origin): D.H._sha(origin), str(proof_path): D.H._sha(proof_path), str(saved): D.H._sha(saved)}
+    monkeypatch.setattr(D.H, "_verify_handoff", lambda *a: dict(status="pass" if all(D.H._sha(p)==sha for p,sha in custody.items()) else "fail", handoff=dict(interrupted_recovery_custody=dict(failed_transition_path=str(origin), sources=custody))))
+    if damage == "parent": parent["source_failure"] = "unreviewed"
+    elif damage == "old_status": origin.write_text("{}")
+    elif damage == "proof": proof_path.write_text("{}")
+    elif damage == "p5": p5_path.write_text("{}")
+    elif damage == "current_pid": monkeypatch.setattr(D, "_main_pids", lambda: [])
+    elif damage == "no_advance": collector.write_text("old collector"); heartbeat.write_text("old heartbeat")
+    elif damage == "unbound": custody[str(collector)] = D.H._sha(collector)
+    elif damage == "foreign_hold": d.hold.write_text("{}")
+    if damage == "parent": failed_path.write_bytes(D._json_bytes(failed))
+    before = d.hold.read_bytes(), failed_path.read_bytes(), d.selection.read_bytes()
+    if damage:
+        with pytest.raises((ValueError, KeyError, OSError)):
+            d.capture_failed_hold_adoption()
+        assert (d.hold.read_bytes(), failed_path.read_bytes(), d.selection.read_bytes()) == before
+    else:
+        d.capture_failed_hold_adoption()
+        assert d.hold.read_bytes() == before[0]
+        assert str(collector) not in d.frozen and str(heartbeat) not in d.frozen
+        assert d.frozen[str(saved)] == D.H._sha(saved)
+        d.acquire_hold()
+        assert d.hold.read_bytes() != before[0]
+        assert failed_path.read_bytes() == before[1] and d.selection.read_bytes() == before[2]

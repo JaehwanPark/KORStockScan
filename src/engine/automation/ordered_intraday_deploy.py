@@ -1763,15 +1763,54 @@ class Deployment:
             # collects. Accept this old failure only with the original consumed
             # policy bytes still valid, in addition to fresh current PID proof.
             parent = failed.get("failed_hold_adoption") or {}
-            if parent.get("source_failure") != "deployment_collector_closed_epoch_invalid":
+            if parent.get("source_failure") == "deployment_stopped_recovery_source_invalid":
+                origin = Path(parent.get("failed_transition_path") or "")
+                expected = (self.workspace / "data/runtime/release_transitions" / self.day
+                            / str(parent.get("failed_selected_commit")) / "status.json")
+                previous_failure, previous_raw, _ = _owned_metadata(origin)
+                proof_path = origin.with_name("closed-predecessor.json")
+                proof, proof_raw, _ = _owned_metadata(proof_path)
+                observation = proof.get("closed_observation") or {}
+                checked = H._verify_handoff(self.day, self.previous_commit)
+                handoff = checked.get("handoff") or {}
+                custody = handoff.get("interrupted_recovery_custody") or {}
+                p5 = failed.get("candidate_p5") or {}
+                checked_p5 = verify_candidate_p5(
+                    self.workspace, self.day, self.previous, self.previous_commit,
+                    p5.get("path"), p5.get("sha256"), prior,
+                )
+                mutable = (observation.get("collector_path"),
+                           str(self.workspace / "tmp/error_detector_heartbeat.json"))
+                if (
+                    origin != expected or parent.get("failed_transition_sha256") != _digest(previous_raw)
+                    or parent.get("transfer_status") != "transferred_exact_owned_hold"
+                    or previous_failure.get("phase") != "failed" or previous_failure.get("status") != "fail"
+                    or previous_failure.get("failed_phase") != "startup_held"
+                    or previous_failure.get("error") != parent.get("source_failure")
+                    or previous_failure.get("predecessor_identity") != old_identity
+                    or previous_failure.get("closed_predecessor") != proof
+                    or observation.get("basis") != "interrupted_consumed_process"
+                    or parent.get("intraday_predecessor_proof_sha256") != _digest(proof_raw)
+                    or checked.get("status") != "pass"
+                    or custody.get("failed_transition_path") != str(origin)
+                    or not isinstance(custody.get("sources"), dict)
+                    or json.loads(_json_bytes(checked_p5)) != p5
+                    or any(not isinstance(path, str) or not path for path in mutable)
+                    or not any(H._sha(path) != observation["source_hashes"].get(path) for path in mutable)
+                    or any(path in custody["sources"] for path in mutable)
+                ):
+                    raise ValueError("deployment_failed_interrupted_custody_unverified")
+                self.frozen.update(custody["sources"])
+            elif parent.get("source_failure") != "deployment_collector_closed_epoch_invalid":
                 raise ValueError("deployment_failed_collector_custody_unverified")
-            native = _stopped_intraday_predecessor(
-                self.day, Path(failed["previous_root"]), failed["previous_commit"],
-                old_identity, expected_transition,
-            )
-            if native["sha256"] != parent.get("intraday_predecessor_proof_sha256"):
-                raise ValueError("deployment_failed_collector_custody_changed")
-            self.frozen.update(native["frozen_files"])
+            else:
+                native = _stopped_intraday_predecessor(
+                    self.day, Path(failed["previous_root"]), failed["previous_commit"],
+                    old_identity, expected_transition,
+                )
+                if native["sha256"] != parent.get("intraday_predecessor_proof_sha256"):
+                    raise ValueError("deployment_failed_collector_custody_changed")
+                self.frozen.update(native["frozen_files"])
         self.failed_hold_adoption = dict(
             raw=raw,
             signature=signature,
@@ -2477,10 +2516,16 @@ class StoppedDeploymentRecovery(Deployment):
             pin = failed["interrupted_collector"]
             verify_collector_shutdown(pin, owned_interrupted_transition=failed_path)
             proof_path = failed_path.with_name("closed-predecessor.json")
+            mutable = {
+                pin["path"],
+                str(self.workspace / "tmp/error_detector_heartbeat.json"),
+            }
+            stable_sources = {path: sha for path, sha in evidence["sources"].items()
+                              if path not in mutable}
             interrupted_native = dict(path=str(proof_path), sha256=H._sha(proof_path),
-                                      frozen_files=evidence["sources"])
-            preparation_sources.update(evidence["sources"])
-            collector_source[pin["path"]] = pin["sha256"]
+                                      frozen_files=stable_sources)
+            preparation_sources.update(stable_sources)
+            collector_source.update({path: evidence["sources"][path] for path in mutable})
         elif preselection:
             pin = failed.get("collector_shutdown_pin") or {}
             if (pin.get("pid") != identity["pid"]

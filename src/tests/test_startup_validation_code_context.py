@@ -4628,3 +4628,18 @@ def test_interrupted_custody_requires_complete_combined_generation(tmp_path, fau
     elif fault == "origin": old = "0" * 64
     elif fault == "future": current = "f" * 64
     assert C.reviewed_preparation_pair(name, old, current, root=tmp_path) is (fault is None)
+
+@pytest.mark.parametrize("fault", [None, "missing", "mixed"])
+def test_interrupted_prior_selected_generation_retains_native_reader(tmp_path, fault):
+    for name, expected in C.REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PROFILE.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(subprocess.check_output(["git", "-C", str(ROOT), "show", "82ecab8fc:" + name]))
+        assert C._sha(path) == expected
+    name = "src/engine/automation/ordered_intraday_deploy.py"
+    old = C.REVIEWED_INTERRUPTED_CUSTODY_TRANSITION[name][0]
+    current = C.REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PROFILE[name]
+    dependency = tmp_path / "src/engine/scalping/reversal_auxiliary_intraday.py"
+    if fault == "missing": dependency.unlink()
+    elif fault == "mixed": dependency.write_bytes(subprocess.check_output(["git", "-C", str(ROOT), "show", "3e3d5da2c:src/engine/scalping/reversal_auxiliary_intraday.py"]))
+    assert C.reviewed_preparation_pair(name, old, current, root=tmp_path) is (fault is None)
