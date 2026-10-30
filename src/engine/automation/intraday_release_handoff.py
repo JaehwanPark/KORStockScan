@@ -13784,6 +13784,17 @@ REVIEWED_STOP_INCIDENT_PAIRS = {
     name: {pair} for name, pair in
     _preparation_code.REVIEWED_STOP_INCIDENT_TRANSITION.items()
 }
+# The sealed stop contract used reviewed formatting projections for these
+# predecessor bytes. Their physical originals remain independently verified.
+for _name, _origin in {
+    "src/engine/automation/main_stop_runtime_workload.py":
+        "9f3acc7324e3a218c430a96b751245d5610cedc5a33cb912f7ab870efe8beb38",
+    "src/engine/scalping/main_stop_quantity_source.py":
+        "736226f72aabb1f7a1fe134d746e1f79139ae5ce3da52d83d49abb1d37483f36",
+    "src/engine/scalping/main_stop_runtime_source.py":
+        "6d097264784b2f7a1601c534a27d13c0647dee227bfa5e12bedb2a9471cd2344",
+}.items():
+    REVIEWED_STOP_INCIDENT_PAIRS[_name].add((_origin, REVIEWED_STOP_INCIDENT_HASHES[_name]))
 REVIEWED_STOP_INCIDENT_PAIRS[
     "src/engine/infrastructure/startup_validation_code_context.py"
 ] = {
