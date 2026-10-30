@@ -4773,6 +4773,31 @@ def _origin(proof, request):
             or origin["origin_commit"] != commit
         ):
             raise ValueError("startup_code_context_exact_origin_invalid")
+    elif basis == "verified_unprepared_stopped_original_contract":
+        main = request.get("main_preparation_code_handoff") or {}
+        native = main.get("native_verification") or {}
+        observation = native.get("stopped_preparation_observation") or {}
+        if (_native_main_basis(native) != "same_invocation_selected_unprepared_stopped_native_validation"
+            or main.get("selected_release_commit") != commit
+            or main.get("selected_release_root") != str(selected)):
+            raise ValueError("startup_code_context_unprepared_origin_unbound")
+        refs = _preserved_native_sources(main)
+        if (any(request["source_hashes"].get(name) != sha for name, sha in refs.items())
+            or any(sources.get(name) != sha for name, sha in observation["source_hashes"].items())):
+            raise ValueError("startup_code_context_unprepared_origin_sources_unbound")
+        from src.engine.automation import prepared_policy_code_handoff as P
+        data = Path(request["data_root"])
+        manifest_path = data / "runtime/policy_bootstrap" / ("runtime_policy_bootstrap_" + proof["target_date"] + ".json")
+        _bound_source(sources, manifest_path)
+        manifest = _json(manifest_path)
+        policy_path, expected = P._policy(data, proof["target_date"], proof["family"], manifest)
+        _bound_source(sources, policy_path)
+        field, _ = _FAMILIES[proof["family"]]
+        if (manifest.get(field) != request["manifest"].get(field)
+            or manifest.get("selected_release_sha") != origin["origin_commit"]
+            or P._bound(manifest, proof["family"]) != proof["policy_sha256"]
+            or expected != proof["original_code_sha256"]):
+            raise ValueError("startup_code_context_unprepared_policy_changed")
     elif basis == "verified_selected_prepared_code_handoff":
         path = Path(origin.get("code_handoff_receipt_path") or "")
         _bound_source(sources, path)

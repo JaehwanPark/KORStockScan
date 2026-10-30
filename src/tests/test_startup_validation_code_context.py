@@ -2878,6 +2878,28 @@ def test_isolated_prepared_native_closure_keeps_full_bootstrap_and_exact_sources
         for consumer in request["candidate_code_handoffs"].values():
             consumer["source_hashes"][str(selection)]=C._sha(selection)
             if str(selection) in consumer["origin"]["sources"]:consumer["origin"]["sources"][str(selection)]=C._sha(selection)
+        consumer=request["candidate_code_handoffs"]["pre_submit_delay"]
+        policy_path=data / "threshold_cycle/pre_submit_delay_policy/generations/fixture/policy.json"
+        policy_path.parent.mkdir(parents=True)
+        policy=dict(code_contract_sha256=consumer["original_code_sha256"])
+        policy["policy_sha256"]=C._digest(policy)
+        policy_path.write_text(json.dumps(policy))
+        field=dict(target_date=DAY,policy_sha256=policy["policy_sha256"],policy_path=str(policy_path))
+        request["manifest"]["pre_submit_delay_handoff"]=field
+        live=C._json(active);live.update(selected_release_sha=prepared_commit,pre_submit_delay_handoff=field)
+        active.write_text(json.dumps(live))
+        handoff["frozen_files"][str(active)]=C._sha(active)
+        original_path.write_text(json.dumps(handoff))
+        value=C._json(consumed);value["handoff_sha256"]=C._sha(original_path);consumed.write_text(json.dumps(value))
+        observation["unprepared_selected_handoff"]["predecessor_sha256"]=C._sha(original_path)
+        observation["source_hashes"].update({str(p):C._sha(p) for p in (original_path,consumed)})
+        native["unprepared_stopped_handoff"].update(sha256=C._sha(original_path),sources={**handoff["frozen_files"],**observation["source_hashes"]})
+        consumer["policy_sha256"]=policy["policy_sha256"]
+        consumer["origin"].update(basis="verified_unprepared_stopped_original_contract",origin_commit=prepared_commit)
+        family_sources={**observation["source_hashes"],str(active):C._sha(active),str(policy_path):C._sha(policy_path)}
+        consumer["origin"]["sources"].update(family_sources)
+        consumer["source_hashes"].update(family_sources)
+        request["source_hashes"].update(family_sources)
     if consumed_ancestry in {"native", "native_closed"}:
         request["manifest"]["selected_release_sha"] = commit
         identity = dict(pid=123, start_ticks="456", cwd=str(f["selected"] / "src"))
@@ -3009,6 +3031,7 @@ def test_isolated_prepared_native_closure_keeps_full_bootstrap_and_exact_sources
         import copy
         original_request=copy.deepcopy(request)
         original_failed=failed.read_bytes()
+        original_consumed=consumed.read_bytes()
         for damage in ("appeared", "consumed", "failed_phase", "role"):
             damaged=copy.deepcopy(original_request)
             damaged_proof=damaged["main_preparation_code_handoff"]
@@ -3016,19 +3039,25 @@ def test_isolated_prepared_native_closure_keeps_full_bootstrap_and_exact_sources
             if damage=="appeared":path.write_text("{}")
             elif damage=="consumed":
                 value=C._json(consumed);value["actual_pid_consumed"]=False;consumed.write_text(json.dumps(value))
-                for refs in (n["stopped_preparation_observation"]["source_hashes"],n["unprepared_stopped_handoff"]["sources"],damaged_proof["source_hashes"],damaged["source_hashes"]):refs[str(consumed)]=C._sha(consumed)
             elif damage=="failed_phase":
                 value=C._json(failed);value["failed_phase"]="starting";failed.write_text(json.dumps(value))
-                for refs in (n["stopped_preparation_observation"]["source_hashes"],n["unprepared_stopped_handoff"]["sources"],damaged_proof["source_hashes"],damaged["source_hashes"]):refs[str(failed)]=C._sha(failed)
             else:n["unprepared_stopped_handoff"]["role"]="unknown"
+            if damage in {"consumed","failed_phase"}:
+                changed=consumed if damage=="consumed" else failed
+                def rebind(value):
+                    if isinstance(value,dict):
+                        for key,item in value.items():
+                            if key==str(changed):value[key]=C._sha(changed)
+                            else:rebind(item)
+                    elif isinstance(value,list):
+                        for item in value:rebind(item)
+                rebind(damaged)
             _write_request(f,damaged)
             (f["run"] / "audit.jsonl").unlink(missing_ok=True)
             negative=_child(f,MAIN_CHILD_SETUP)
             assert negative.returncode!=0 and "startup_unprepared_original_consumption_unbound" in negative.stderr, negative.stderr
             if path.exists():path.unlink()
-            consumed.write_text(json.dumps(dict(schema="intraday_policy_preserving_consumption_v1",status="pass",
-                target_date=DAY,selected_release_commit=previous,release_root=handoff["release_root"],
-                actual_pid_consumed=True,pid_identity=identity,handoff_sha256=C._sha(original_path))))
+            consumed.write_bytes(original_consumed)
             failed.write_bytes(original_failed)
         (f["run"] / "audit.jsonl").unlink(missing_ok=True)
     _write_request(f, request)
