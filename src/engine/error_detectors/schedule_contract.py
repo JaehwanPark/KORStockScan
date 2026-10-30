@@ -2,9 +2,90 @@ from __future__ import annotations
 
 import re
 import subprocess
+from datetime import date
+from pathlib import Path
 from typing import Any
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
+
+
+def installed_upstream_start(
+    crontab_text: str | None, *, upstream: Any, workspace: Path, source_day: str
+) -> tuple[tuple[int, int] | None, dict[str, Any]]:
+    """Locate a native routed owner's start, without changing its deadline.
+
+    Unknown, conflicting or unsupported schedules retain the original artifact
+    expectation. A marker alone cannot establish the command owner.
+    """
+    details: dict[str, Any] = {"reason": "upstream_schedule_unresolved"}
+    if not isinstance(upstream, dict) or crontab_text is None:
+        return None, details
+    from src.engine.infrastructure.runtime_release_router import (
+        OWNED,
+        TAGS,
+        render_crontab,
+    )
+
+    owners = [
+        operation
+        for operation, (script, log_owner) in OWNED.items()
+        if script == upstream.get("id")
+        and log_owner == Path(str(upstream.get("log") or "")).stem
+    ]
+    if len(owners) != 1:
+        return None, details
+    try:
+        rendered = render_crontab(
+            crontab_text,
+            workspace,
+            require_snapshot_group=True,
+            require_postclose_stop=True,
+        )
+    except ValueError:
+        return None, {"reason": "native_cron_routing_unverified"}
+    if rendered.rstrip() != crontab_text.rstrip():
+        return None, {"reason": "native_cron_routing_unverified"}
+    operation = owners[0]
+    markers = [marker for marker, target in TAGS.items() if target == operation]
+    day = date.fromisoformat(source_day)
+    starts = []
+    timezone = "Asia/Seoul"
+    for raw in crontab_text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("CRON_TZ="):
+            timezone = line.partition("=")[2].strip("\"'")
+            continue
+        if line.rsplit("#", 1)[-1].strip() not in markers:
+            continue
+        fields = line.split(None, 5)
+        if len(fields) != 6 or timezone != "Asia/Seoul":
+            return None, {"reason": "unsupported_upstream_schedule"}
+        minute, hour, dom, month, dow, _command = fields
+        if (
+            not minute.isdigit()
+            or not hour.isdigit()
+            or not 0 <= int(minute) < 60
+            or not 0 <= int(hour) < 24
+            or dom not in {"*", str(day.day)}
+            or month not in {"*", str(day.month)}
+            or dow not in {"*", "1-5", str(day.isoweekday() % 7)}
+            or (dow == "1-5" and day.weekday() >= 5)
+        ):
+            return None, {"reason": "unsupported_or_other_date_upstream_schedule"}
+        starts.append((int(hour), int(minute)))
+    if not starts:
+        return None, details
+    start = min(starts)
+    return start, {
+        "reason": "installed_native_upstream_start",
+        "operation": operation,
+        "matching_line_count": len(starts),
+        "source_date": source_day,
+        "start": list(start),
+        "native_cron_routing_verified": True,
+    }
 
 
 def load_installed_crontab() -> str | None:

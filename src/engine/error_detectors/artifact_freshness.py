@@ -30,6 +30,7 @@ from src.engine.error_detectors.base import (
 )
 from src.engine.error_detectors.schedule_contract import (
     evaluate_schedule_contract,
+    installed_upstream_start,
     load_installed_crontab,
 )
 from src.engine.error_detectors.cron_completion import CronCompletionDetector
@@ -5962,6 +5963,24 @@ class ArtifactFreshnessDetector(BaseDetector):
                     if schedule_status.startswith("disabled_"):
                         details[f"{aid}_status"] = schedule_status
                         continue
+
+                # A missing report cannot precede its installed producer.
+                # Existing artifacts and historical source days retain their
+                # original checks, and the completion deadline never advances.
+                if ws and not artifact_past_source_day and not artifact_path.exists():
+                    start, start_details = installed_upstream_start(
+                        installed_crontab,
+                        upstream=artifact.get("suppress_missing_while_cron_in_progress"),
+                        workspace=(PROJECT_ROOT / "data").resolve().parent,
+                        source_day=artifact_day,
+                    )
+                    if start is not None:
+                        details[f"{aid}_upstream_start_contract"] = start_details
+                        if we is not None and start >= we:
+                            details[f"{aid}_status"] = "fail"
+                            issues.append(f"{aid}: upstream start conflicts with completion deadline")
+                            continue
+                        ws = max(ws, start)
 
                 ws_total = ws[0] * 60 + ws[1] if ws else None
 

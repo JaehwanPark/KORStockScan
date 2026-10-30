@@ -48,9 +48,9 @@ def _assert_current_code_profile(relative, current):
     """Current source assertions use both final readers, not a dated overlay."""
     raw = (ROOT / relative).read_bytes()
     assert hashlib.sha256(raw).hexdigest() == current
-    if relative in C.REVIEWED_STORAGE_ADMISSION_PROFILE:
-        assert current == C.REVIEWED_STORAGE_ADMISSION_PROFILE[relative]
-    expected = H.REVIEWED_STORAGE_ADMISSION_PROFILE[relative]
+    if relative in C.REVIEWED_POSTCLOSE_SCHEDULE_PROFILE:
+        assert current == C.REVIEWED_POSTCLOSE_SCHEDULE_PROFILE[relative]
+    expected = H.REVIEWED_POSTCLOSE_SCHEDULE_PROFILE[relative]
     compared = H.reviewed_formatting_source(relative, raw)
     assert hashlib.sha256(compared).hexdigest() == expected
 
@@ -4746,16 +4746,16 @@ def test_p5_consumer_union_requires_complete_current_generation(tmp_path, fault)
 
 def test_storage_integration_registered_for_both_native_readers():
     """A future profile drift fails before candidate admission, not at launch."""
-    assert set(C.REVIEWED_STORAGE_ADMISSION_PROFILE) <= set(
-        H.REVIEWED_STORAGE_ADMISSION_PROFILE
+    assert set(C.REVIEWED_POSTCLOSE_SCHEDULE_PROFILE) <= set(
+        H.REVIEWED_POSTCLOSE_SCHEDULE_PROFILE
     )
-    for name, expected in C.REVIEWED_STORAGE_ADMISSION_PROFILE.items():
+    for name, expected in C.REVIEWED_POSTCLOSE_SCHEDULE_PROFILE.items():
         raw = (ROOT / name).read_bytes()
         assert hashlib.sha256(raw).hexdigest() == expected, name
         compared = H.reviewed_formatting_source(name, raw)
-        assert hashlib.sha256(compared).hexdigest() == H.REVIEWED_STORAGE_ADMISSION_PROFILE[name], name
+        assert hashlib.sha256(compared).hexdigest() == H.REVIEWED_POSTCLOSE_SCHEDULE_PROFILE[name], name
     context = "src/engine/infrastructure/startup_validation_code_context.py"
-    assert C._sha(ROOT / context) == H.REVIEWED_STORAGE_ADMISSION_PROFILE[context]
+    assert C._sha(ROOT / context) == H.REVIEWED_POSTCLOSE_SCHEDULE_PROFILE[context]
     # The actual selected predecessor precedes the P5-only intermediate. The
     # complete storage generation must inherit both declared P5 endpoints,
     # without requiring an intermediate release to run merely for custody.
@@ -4763,13 +4763,64 @@ def test_storage_integration_registered_for_both_native_readers():
         for origin in pair:
             assert (origin, H.REVIEWED_STORAGE_INTEGRATION_HASHES[context]) in H.REVIEWED_STORAGE_INTEGRATION_PAIRS[context]
     assert ("f" * 64, H.REVIEWED_STORAGE_INTEGRATION_HASHES[context]) not in H.REVIEWED_STORAGE_INTEGRATION_PAIRS[context]
-    for (name, digest), variant in H.REVIEWED_STORAGE_ADMISSION_VARIANTS.items():
-        if name in H.REVIEWED_STORAGE_ADMISSION_PROFILE:
-            assert digest == H.REVIEWED_STORAGE_ADMISSION_PROFILE[name]
-        assert variant["selector_sha256"] == H.REVIEWED_STORAGE_ADMISSION_PROFILE[variant["selector_path"]]
+    for (name, digest), variant in H.REVIEWED_POSTCLOSE_SCHEDULE_VARIANTS.items():
+        if name in H.REVIEWED_POSTCLOSE_SCHEDULE_PROFILE:
+            assert digest == H.REVIEWED_POSTCLOSE_SCHEDULE_PROFILE[name]
+        assert variant["selector_sha256"] == H.REVIEWED_POSTCLOSE_SCHEDULE_PROFILE[variant["selector_path"]]
         for name, digest in variant["dependencies"].items():
-            if name in H.REVIEWED_STORAGE_ADMISSION_PROFILE:
-                assert digest == H.REVIEWED_STORAGE_ADMISSION_PROFILE[name], name
+            if name in H.REVIEWED_POSTCLOSE_SCHEDULE_PROFILE:
+                assert digest == H.REVIEWED_POSTCLOSE_SCHEDULE_PROFILE[name], name
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [None, "missing", "unknown", "mixed", "detector_prior", "both_unknown", "origin"],
+)
+def test_postclose_schedule_dependency_reaches_both_actual_readers(current_releases, fault):
+    """The new direct consumer is required even for an older caller inventory."""
+    release = current_releases
+    root = release["root"]
+    detector = "src/engine/error_detectors/artifact_freshness.py"
+    resolver = "src/engine/error_detectors/schedule_contract.py"
+    originals = {name: (root / name).read_bytes() for name in (detector, resolver)}
+    old, current = C.REVIEWED_POSTCLOSE_SCHEDULE_TRANSITION[detector]
+    try:
+        if fault == "missing":
+            (root / resolver).unlink()
+        elif fault == "unknown":
+            (root / resolver).write_bytes(b"unreviewed schedule consumer\n")
+        elif fault in {"mixed", "detector_prior"}:
+            name = resolver if fault == "mixed" else detector
+            (root / name).write_bytes(subprocess.check_output([
+                "git", "-C", str(ROOT), "show", "b6d598120:" + name
+            ]))
+        elif fault == "both_unknown":
+            for name in originals:
+                (root / name).write_bytes(b"unknown candidate generation\n")
+        elif fault == "origin":
+            old = "0" * 64
+        assert C.reviewed_preparation_pair(detector, old, current, root=root) is (fault is None)
+        if fault == "origin":
+            assert (old, current) not in H.REVIEWED_POSTCLOSE_SCHEDULE_PAIRS[detector]
+        elif fault is None:
+            assert H._verify_entry_code_delta(
+                root, release["commit"], release["original_commit"],
+                release["paths"], release["expected"],
+            ) == []
+        else:
+            expected_error = (
+                "entry_consumer_code_source_missing:"
+                if fault == "missing"
+                else "entry_consumer_reviewed_dependency_unreviewed:"
+            )
+            with pytest.raises(ValueError, match=expected_error):
+                H._verify_entry_code_delta(
+                    root, release["commit"], release["original_commit"],
+                    release["paths"], release["expected"],
+                )
+    finally:
+        for name, raw in originals.items():
+            (root / name).write_bytes(raw)
 
 
 def test_reviewed_predecessor_composition_keeps_unknown_and_disconnected_edges_out():

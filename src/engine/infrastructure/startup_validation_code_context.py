@@ -3893,6 +3893,21 @@ REVIEWED_STORAGE_ADMISSION_PROFILE = {
     **{name: pair[1] for name, pair in REVIEWED_STORAGE_ADMISSION_TRANSITION.items()},
 }
 
+# The current artifact reader consumes the native schedule resolver as well as
+# the detector. Require both physical sources; preserve every issued profile.
+REVIEWED_POSTCLOSE_SCHEDULE_TRANSITION = {
+    "src/engine/error_detectors/artifact_freshness.py": (
+        "840aa5dc54849a6db50e244a8767285da4296bb5efe78c206642022ae17337cd",
+        "afc36fbac8302137b9eb0caa0fd5d3e659a2154d8fe813e2b13e71900a861efc"),
+    "src/engine/error_detectors/schedule_contract.py": (
+        "e7984bb957012a7bad59e58c6d81fcb274986a8b0c4bc4738c7cc01fca726273",
+        "75784baa8b7b0fd1903b94559ad4393a8fb8a73f915bf17025664220fce701a2"),
+}
+REVIEWED_POSTCLOSE_SCHEDULE_PROFILE = {
+    **REVIEWED_STORAGE_ADMISSION_PROFILE,
+    **{name: pair[1] for name, pair in REVIEWED_POSTCLOSE_SCHEDULE_TRANSITION.items()},
+}
+
 
 def reviewed_predecessor_origins(endpoint, edges):
     """Follow only connected, explicitly registered predecessor edges."""
@@ -3904,9 +3919,10 @@ def reviewed_predecessor_origins(endpoint, edges):
         origins.update(predecessors)
 
 
-def reviewed_storage_origins(relative, *, prior=False, health=False, mount=False, capability=False, native_plan=False, plan_history=False, admission=False):
+def reviewed_storage_origins(relative, *, prior=False, health=False, mount=False, capability=False, native_plan=False, plan_history=False, admission=False, schedule=False):
     """Compose only registered predecessor edges for this exact successor."""
-    transition = ((REVIEWED_STORAGE_ADMISSION_TRANSITION.get(relative) if admission else None)
+    transition = ((REVIEWED_POSTCLOSE_SCHEDULE_TRANSITION.get(relative) if schedule else None)
+                  or (REVIEWED_STORAGE_ADMISSION_TRANSITION.get(relative) if admission else None)
                   or (REVIEWED_STORAGE_PLAN_HISTORY_TRANSITION.get(relative) if plan_history else None)
                   or (REVIEWED_STORAGE_NATIVE_PLAN_TRANSITION.get(relative) if native_plan else None)
                   or (REVIEWED_STORAGE_CAPABILITY_TRANSITION.get(relative) if capability else None)
@@ -3929,7 +3945,8 @@ def reviewed_storage_origins(relative, *, prior=False, health=False, mount=False
                      REVIEWED_STORAGE_MOUNT_TRANSITION,
                      REVIEWED_STORAGE_CAPABILITY_TRANSITION,
                      REVIEWED_STORAGE_NATIVE_PLAN_TRANSITION,
-                     REVIEWED_STORAGE_PLAN_HISTORY_TRANSITION):
+                     REVIEWED_STORAGE_PLAN_HISTORY_TRANSITION,
+                     REVIEWED_POSTCLOSE_SCHEDULE_TRANSITION):
         if relative in registry:
             edges.add(registry[relative])
     return reviewed_predecessor_origins(transition[0], edges)
@@ -3948,6 +3965,10 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
     comparison_root = ROOT if root is None else Path(root)
     if not comparison_root.is_absolute() or comparison_root.resolve() != comparison_root:
         return False
+    storage_schedule = any((comparison_root / name).is_file()
+        and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == pair[1]
+        for name, pair in REVIEWED_POSTCLOSE_SCHEDULE_TRANSITION.items())
     storage_admission = any((comparison_root / name).is_file()
         and not (comparison_root / name).is_symlink()
         and _sha(comparison_root / name) == pair[1]
@@ -3985,8 +4006,9 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
         and _sha(comparison_root / name) == pair[1]
         for name, pair in REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION.items()
     )
-    storage_generation = storage_latest or storage_prior or storage_health or storage_mount or storage_capability or storage_native_plan or storage_plan_history or storage_admission
-    storage_profile = (REVIEWED_STORAGE_ADMISSION_PROFILE if storage_admission else
+    storage_generation = storage_latest or storage_prior or storage_health or storage_mount or storage_capability or storage_native_plan or storage_plan_history or storage_admission or storage_schedule
+    storage_profile = (REVIEWED_POSTCLOSE_SCHEDULE_PROFILE if storage_schedule else
+                       REVIEWED_STORAGE_ADMISSION_PROFILE if storage_admission else
                        REVIEWED_STORAGE_PLAN_HISTORY_PROFILE if storage_plan_history else
                        REVIEWED_STORAGE_NATIVE_PLAN_PROFILE if storage_native_plan else
                        REVIEWED_STORAGE_CAPABILITY_PROFILE if storage_capability else
@@ -4002,7 +4024,8 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
             for name, expected in storage_profile.items()
         ):
             return False
-        transition = ((REVIEWED_STORAGE_ADMISSION_TRANSITION.get(relative) if storage_admission else None)
+        transition = ((REVIEWED_POSTCLOSE_SCHEDULE_TRANSITION.get(relative) if storage_schedule else None)
+                      or (REVIEWED_STORAGE_ADMISSION_TRANSITION.get(relative) if storage_admission else None)
                       or (REVIEWED_STORAGE_PLAN_HISTORY_TRANSITION.get(relative) if storage_plan_history else None)
                       or (REVIEWED_STORAGE_NATIVE_PLAN_TRANSITION.get(relative) if storage_native_plan else None)
                       or (REVIEWED_STORAGE_CAPABILITY_TRANSITION.get(relative) if storage_capability else None)
@@ -4011,7 +4034,7 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
                       or (REVIEWED_STORAGE_INTEGRATION_TRANSITION if storage_latest
                           else REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION).get(relative))
         if transition is not None:
-            return current == transition[1] and old in reviewed_storage_origins(relative, prior=not storage_latest, health=storage_health, mount=storage_mount, capability=storage_capability, native_plan=storage_native_plan, plan_history=storage_plan_history, admission=storage_admission)
+            return current == transition[1] and old in reviewed_storage_origins(relative, prior=not storage_latest, health=storage_health, mount=storage_mount, capability=storage_capability, native_plan=storage_native_plan, plan_history=storage_plan_history, admission=storage_admission, schedule=storage_schedule)
     union_generation = any(
         (comparison_root / name).is_file()
         and not (comparison_root / name).is_symlink()

@@ -14248,6 +14248,32 @@ for _name, _current in REVIEWED_STORAGE_ADMISSION_HASHES.items():
         (reviewed_formatting_predecessor(_name, origin), _current) for origin in _origins}
 
 
+REVIEWED_POSTCLOSE_SCHEDULE_HASHES = {
+    **{name: pair[1] for name, pair in _preparation_code.REVIEWED_POSTCLOSE_SCHEDULE_TRANSITION.items()},
+    "src/engine/infrastructure/startup_validation_code_context.py":
+        "82df683ead413324c8db1d62dffdde50e151297125df02ceab84562d249dbbc7",
+}
+REVIEWED_POSTCLOSE_SCHEDULE_PROFILE = {
+    **REVIEWED_STORAGE_ADMISSION_PROFILE, **REVIEWED_POSTCLOSE_SCHEDULE_HASHES,
+}
+REVIEWED_POSTCLOSE_SCHEDULE_VARIANTS = {
+    (key[0], REVIEWED_POSTCLOSE_SCHEDULE_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_sha256": REVIEWED_POSTCLOSE_SCHEDULE_HASHES.get(value["selector_path"], value["selector_sha256"]),
+        "dependencies": {name: REVIEWED_POSTCLOSE_SCHEDULE_HASHES.get(name, sha) for name, sha in value["dependencies"].items()},
+        "contract_extensions": {origin: {name: REVIEWED_POSTCLOSE_SCHEDULE_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in members.items()} for origin, members in value["contract_extensions"].items()},
+    } for key, value in REVIEWED_STORAGE_ADMISSION_VARIANTS.items()
+}
+REVIEWED_POSTCLOSE_SCHEDULE_PAIRS = {**REVIEWED_STORAGE_ADMISSION_PAIRS}
+for _name, _current in REVIEWED_POSTCLOSE_SCHEDULE_HASHES.items():
+    _origins = (_preparation_code.reviewed_storage_origins(_name, schedule=True)
+                if _name in _preparation_code.REVIEWED_POSTCLOSE_SCHEDULE_TRANSITION else
+                {node for pair in REVIEWED_STORAGE_ADMISSION_PAIRS.get(_name, ()) for node in pair})
+    REVIEWED_POSTCLOSE_SCHEDULE_PAIRS[_name] = {
+        (reviewed_formatting_predecessor(_name, origin), _current) for origin in _origins}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -15486,8 +15512,13 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         (source := candidate_bytes(name, optional=True)) is not None
         and hashlib.sha256(source).hexdigest() == pair[1]
         for name, pair in _preparation_code.REVIEWED_STORAGE_ADMISSION_TRANSITION.items())
-    storage_integration_present = storage_latest_present or storage_prior_present or storage_health_present or storage_mount_present or storage_capability_present or storage_native_plan_present or storage_plan_history_present or storage_admission_present
-    storage_profile = (REVIEWED_STORAGE_ADMISSION_PROFILE if storage_admission_present else
+    storage_schedule_present = any(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == pair[1]
+        for name, pair in _preparation_code.REVIEWED_POSTCLOSE_SCHEDULE_TRANSITION.items())
+    storage_integration_present = storage_latest_present or storage_prior_present or storage_health_present or storage_mount_present or storage_capability_present or storage_native_plan_present or storage_plan_history_present or storage_admission_present or storage_schedule_present
+    storage_profile = (REVIEWED_POSTCLOSE_SCHEDULE_PROFILE if storage_schedule_present else
+                       REVIEWED_STORAGE_ADMISSION_PROFILE if storage_admission_present else
                        REVIEWED_STORAGE_PLAN_HISTORY_PROFILE if storage_plan_history_present else
                        REVIEWED_STORAGE_NATIVE_PLAN_PROFILE if storage_native_plan_present else
                        REVIEWED_STORAGE_CAPABILITY_PROFILE if storage_capability_present else
@@ -15495,7 +15526,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                        REVIEWED_STORAGE_HEALTH_PROFILE if storage_health_present else
                        REVIEWED_STORAGE_INTEGRATION_PROFILE if storage_latest_present
                        else REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE)
-    storage_variants = (REVIEWED_STORAGE_ADMISSION_VARIANTS if storage_admission_present else
+    storage_variants = (REVIEWED_POSTCLOSE_SCHEDULE_VARIANTS if storage_schedule_present else
+                       REVIEWED_STORAGE_ADMISSION_VARIANTS if storage_admission_present else
                        REVIEWED_STORAGE_PLAN_HISTORY_VARIANTS if storage_plan_history_present else
                        REVIEWED_STORAGE_NATIVE_PLAN_VARIANTS if storage_native_plan_present else
                        REVIEWED_STORAGE_CAPABILITY_VARIANTS if storage_capability_present else
@@ -15503,7 +15535,8 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                        REVIEWED_STORAGE_HEALTH_VARIANTS if storage_health_present else
                         REVIEWED_STORAGE_INTEGRATION_VARIANTS if storage_latest_present
                         else REVIEWED_STORAGE_INTEGRATION_PRIOR_VARIANTS)
-    storage_pairs = (REVIEWED_STORAGE_ADMISSION_PAIRS if storage_admission_present else
+    storage_pairs = (REVIEWED_POSTCLOSE_SCHEDULE_PAIRS if storage_schedule_present else
+                       REVIEWED_STORAGE_ADMISSION_PAIRS if storage_admission_present else
                        REVIEWED_STORAGE_PLAN_HISTORY_PAIRS if storage_plan_history_present else
                        REVIEWED_STORAGE_NATIVE_PLAN_PAIRS if storage_native_plan_present else
                        REVIEWED_STORAGE_CAPABILITY_PAIRS if storage_capability_present else

@@ -3986,6 +3986,88 @@ def test_bounded_postclose_process_matches_argv_date_and_snapshot(
 
 
 class TestArtifactFreshnessDetector:
+    @pytest.mark.parametrize(
+        "clock,damage,expected",
+        [
+            ((20, 16), None, "not_yet_due"),
+            ((20, 31), None, "startup_grace"),
+            ((20, 36), None, "fail"),
+            ((21, 56), None, "fail"),
+            ((20, 16), "unavailable", "fail"),
+            ((20, 16), "missing_owner", "fail"),
+            ((20, 16), "duplicate_owner", "fail"),
+            ((20, 16), "echo", "fail"),
+            ((20, 16), "wrong_operation", "fail"),
+            ((20, 16), "print_plan", "fail"),
+            ((20, 16), "timezone", "fail"),
+            ((20, 16), "failed_artifact", "fail"),
+            ((20, 16), "historical_source", "fail"),
+            ((20, 16), "shared_data_mount", "not_yet_due"),
+        ],
+    )
+    def test_controller_start_follows_native_installed_owner_without_deadline_extension(
+        self, tmp_path, monkeypatch, clock, damage, expected
+    ):
+        from datetime import datetime as RealDatetime
+        from src.engine.error_detectors import artifact_freshness as mod
+        from src.engine.infrastructure import runtime_release_router as router
+        from src.tests.test_runtime_release_router import original_cron, snapshot_cron
+
+        workspace = tmp_path
+        (workspace / "data").mkdir(exist_ok=True)
+        code_root = workspace
+        if damage == "shared_data_mount":
+            code_root = tmp_path / "release"
+            code_root.mkdir()
+            (code_root / "data").symlink_to(workspace / "data", target_is_directory=True)
+        monkeypatch.setattr(mod, "PROJECT_ROOT", code_root)
+        crontab = router.render_crontab(
+            original_cron(workspace) + snapshot_cron(workspace),
+            workspace,
+            require_snapshot_group=True,
+            require_postclose_stop=True,
+            install_postclose_order=True,
+        )
+        owner = next(line for line in crontab.splitlines() if line.endswith("# POSTCLOSE_DONE_CONTROLLER"))
+        if damage == "unavailable":
+            crontab = None
+        elif damage == "missing_owner":
+            crontab = crontab.replace(owner + "\n", "")
+        elif damage == "duplicate_owner":
+            crontab += owner + "\n"
+        elif damage == "echo":
+            crontab = crontab.replace(owner, owner.replace("bash ", "echo bash ", 1))
+        elif damage == "wrong_operation":
+            crontab = crontab.replace(owner, owner.replace(".sh controller ", ".sh postclose "))
+        elif damage == "print_plan":
+            crontab = crontab.replace(owner, owner.replace(" #", " --print-plan #"))
+        elif damage == "timezone":
+            crontab = "CRON_TZ=UTC\n" + crontab
+
+        now = RealDatetime(2026, 10, 30, *clock, 33)
+        class FrozenDatetime(RealDatetime):
+            @classmethod
+            def now(cls, tz=None):
+                return now if tz is None else now.astimezone(tz)
+        monkeypatch.setattr(mod, "datetime", FrozenDatetime)
+        monkeypatch.setattr(mod, "load_installed_crontab", lambda: crontab)
+        monkeypatch.setattr(mod.ArtifactFreshnessDetector, "_is_upstream_cron_in_progress", staticmethod(lambda *a: False))
+        artifact = next(dict(a) for a in mod.ARTIFACT_REGISTRY if a["id"] == "postclose_done_controller_report")
+        monkeypatch.setattr(mod, "ARTIFACT_REGISTRY", [artifact])
+        if damage == "failed_artifact":
+            p = workspace / artifact["path_template"].replace("{date}", "2026-10-30")
+            p.parent.mkdir(parents=True)
+            p.write_text(json.dumps({"status": "failed"}))
+            os.utime(p, (now.timestamp(), now.timestamp()))
+        detector = mod.ArtifactFreshnessDetector()
+        if damage == "historical_source":
+            detector.postclose_source_date = "2026-10-29"
+        result = detector.check()
+        assert result.details["postclose_done_controller_report_status"] == expected
+        assert (result.severity == "fail") == (expected == "fail")
+        assert artifact["window_end"] == (21, 55)
+        assert artifact["window_grace_sec"] == 300
+
     @pytest.fixture(autouse=True)
     def isolated_runtime_root(self, tmp_path, monkeypatch):
         # Registry fixtures must not consume the operator's live postclose data.
