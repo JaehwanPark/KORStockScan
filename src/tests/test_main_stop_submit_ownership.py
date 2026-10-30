@@ -286,11 +286,13 @@ from src.engine import sniper_state_handlers as h, kiwoom_orders as orders, kiwo
 from src.engine import sniper_execution_receipts as receipts
 from src.engine.scalping import main_stop_policy as policy
 from src.database.models import RecommendationHistory
+from src.tests.test_main_stop_runtime_workload import _seed_native_eligibility
 arrived,release=threading.Event(),threading.Event()
 normal_kwargs,workers,proof={},{},{}
 (root/'capture').mkdir()
 with perf._isolated_native_capture(root/'capture') as (_,queue,capture,sink), \
         isolated_main_workload(root/'runtime',policy.StopValues.parse(data['values']),[data['scenario']]) as work:
+    _seed_native_eligibility(main.DB, data['scenario'])
     dispatch,remaining,transport=h._dispatch_scalp_preset_exit,h._confirm_cancel_or_reload_remaining,orders._post_kiwoom_with_auth_retry
     def pause_response(*a,**k):
         result=transport(*a,**k)

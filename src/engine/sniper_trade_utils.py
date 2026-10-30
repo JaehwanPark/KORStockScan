@@ -139,7 +139,15 @@ def holding_sell_session_bucket(observed_at: datetime) -> str:
     if context.blocker is not None and not legacy_transition:
         return "outside_krx_nxt_window"
     if context.contract_version == session_contract.MARKET_SESSION_CONTRACT_VERSION_V2:
+        if (
+            context.session_regime == session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET
+            and not context.exit_allowed_by_clock
+        ):
+            return "outside_krx_nxt_window"
         return {
+            session_contract.MARKET_SESSION_REGIME_LEGACY_PREMARKET: (
+                "krx_like_premarket"
+            ),
             session_contract.MARKET_SESSION_REGIME_KRX_REGULAR: "krx_regular",
             session_contract.MARKET_SESSION_REGIME_SESSION_TRANSITION: (
                 "session_transition"

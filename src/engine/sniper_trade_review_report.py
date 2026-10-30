@@ -1066,6 +1066,7 @@ def _direct_exit_signal_binding(
         "exit_threshold_executable_bid",
         "exit_threshold_bid_source",
         "exit_threshold_trigger_kind",
+        "exit_decision_quote_receipt",
         "holding_score_role_gate",
         "holding_path_signal_id",
         "holding_path_signal_at",
@@ -1080,6 +1081,19 @@ def _direct_exit_signal_binding(
         if isinstance(raw_inputs, dict)
         else None
     )
+    # Both values are the originating decision profit, not the final execution
+    # price. A competing same-rule signal must not authenticate this submit.
+    decision_profit = fields.get("profit_rate")
+    submission_profit = submit.get("profit_rate")
+    if decision_profit not in (None, "", "-") and submission_profit not in (None, "", "-"):
+        try:
+            left, right = float(decision_profit), float(submission_profit)
+            if not (math.isfinite(left) and math.isfinite(right)) or not math.isclose(
+                left, right, rel_tol=0, abs_tol=0.000001
+            ):
+                return None, "source_gap_decision_submit_profit_mismatch"
+        except (TypeError, ValueError, OverflowError):
+            return None, "source_gap_decision_submit_profit_invalid"
     if (
         contract.get("schema") != "holding_exit_signal_receipt_v1"
         or context.get("schema") != "sell_submit_pending_context_v1"

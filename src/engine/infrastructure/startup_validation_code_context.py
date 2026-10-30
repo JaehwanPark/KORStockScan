@@ -3690,7 +3690,7 @@ REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE = {
 REVIEWED_SUBMISSION_MONITOR_TRANSITION = {
     "src/engine/monitoring/submission_bottleneck_monitor.py": (
         "0a527ad29a96caf0f408db3467e8d407dccb8e552330f8f55e3e09a40dfc198e",
-        "b2aba0a04e52f47407e99efeddc26cb489ed0562148cf1df799710204994ca25",
+        "f3a09a8c7890b3946a3c28fa3465056ae41dfd0bd2e149be77e7ae3bdf33eaae",
     ),
     "src/engine/scalping/continuous_reversal_policy_v6.py": (
         "9f468cb97f07087ed2b714d2deda695f6b6985718ec2fb9eb2fcbe9fce57128e",
@@ -3698,12 +3698,56 @@ REVIEWED_SUBMISSION_MONITOR_TRANSITION = {
     ),
     "src/engine/ai_engine_openai.py": (
         "3ef25fb633af75b36f72c2721291c4425dc873bb50255d200928c05fc20598a3",
-        "5d5b66dc3039f3f6e31756bc42d7d91a015f7b5fa8aef9f2dd02cd78538a658e",
+        "c6b60363676f804ecab1ef2dbaba119bb090a181fe6e4ddf7136fcda0716a920",
+    ),
+    "src/engine/scalping/ai_decision_trace.py": (
+        "f1a072179283cba22d64cba81b435dee1becb4ed875666ec1911945ff5e7517a",
+        "c79ada77b9e4566df6c55a58b5cfe039380ac452b814aab3e716276f9b547c53",
+    ),
+    "src/bot_main.py": (
+        "09fa411c3a9fbbca5cec46b968a7ff6ac2fdac266acf02402f4684a1e3104eb8",
+        "e682ed91042d98bd21f3a3f2d8537fcc05eae399f389935f3fee20789343a06b",
     ),
 }
 REVIEWED_SUBMISSION_MONITOR_PROFILE = {
     **REVIEWED_P5_RECHECK_PROFILE,
     **{name: pair[1] for name, pair in REVIEWED_SUBMISSION_MONITOR_TRANSITION.items()},
+}
+
+# One source registration shared by the native handoff and this independent
+# preparation reader. The offline workload is report-only and is deliberately
+# excluded from the startup-required profile below.
+REVIEWED_STOP_INCIDENT_TRANSITION = {
+    "src/engine/automation/main_stop_runtime_workload.py": (
+        "4835d5168d8a87a1844f144d76da3a03a3023b8ff5f6a1c2974e14d81be00817",
+        "f9ebd03ad6b55ba971b679e710db05d1a7eae21196efe5c16cce827d3aa85e28",
+    ),
+    "src/engine/scalping/main_stop_quantity_source.py": (
+        "161ad67649004fdef873b238a5face5923079d3ee91cb0d85bc4e0cca52e2f26",
+        "9885041f7c83ba5c91b632f23e371d9e32b59af71ce246cfb4cca4c7a97793bf",
+    ),
+    "src/engine/scalping/main_stop_runtime_source.py": (
+        "6e69839e7bda72f6b7d2791c91d0c364ca51feb03bb4412176fdec364d17e1c0",
+        "9ffc9b4032f41f94e23a60e8f5f2d480b60ce1e53f3b462b9a037a8e16231508",
+    ),
+    "src/engine/sniper_state_handlers.py": (
+        "82fa6b5c762e99e644e889ca343cb565caf0f52d62da0b0ca728fca8309414f6",
+        "965812f61a97ce966771c29a0430f780536907a568d25ea63de1bd1de1477efd",
+    ),
+    "src/engine/sniper_trade_review_report.py": (
+        "a13e1b73e76120a4ceb87a5c65b2a714bdc6845d9b38c81f3d1d37ce7be12b08",
+        "caf9f74641080abe610ba62ffef04fb000529de423d56d4f208c296d33078459",
+    ),
+    "src/engine/sniper_trade_utils.py": (
+        "d0570ff0e17a7f164c63fd187eca593bfc92516e40c0e0c58eb019828c7ffbda",
+        "ce50a80ee5c0dcd6ba81a37158ffbc75f023a1188e31968422b7cdd7bdd3c14e",
+    ),
+}
+_STOP_INCIDENT_OFFLINE_OWNER = "src/engine/automation/main_stop_runtime_workload.py"
+REVIEWED_STOP_INCIDENT_PROFILE = {
+    **REVIEWED_SUBMISSION_MONITOR_PROFILE,
+    **{name: pair[1] for name, pair in REVIEWED_STOP_INCIDENT_TRANSITION.items()
+       if name != _STOP_INCIDENT_OFFLINE_OWNER},
 }
 
 
@@ -3713,6 +3757,24 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
     comparison_root = ROOT if root is None else Path(root)
     if not comparison_root.is_absolute() or comparison_root.resolve() != comparison_root:
         return False
+    stop_generation = any(
+        (comparison_root / name).is_file()
+        and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == pair[1]
+        for name, pair in REVIEWED_STOP_INCIDENT_TRANSITION.items()
+        if name != _STOP_INCIDENT_OFFLINE_OWNER
+    )
+    if stop_generation:
+        if any(
+            (comparison_root / name).is_symlink()
+            or not (comparison_root / name).is_file()
+            or _sha(comparison_root / name) != expected
+            for name, expected in REVIEWED_STOP_INCIDENT_PROFILE.items()
+        ):
+            return False
+        transition = REVIEWED_STOP_INCIDENT_TRANSITION.get(relative)
+        if transition is not None and relative != _STOP_INCIDENT_OFFLINE_OWNER:
+            return current == transition[1] and old == transition[0]
     if (relative == _suffix_owner and current == _suffix_current
             and any((comparison_root / name).is_symlink() or not (comparison_root / name).is_file()
                     or _sha(comparison_root / name) != expected
@@ -3731,7 +3793,8 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
         # Authenticate a complete issued generation before interpreting a pair.
         # The current reader may compare a genuine earlier selected generation;
         # an overlapping source trigger cannot turn it into the latest profile.
-        for profile in (REVIEWED_SUBMISSION_MONITOR_PROFILE,
+        for profile in (REVIEWED_STOP_INCIDENT_PROFILE,
+                        REVIEWED_SUBMISSION_MONITOR_PROFILE,
                         REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE):
             if all(not (comparison_root / name).is_symlink()
                    and (comparison_root / name).is_file()
@@ -3757,7 +3820,7 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
         ) if relative in values and values[relative][1] == current]
         if transitions:
             origins = {pair[0] for pair in transitions}
-            if monitor_profile is REVIEWED_SUBMISSION_MONITOR_PROFILE:
+            if monitor_profile is not REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE:
                 origins.add(REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE[relative])
             from src.engine.automation.intraday_release_handoff import reviewed_formatting_predecessor
             origin = reviewed_formatting_predecessor(relative, old)

@@ -425,6 +425,12 @@ def isolated_main_workload(
                 safe["last_realtime_type_ts"] = {"0B": at - 1, "0D": at - 1}
                 for key in ("curr", "best_bid", "best_ask"):
                     safe[key] = int(stock["buy_price"])
+                if isinstance(safe.get("last_trade_tick"), dict):
+                    safe["last_trade_tick"].update(
+                        ts=at - 1, price=int(stock["buy_price"]),
+                        values={**safe["last_trade_tick"].get("values", {}),
+                                "10": str(int(stock["buy_price"]))},
+                    )
                 for routes in safe.get("realtime_type_snapshots_by_route", {}).values():
                     for depth in routes.values():
                         depth["observed_epoch"] = at - 1
@@ -479,6 +485,12 @@ def isolated_main_workload(
                         last_ws_update_ts=at - 1,
                         last_realtime_type_ts={"0B": at - 1, "0D": at - 1},
                     )
+                    if isinstance(other_safe.get("last_trade_tick"), dict):
+                        other_safe["last_trade_tick"].update(
+                            ts=at - 1, price=int(other["buy_price"]),
+                            values={**other_safe["last_trade_tick"].get("values", {}),
+                                    "10": str(int(other["buy_price"]))},
+                        )
                     for routes in other_safe.get(
                         "realtime_type_snapshots_by_route", {}
                     ).values():

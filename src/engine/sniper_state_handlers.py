@@ -21025,6 +21025,7 @@ def _exit_signal_receipt_fields(
         "exit_threshold_executable_bid",
         "exit_threshold_bid_source",
         "exit_threshold_trigger_kind",
+        "exit_decision_quote_receipt",
         "holding_score_role_gate",
         "holding_path_signal_id",
         "holding_path_signal_at",
@@ -21063,7 +21064,6 @@ def _exit_signal_receipt_fields(
         default=str,
     )
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    stock["_exit_signal_receipt"] = {**contract, "sha256": digest}
     return {
         "exit_signal_binding_status": "decision_receipt_emitted",
         "exit_signal_id": contract["signal_id"],
@@ -21080,9 +21080,24 @@ def _exit_signal_submission_fields(
     stock: dict, code: str, fields: dict
 ) -> dict[str, Any]:
     """Copy a decision reference only into its same-position SELL ACK."""
-    receipt = stock.get("_exit_signal_receipt")
+    binding = stock.get("_sell_submit_exit_signal_receipt")
+    if not isinstance(binding, dict) or binding.get("generation") != str(
+        stock.get("sell_submit_generation") or ""
+    ).strip():
+        return {"exit_signal_binding_status": "source_gap_submit_signal_unbound"}
+    receipt = binding.get("receipt")
     if not isinstance(receipt, dict):
         return {"exit_signal_binding_status": "source_gap_decision_receipt_missing"}
+    try:
+        canonical = json.dumps(
+            {key: value for key, value in receipt.items() if key != "sha256"},
+            sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+            allow_nan=False, default=str,
+        )
+        if hashlib.sha256(canonical.encode("utf-8")).hexdigest() != receipt.get("sha256"):
+            return {"exit_signal_binding_status": "source_gap_decision_receipt_invalid"}
+    except (TypeError, ValueError):
+        return {"exit_signal_binding_status": "source_gap_decision_receipt_invalid"}
     if (
         receipt.get("record_id") != str(stock.get("id") or "").strip()
         or receipt.get("code") != str(code or "").strip()[:6]
@@ -21124,7 +21139,7 @@ def _exit_signal_submission_fields(
     }
 
 
-def _log_holding_pipeline(stock, code, stage, **fields):
+def _log_holding_pipeline(stock, code, stage, *, _decision_receipt_sink=None, **fields):
     if stage == "sell_completed":
         from src.engine.scalping.trailing_entry_research_source import (
             clear as clear_trailing_plan,
@@ -21248,7 +21263,7 @@ def _log_holding_pipeline(stock, code, stage, **fields):
         from src.utils.pipeline_event_logger import enqueue_trailing_observation
 
         return enqueue_trailing_observation(stock.get("name"), code, record_id, fields)
-    return emit_pipeline_event(
+    emitted = emit_pipeline_event(
         "HOLDING_PIPELINE",
         stock.get("name"),
         code,
@@ -21256,6 +21271,22 @@ def _log_holding_pipeline(stock, code, stage, **fields):
         record_id=record_id,
         fields=fields,
     )
+    raw_persisted = (
+        emitted.get("structured_append_succeeded") is True
+        if isinstance(emitted, dict)
+        else emitted is True
+    )
+    if raw_persisted and stage == "exit_signal" and isinstance(_decision_receipt_sink, dict):
+        canonical = fields.get("exit_signal_contract")
+        digest = fields.get("exit_signal_contract_sha256")
+        if isinstance(canonical, str) and isinstance(digest, str):
+            try:
+                receipt = json.loads(canonical)
+                if hashlib.sha256(canonical.encode("utf-8")).hexdigest() == digest:
+                    _decision_receipt_sink.update(receipt={**receipt, "sha256": digest})
+            except (ValueError, TypeError):
+                pass
+    return emitted
 
 
 def _scalp_trailing_policy_observation_fields() -> dict[str, Any]:
@@ -22105,6 +22136,23 @@ def _scalp_trailing_latch_arm(
     )
 
 
+def _exit_decision_quote_observation(ws_data, *, observed_at):
+    """Record the decision snapshot without granting quote or order authority."""
+    try:
+        quote = ws_quote_source_receipt(ws_data or {}, now_ts=float(observed_at))
+        if not isinstance(quote, dict) or not quote:
+            return {}
+        return {
+            "exit_decision_quote_receipt": json.dumps(
+                {"observed_at": float(observed_at), "quote": quote},
+                sort_keys=True, separators=(",", ":"), allow_nan=False,
+            )
+        }
+    except Exception as exc:
+        log_error(f"[EXIT_DECISION_QUOTE_SOURCE] observation unavailable: {type(exc).__name__}")
+        return {}
+
+
 def _scalp_exit_threshold_observation_fields(
     *,
     exit_rule: str,
@@ -22211,7 +22259,11 @@ def _scalp_exit_threshold_observation_fields(
                 if rule == "scalp_trailing_take_profit"
                 else 0
             ),
-            "exit_threshold_bid_source": trailing_bid_source or "-",
+            "exit_threshold_bid_source": (
+                trailing_bid_source or "-"
+                if rule == "scalp_trailing_take_profit"
+                else "-"
+            ),
             "exit_threshold_trigger_kind": trailing_trigger_kind or "-",
             "exit_threshold_runtime_pid": os.getpid(),
             # This is an effective branch value, not proof of env/policy origin.
@@ -22272,6 +22324,7 @@ def _exact_sell_submission_leg_fields(order_no: str, qty: int) -> dict[str, Any]
 
 
 _SELL_SUBMIT_CONTEXT_KEYS = (
+    "_sell_submit_exit_signal_receipt",
     "sell_submit_pending",
     "sell_submit_requested_qty",
     "sell_submit_owner_position_qty",
@@ -22361,6 +22414,7 @@ def _new_sell_submit_context_fields(
     intended_route: str,
     intended_effective_venue: str,
     intended_session_bucket: str,
+    decision_receipt: dict | None = None,
 ) -> dict[str, Any]:
     receipt_state = stock.get("_sell_execution_receipt_state")
     receipt_position_qty = (
@@ -22404,6 +22458,10 @@ def _new_sell_submit_context_fields(
     context_stock = dict(stock)
     context_stock.update(fields)
     fields["sell_submit_context_sha256"] = _sell_submit_context_sha256(context_stock)
+    fields["_sell_submit_exit_signal_receipt"] = {
+        "generation": fields["sell_submit_generation"],
+        "receipt": dict(decision_receipt) if isinstance(decision_receipt, dict) else None,
+    }
     return fields
 
 
@@ -29456,6 +29514,7 @@ def _dispatch_scalp_preset_exit(
         stock["last_exit_reason"] = reason
         exit_decision_source = str(stock.get("last_exit_decision_source") or "MANUAL")
     exit_fields = dict(extra_fields or {})
+    exit_fields.update(_exit_decision_quote_observation(ws_data, observed_at=now_ts))
     exit_fields.pop("main_stop_normal_exit_decision", None)
     exit_fields.update(
         _main_stop_normal_exit_fields(
@@ -29467,10 +29526,12 @@ def _dispatch_scalp_preset_exit(
             evaluator="fast" if fast_exit else "normal",
         )
     )
+    dispatch_decision_receipt = {}
     _log_holding_pipeline(
         stock,
         code,
         "exit_signal",
+        _decision_receipt_sink=dispatch_decision_receipt,
         sell_reason_type=sell_reason_type,
         reason=reason,
         exit_rule=exit_rule or "-",
@@ -29873,6 +29934,7 @@ def _dispatch_scalp_preset_exit(
                 intended_session_bucket=_holding_sell_execution_session_bucket(
                     exit_order_sent_at
                 ),
+                decision_receipt=dispatch_decision_receipt.get("receipt"),
             )
             sell_submit_generation = str(
                 sell_submit_context_fields["sell_submit_generation"]
@@ -51055,6 +51117,17 @@ def _holding_ws_freshness_recover_or_block(stock, code, ws_data, *, now_ts):
         "holding_ws_recovery_miss_count": miss_count,
         **_ws_realtime_type_freshness_fields(ws_data, now_ts=now_ts),
     }
+    # Preserve the producer's classification and inputs; short 0B/0D ages alone
+    # do not establish that a conflicting or explicitly stale quote is usable.
+    for key in (
+        "market_data_freshness_state", "market_data_orderbook_state",
+        "market_data_effective_price_source", "market_data_ws_rest_gap_bps",
+        "market_data_effective_quote_age_ms", "market_data_ws_quote_age_ms",
+        "market_data_rest_quote_age_ms", "stale_quote", "context_stale",
+        "diagnostic_quote_age_stale",
+    ):
+        if key in ws_data:
+            fields["holding_ws_input_" + key] = ws_data[key]
 
     source = ws_data.get("holding_quote_source")
     if isinstance(source, dict) and not source.get("item"):
@@ -91843,13 +91916,44 @@ def _maybe_submit_entry_split_probe_residual(
     """
 
     with _ENTRY_SPLIT_PROBE_RESIDUAL_LOCK:
-        return _submit_entry_split_probe_residual_locked(
+        try:
+            with ENTRY_LOCK:
+                source_position = _scalp_holding_source_position_key(stock, code)
+                source_bundle = str(stock.get("entry_split_probe_bundle_id") or "").strip()
+                source_buy = buy_fill_identity_from_runtime(stock)
+        except Exception as exc:
+            source_position = source_bundle = source_buy = None
+            log_error(f"[MAIN_STOP_PROBE_SOURCE] capture failed: {type(exc).__name__}")
+        result = _submit_entry_split_probe_residual_locked(
             stock,
             code,
             ws_data,
             now_ts=now_ts,
             now_dt=now_dt,
         )
+        # Observation only: this serialized owner has returned from the last
+        # possible residual broker call. An abort marker alone can precede that
+        # boundary and cannot prove that a claimed leg was never submitted.
+        try:
+            with ENTRY_LOCK:
+                if (
+                    isinstance(stock, dict)
+                    and str(stock.get("code") or "")[:6] == str(code or "")[:6]
+                    and bool(source_bundle and source_buy)
+                    and _scalp_holding_source_position_key(stock, code) == source_position
+                    and str(stock.get("entry_split_probe_bundle_id") or "").strip() == source_bundle
+                    and buy_fill_identity_from_runtime(stock) == source_buy
+                    and stock.get("entry_split_probe_phase") == "aborted"
+                    and stock.get("entry_split_probe_terminal_outcome") == "residual_not_submitted"
+                    and stock.get("entry_split_probe_terminal_abort_reason")
+                    == "residual_leg_direction_deferred"
+                    and stock.get("entry_split_probe_actual_submitted_qty") == 1
+                    and stock.get("entry_split_probe_residual_claimed") is True
+                ):
+                    stock["main_stop_probe_claim_resolved_at"] = time.time()
+        except Exception as exc:
+            log_error(f"[MAIN_STOP_PROBE_SOURCE] resolution failed: {type(exc).__name__}")
+        return result
 
 
 def submit_entry_split_probe_residual_after_fill(stock: dict, code: str) -> bool:
@@ -93816,10 +93920,15 @@ def handle_holding_state(
                 stock, code, at=now_ts, mark_price=curr_p, exit_rule=exit_rule
             )
         )
+        exit_extra_fields.update(
+            _exit_decision_quote_observation(ws_data, observed_at=now_ts)
+        )
+        holding_decision_receipt = {}
         _log_holding_pipeline(
             stock,
             code,
             "exit_signal",
+            _decision_receipt_sink=holding_decision_receipt,
             scalp_trailing_observation_source_gap=bool(
                 stock.get("scalp_trailing_observation_source_gap")
             ),
@@ -94846,6 +94955,7 @@ def handle_holding_state(
             intended_session_bucket=_holding_sell_execution_session_bucket(
                 sell_submit_call_started_at
             ),
+            decision_receipt=holding_decision_receipt.get("receipt"),
         )
         sell_submit_generation = str(
             sell_submit_context_fields["sell_submit_generation"]

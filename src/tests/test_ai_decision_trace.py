@@ -138,6 +138,7 @@ def test_compact_binding_supplement_proves_original_archive_without_changing_pri
     from datetime import timedelta
     from copy import deepcopy
     from src.engine.scalping import ai_decision_quality as quality
+    from src.engine.scalping.mechanistic_entry_runtime_policy import digest
 
     _enable(monkeypatch, tmp_path)
     prompt = "fixture compact prompt"
@@ -153,7 +154,7 @@ def test_compact_binding_supplement_proves_original_archive_without_changing_pri
     )
     native = dict(
         input_sha256=hashlib.sha256(trace._json_bytes(logical)).hexdigest(),
-        prompt_sha256=__import__("src.engine.scalping.mechanistic_entry_runtime_policy", fromlist=["digest"]).digest(prompt),
+        prompt_sha256=digest(prompt),
     )
     capture = trace.capture_ai_request(
         prompt=prompt,

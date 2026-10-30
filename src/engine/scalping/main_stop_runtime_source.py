@@ -21,6 +21,7 @@ from .main_stop_policy import (
     finite,
     next_source_observation_generation,
 )
+from .main_stop_quantity_source import PROBE_TERMINAL_KEYS
 
 EVALUATION_SCHEMA = "main_stop_evaluation_source_v1"
 STAGES = {"preset_safety", "common_soft"}
@@ -41,7 +42,6 @@ SOURCE_VIEW_KEYS = frozenset(
         "buy_time",
         "holding_started_at",
         "order_time",
-        "entry_split_probe_filled_at",
         "scalp_holding_source_position_token",
         "scalp_live_simulator",
         "simulation_book",
@@ -100,11 +100,7 @@ SOURCE_VIEW_KEYS = frozenset(
         "pending_entry_orders",
         "entry_requested_qty",
         "requested_buy_qty",
-        "entry_split_probe_bundle_id",
         "entry_split_order_probe_first_applied",
-        "entry_split_probe_requested_qty",
-        "entry_split_probe_target_qty",
-        "entry_split_probe_phase",
         "entry_split_probe_abort_reason",
         "entry_split_probe_partial_complete_qty",
         "holding_path_vote_ledger",
@@ -123,7 +119,7 @@ SOURCE_VIEW_KEYS = frozenset(
         "_main_stop_observation_epoch",
         "_main_stop_evaluation_lane_generations",
     }
-)
+) | frozenset(PROBE_TERMINAL_KEYS)
 SOURCE_FEATURE_KEYS = frozenset(
     {
         "tick_context_quality",

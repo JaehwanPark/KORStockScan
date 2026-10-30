@@ -48,9 +48,9 @@ def _assert_current_code_profile(relative, current):
     """Current source assertions use both final readers, not a dated overlay."""
     raw = (ROOT / relative).read_bytes()
     assert hashlib.sha256(raw).hexdigest() == current
-    if relative in C.REVIEWED_SUBMISSION_MONITOR_PROFILE:
-        assert current == C.REVIEWED_SUBMISSION_MONITOR_PROFILE[relative]
-    expected = H.REVIEWED_SUBMISSION_MONITOR_PROFILE[relative]
+    if relative in C.REVIEWED_STOP_INCIDENT_PROFILE:
+        assert current == C.REVIEWED_STOP_INCIDENT_PROFILE[relative]
+    expected = H.REVIEWED_STOP_INCIDENT_PROFILE[relative]
     compared = H.reviewed_formatting_source(relative, raw)
     assert hashlib.sha256(compared).hexdigest() == expected
 
@@ -83,6 +83,7 @@ def _native_releases(tmp_path_factory, *, current=False):
     # that original monitor; the new profile has separate native-family tests.
     for relative in (() if current else dict.fromkeys((
         *C.REVIEWED_SUBMISSION_MONITOR_TRANSITION,
+        *C.REVIEWED_STOP_INCIDENT_TRANSITION,
         "src/engine/infrastructure/startup_validation_code_context.py",
         "src/engine/automation/intraday_release_handoff.py",
     ))):
@@ -3997,7 +3998,9 @@ def test_scoped_entry_profiles_cover_every_changed_native_contract_member():
         old = subprocess.check_output(["git", "show", f"{baseline}:{relative}"], cwd=ROOT)
         if hashlib.sha256(old).hexdigest() != hashlib.sha256((ROOT / relative).read_bytes()).hexdigest():
             changed.add(relative)
-    assert changed <= set(C.REVIEWED_CRON_PHASE_BINDING_CHANGED)
+    assert changed <= (set(C.REVIEWED_CRON_PHASE_BINDING_CHANGED)
+                       | set(C.REVIEWED_SUBMISSION_MONITOR_TRANSITION)
+                       | set(C.REVIEWED_STOP_INCIDENT_TRANSITION))
     preparation = "src/engine/infrastructure/startup_validation_code_context.py"
     report_paths = {str((ROOT / "src/engine" / name).resolve().relative_to(ROOT)) for names in report.COMPONENTS.values() for name in (*names, *report.COMMON_CODE_COMPONENTS)}
     report_changed = set()
@@ -4016,8 +4019,10 @@ def test_scoped_entry_profiles_cover_every_changed_native_contract_member():
     reviewed = {**H.REVIEWED_CRON_PHASE_BINDING_CHANGED,
                 **H.REVIEWED_SCHEDULED_SUFFIX_CHANGED,
                 **H.REVIEWED_P5_RECHECK_CHANGED,
-                **H.REVIEWED_SUBMISSION_MONITOR_HASHES}
-    assert all_changed | {preparation} <= set(reviewed)
+                **H.REVIEWED_SUBMISSION_MONITOR_HASHES,
+                **H.REVIEWED_STOP_INCIDENT_HASHES}
+    runtime_import_only = {"src/engine/daily_report_service.py"}
+    assert all_changed | {preparation} <= set(reviewed) | runtime_import_only
     # A declared unchanged dependency is legitimate, but must retain the exact
     # baseline bytes and its own approved comparison representation.
     for relative in set(reviewed) - (all_changed | {preparation}):
@@ -4463,12 +4468,14 @@ def test_combined_startup_scoped_independent_exact_generation(tmp_path, monkeypa
 def test_submission_monitor_registration_reaches_independent_native_reader(
     tmp_path, monkeypatch, fault
 ):
-    for name, expected in C.REVIEWED_SUBMISSION_MONITOR_PROFILE.items():
+    for name, expected in C.REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE.items():
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes((ROOT / name).read_bytes())
+        path.write_bytes(subprocess.check_output([
+            "git", "-C", str(ROOT), "show", "af07f6f6a:" + name
+        ]))
         assert C._sha(path) == expected
-    relative, (old, current) = next(iter(C.REVIEWED_SUBMISSION_MONITOR_TRANSITION.items()))
+    relative, (old, current) = next(iter(C.REVIEWED_SUBMISSION_MONITOR_PRIOR_TRANSITION.items()))
     dependency = tmp_path / "src/engine/infrastructure/validation_digest_session.py"
     if fault == "missing":
         dependency.unlink()
@@ -4501,8 +4508,10 @@ def test_submission_monitor_pair_keeps_explicit_comparison_root(tmp_path, phase)
     for name in C.REVIEWED_SUBMISSION_MONITOR_PROFILE:
         path = candidate / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes((ROOT / name).read_bytes())
-    relative, pair = next(iter(C.REVIEWED_SUBMISSION_MONITOR_TRANSITION.items()))
+        path.write_bytes(subprocess.check_output([
+            "git", "-C", str(ROOT), "show", "af07f6f6a:" + name
+        ]))
+    relative, pair = next(iter(C.REVIEWED_SUBMISSION_MONITOR_PRIOR_TRANSITION.items()))
     comparison = candidate
     if phase == "predecessor":
         (candidate / relative).write_bytes(subprocess.check_output([
@@ -4519,7 +4528,7 @@ def test_submission_monitor_pair_keeps_explicit_comparison_root(tmp_path, phase)
 @pytest.mark.parametrize("generation", ["prior", "current"])
 @pytest.mark.parametrize("fault", [None, "missing", "mixed", "unknown_origin"])
 def test_submission_native_generations_preserve_issued_predecessor_and_reject_mixes(tmp_path, generation, fault):
-    profile = C.REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE if generation == "prior" else C.REVIEWED_SUBMISSION_MONITOR_PROFILE
+    profile = C.REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE if generation == "prior" else C.REVIEWED_STOP_INCIDENT_PROFILE
     for name, expected in profile.items():
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -4539,3 +4548,33 @@ def test_submission_native_generations_preserve_issued_predecessor_and_reject_mi
     if generation == "current" and fault is None:
         assert C.reviewed_preparation_pair(monitor,
             C.REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE[monitor], profile[monitor], root=tmp_path)
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "mixed", "alias", "origin", "future", "unregistered"])
+def test_stop_incident_generation_reaches_independent_reader(tmp_path, fault):
+    assert C._STOP_INCIDENT_OFFLINE_OWNER not in C.REVIEWED_STOP_INCIDENT_PROFILE
+    for name, expected in C.REVIEWED_STOP_INCIDENT_PROFILE.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((ROOT / name).read_bytes())
+        assert C._sha(path) == expected
+    relative = "src/engine/sniper_state_handlers.py"
+    old, current = C.REVIEWED_STOP_INCIDENT_TRANSITION[relative]
+    dependency = tmp_path / "src/engine/scalping/main_stop_quantity_source.py"
+    if fault == "missing":
+        dependency.unlink()
+    elif fault == "mixed":
+        dependency.write_bytes(subprocess.check_output([
+            "git", "-C", str(ROOT), "show", "af07f6f6a:src/engine/scalping/main_stop_quantity_source.py"
+        ]))
+    elif fault == "alias":
+        original = dependency.with_suffix(".original")
+        dependency.rename(original)
+        dependency.symlink_to(original)
+    elif fault == "origin":
+        old = "0" * 64
+    elif fault == "future":
+        current = "f" * 64
+    elif fault == "unregistered":
+        relative = "src/engine/scalping/unknown_generation.py"
+    assert C.reviewed_preparation_pair(relative, old, current, root=tmp_path) is (fault is None)
