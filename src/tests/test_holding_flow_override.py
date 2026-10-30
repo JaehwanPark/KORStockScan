@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import json
 
 from src.engine import sniper_state_handlers as handlers
 
@@ -27,6 +28,30 @@ def test_exit_threshold_observation_fields_are_effective_only_not_authority():
         soft_stop_pct="bad-value",
     )
     assert invalid["exit_threshold_status"] == "invalid_observation"
+
+
+def test_soft_stop_keeps_quote_observation_separate_from_trailing_threshold(monkeypatch):
+    monkeypatch.setattr(
+        handlers, "ws_quote_source_receipt",
+        lambda data, *, now_ts: {
+            "best_bid": 102100, "best_ask": 102200,
+            "observed_epoch": now_ts - 0.1, "item": "053800_NX",
+            "market_route": "nxt_only", "transport_epoch": 123,
+        },
+    )
+    fields = handlers._scalp_exit_threshold_observation_fields(
+        exit_rule="scalp_soft_stop_pct", profit_rate=-3.26, peak_profit=-0.23,
+        soft_stop_pct=-3.0, trailing_executable_bid=102100,
+        trailing_bid_source="fresh_ws_executable_bid",
+    )
+    assert fields["exit_threshold_executable_bid"] == 0
+    assert fields["exit_threshold_bid_source"] == "-"
+    receipt = json.loads(handlers._exit_decision_quote_observation({}, observed_at=1000)[
+        "exit_decision_quote_receipt"
+    ])
+    assert receipt["observed_at"] == 1000
+    assert receipt["quote"]["best_bid"] == 102100
+    assert receipt["quote"]["item"] == "053800_NX"
 
 
 class DummyFlowAI:

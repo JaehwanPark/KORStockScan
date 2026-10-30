@@ -2008,6 +2008,7 @@ def test_exit_signal_requires_exact_submission_generation_and_order():
             "exit_threshold_key": "SCALP_TRAILING_LIMIT_WEAK",
             "exit_threshold_effective_pct": 0.4,
             "exit_threshold_executable_bid": 10060,
+            "exit_decision_quote_receipt": '{"observed_at":1790554200,"quote":{"best_bid":10060}}',
         },
     }
     digest = hashlib.sha256(
@@ -2050,6 +2051,7 @@ def test_exit_signal_requires_exact_submission_generation_and_order():
         "exit_threshold_key": contract["threshold_key"],
         "exit_threshold_effective_pct": contract["threshold_effective_pct"],
         "exit_threshold_executable_bid": 10060,
+        "exit_decision_quote_receipt": contract["decision_inputs"]["exit_decision_quote_receipt"],
         "scalp_trailing_policy_value_sha256": contract["policy_sha256"],
         "holding_context_venue": contract["context_venue"],
         "holding_context_session": contract["context_session"],
@@ -2097,6 +2099,16 @@ def test_exit_signal_requires_exact_submission_generation_and_order():
     linked = report_mod._build_exit_signal([decision, submission, terminal])
     assert linked["inferred"] is False
     assert linked["binding_status"] == "same_order_generation"
+    wrong_decision = event(
+        "exit_signal", decision.timestamp, {**decision_fields, "profit_rate": "-0.01"}
+    )
+    wrong_submit = event(
+        "sell_order_sent", submission.timestamp,
+        {**submission_fields, "profit_rate": "-0.67"},
+    )
+    assert report_mod._build_exit_signal([wrong_decision, wrong_submit, terminal])[
+        "binding_status"
+    ] == "source_gap_decision_submit_profit_mismatch"
     assert linked["policy_binding_status"] == "observed_sha_bootstrap_unverified"
     assert linked["submission"]["order_no"] == "SELL-1"
     assert linked["submission"]["sell_submit_context_sha256"] == submit_sha
@@ -2213,6 +2225,13 @@ def test_exit_signal_requires_exact_submission_generation_and_order():
         ]
         == "source_gap_decision_submit_contract_mismatch"
     )
+    changed_quote_receipt = event(
+        "exit_signal", decision.timestamp,
+        {**decision_fields, "exit_decision_quote_receipt": '{"quote":{"best_bid":9999}}'},
+    )
+    assert report_mod._build_exit_signal([changed_quote_receipt, submission, terminal])[
+        "binding_status"
+    ] == "source_gap_decision_submit_contract_mismatch"
     duplicate = event(
         "exit_signal",
         decision.timestamp,

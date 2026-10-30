@@ -169,6 +169,93 @@ def test_actual_native_maps_and_full_order_census_ignore_notification_state():
         assert receipt["allowed_runtime_apply"] is False
 
 
+def test_terminal_probe_proves_only_exact_filled_and_unsubmitted_legs():
+    stock = native_stock(filled=1, ordered=1, code="053800")
+    stock.update(
+        entry_split_probe_bundle_id="053800-probe-example",
+        entry_bundle_id="053800-probe-example",
+        entry_split_probe_phase="aborted",
+        entry_split_probe_requested_qty=5,
+        entry_split_probe_target_qty=5,
+        entry_split_probe_actual_submitted_qty=1,
+        entry_split_probe_residual_terminal_qty=4,
+        entry_split_probe_order_no="0000123",
+        entry_split_probe_fill_price=10000,
+        entry_split_probe_filled_at=1000.0,
+        entry_split_probe_terminal_at=1001.0,
+        entry_split_probe_residual_claimed=True,
+        main_stop_probe_claim_resolved_at=1001.5,
+        entry_split_probe_terminal_outcome="residual_not_submitted",
+        entry_split_probe_terminal_abort_reason="residual_leg_direction_deferred",
+    )
+    receipt = quantity.build_quantity_source(stock, at=1002.0)
+    assert receipt["status"] == "settled_partial"
+    assert receipt["evidence_kind"] == "native_probe_terminal"
+    assert valid(receipt, stock, 1002.0)
+    from src.engine.scalping.main_stop_runtime_source import observation_view
+    captured = observation_view(stock)
+    observed_receipt = quantity.build_quantity_source(captured, at=1002.0)
+    assert observed_receipt == receipt
+    assert not valid(receipt, stock, 1000.5)
+    for change in (
+        {"entry_split_probe_terminal_at": 1003.0},
+        {"entry_split_probe_actual_submitted_qty": 2},
+        {"entry_split_probe_actual_submitted_qty": True},
+        {"entry_split_probe_residual_terminal_qty": 3},
+        {"entry_split_probe_terminal_abort_reason": "residual_broker_submit_exception"},
+        {"entry_split_probe_terminal_abort_reason": "residual_broker_order_number_missing"},
+        {"entry_split_probe_order_no": "OTHER"},
+        {"entry_bundle_id": "other-bundle"},
+        {"entry_split_probe_fill_price": 10001},
+        {"entry_split_probe_residual_claimed": False},
+        {"main_stop_probe_claim_resolved_at": None},
+        {"entry_lifecycle_conflict": True},
+        {"pending_add_qty": 1},
+    ):
+        assert quantity.build_quantity_source({**stock, **change}, at=1002.0)["status"] == "unknown"
+    claimed = {**stock, "entry_split_probe_residual_claimed": True,
+               "main_stop_probe_claim_resolved_at": 1001.5}
+    assert quantity.build_quantity_source(claimed, at=1002.0)["status"] == "settled_partial"
+    assert quantity.build_quantity_source(claimed, at=1001.25)["status"] == "unknown"
+    stock[quantity.RETAINED_KEY] = receipt
+    stock.update(entry_split_probe_phase="partial_complete")
+    stock.pop("pending_entry_orders", None)
+    assert quantity.build_quantity_source(stock, at=1003.0) == receipt
+
+
+def test_claim_resolution_is_recorded_only_after_native_residual_caller_returns(monkeypatch):
+    from datetime import datetime
+    from src.engine import sniper_state_handlers as handlers
+
+    stock = {
+        "id": 49677, "code": "053800", "entry_split_probe_bundle_id": "probe-1",
+        "entry_split_probe_phase": "aborted",
+        "entry_split_probe_terminal_outcome": "residual_not_submitted",
+        "entry_split_probe_terminal_abort_reason": "residual_leg_direction_deferred",
+        "entry_split_probe_actual_submitted_qty": 1,
+        "entry_split_probe_residual_claimed": True,
+    }
+    def completed(*args, **kwargs):
+        assert "main_stop_probe_claim_resolved_at" not in stock
+        return False
+
+    monkeypatch.setattr(handlers, "_submit_entry_split_probe_residual_locked", completed)
+    monkeypatch.setattr(handlers, "buy_fill_identity_from_runtime", lambda stock: "fill-1")
+    assert handlers._maybe_submit_entry_split_probe_residual(
+        stock, "053800", {}, now_ts=1000.0, now_dt=datetime.now()
+    ) is False
+    assert stock["main_stop_probe_claim_resolved_at"] > 0
+    stock.pop("main_stop_probe_claim_resolved_at")
+    def interrupted(*args, **kwargs):
+        raise RuntimeError("interrupted")
+    monkeypatch.setattr(handlers, "_submit_entry_split_probe_residual_locked", interrupted)
+    with pytest.raises(RuntimeError):
+        handlers._maybe_submit_entry_split_probe_residual(
+            stock, "053800", {}, now_ts=1000.0, now_dt=datetime.now()
+        )
+    assert "main_stop_probe_claim_resolved_at" not in stock
+
+
 @pytest.mark.parametrize("filled", [2, 4])
 def test_native_terminal_bundle_preserves_full_vs_settled_partial(filled):
     stock = native_stock(filled=filled)

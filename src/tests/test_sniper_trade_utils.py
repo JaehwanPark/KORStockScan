@@ -838,6 +838,9 @@ def test_live_runtime_wrappers_forward_sell_custody_keywords(monkeypatch):
 
 def test_post_effective_holding_sell_session_uses_integrated_close_boundaries():
     cases = (
+        ((8, 0, 0), "krx_like_premarket"),
+        ((8, 21, 6), "krx_like_premarket"),
+        ((8, 50, 0), "outside_krx_nxt_window"),
         ((15, 30, 0), "session_transition"),
         ((16, 0, 0), "krx_nxt_aftermarket"),
         ((19, 40, 0), "krx_nxt_aftermarket_close_only"),

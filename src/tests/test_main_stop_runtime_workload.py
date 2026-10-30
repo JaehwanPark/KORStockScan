@@ -30,6 +30,8 @@ def _native_scenario(order="normal_first", *, code="005930"):
     code, bid = stock["code"], 9800
     snapshot = dict(
         curr=bid,
+        last_trade_tick={"item": code, "transport_epoch": 1, "ts": at,
+                         "price": bid, "values": {"10": str(bid)}},
         best_bid=bid,
         best_ask=bid + 10,
         last_ws_update_ts=at,
@@ -103,6 +105,8 @@ def _native_cell_scenario(cell):
     )
     row["snapshot"] = dict(
         curr=bid,
+        last_trade_tick={"item": item, "transport_epoch": 1, "ts": at,
+                         "price": bid, "values": {"10": str(bid)}},
         best_bid=bid,
         best_ask=bid + 10,
         last_ws_update_ts=at,
@@ -118,6 +122,41 @@ def _native_cell_scenario(cell):
     return row
 
 
+def _seed_native_eligibility(db, scenario):
+    """Install a dated synthetic listing row through the real private ORM."""
+    from datetime import datetime, time
+    from zoneinfo import ZoneInfo
+    from sqlalchemy import text
+    from src.database.models import SecurityMarketEligibilityDaily
+
+    for case in [scenario, *scenario.get("companions", [])]:
+        at = case.get("at", scenario["at"])
+        day = datetime.fromtimestamp(at, ZoneInfo("Asia/Seoul")).date()
+        code = case["stock"]["code"]
+        item = case["snapshot"].get("last_realtime_type_item", {}).get("0D", "")
+        nxt = item.endswith(("_NX", "_AL"))
+        with db.get_session() as session:
+            session.merge(SecurityMarketEligibilityDaily(
+                trade_date=day, stock_code=code, krx_regular_eligible=True,
+                nxt_eligible=nxt, krx_aftermarket_eligible=True,
+                eligible_venues_json=["KRX", "NXT"] if nxt else ["KRX"],
+                audit_info="정상", stock_state="정상", order_warning="0",
+                market_code="0", source_api_id="offline_fixture",
+                source_revision="offline_native_workload_v1",
+                observed_at_kst=datetime.combine(day, time(0), ZoneInfo("Asia/Seoul")),
+                payload_sha256="a" * 64, quality_state="VALID", blocked_reasons_json=[],
+            ))
+            # SQLite's DateTime adapter drops offsets; the native reader
+            # requires an explicit KST offset just as the production ledger does.
+            session.flush()
+            session.execute(
+                text("UPDATE security_market_eligibility_daily SET observed_at_kst=:stamp "
+                     "WHERE trade_date=:day AND stock_code=:code"),
+                {"stamp": datetime.combine(day, time(0), ZoneInfo("Asia/Seoul")).isoformat(),
+                 "day": day.isoformat(), "code": code},
+            )
+
+
 # A fresh child owns all native caches and threads. No safety/evaluator/order
 # guard is replaced. The audit guard rejects any accidental external effect.
 CHILD = textwrap.dedent(r"""
@@ -128,7 +167,9 @@ CHILD = textwrap.dedent(r"""
     root, mode, order = Path(sys.argv[1]).resolve(), sys.argv[2], sys.argv[3]
     measurement_cell = sys.argv[4]
     root.mkdir(parents=True, exist_ok=True)
-    from src.tests.test_main_stop_runtime_workload import _native_scenario, _native_cell_scenario
+    from src.tests.test_main_stop_runtime_workload import (
+        _native_scenario, _native_cell_scenario, _seed_native_eligibility,
+    )
     from src.tests.test_main_stop_policy import baseline
     from src.engine.automation.main_stop_runtime_workload import isolated_main_workload
     from src.engine.automation.main_stop_performance import _isolated_native_capture
@@ -149,6 +190,7 @@ CHILD = textwrap.dedent(r"""
         elif mode == 'typed_cell_route_guard':
             scenario['stock']['entry_execution_cohort'] = 'PREMARKET_KRX_LIKE'
             scenario['snapshot'].update(curr=10000, best_bid=10000, best_ask=10010)
+            scenario['snapshot']['last_trade_tick'].update(price=10000, values={'10':'10000'})
             for row in scenario['snapshot']['realtime_type_snapshots_by_route'].values():
                 row['0D'].update(best_bid=10000, best_ask=10010,
                                 orderbook={'bids': [{'price': 10000, 'volume': 100}]})
@@ -164,6 +206,7 @@ CHILD = textwrap.dedent(r"""
         snapshot = scenario['snapshot']
         snapshot.update(curr=10000, best_bid=10000, best_ask=10010, last_ws_update_ts=at,
                         last_realtime_type_ts={'0B': at, '0D': at})
+        snapshot['last_trade_tick'].update(ts=at, price=10000, values={'10':'10000'})
         depth = snapshot['realtime_type_snapshots_by_route']['krx_only']['0D']
         depth.update(observed_epoch=at, best_bid=10000, best_ask=10010,
                      orderbook={'bids':[{'price':10000, 'volume':100}]})
@@ -215,6 +258,7 @@ CHILD = textwrap.dedent(r"""
         scenarios = [scenario, _native_scenario('fast_first')] if mode in {'repeat', 'stress'} else [scenario]
         with _isolated_native_capture(root/'capture') as (_, queue, capture, sink_calls), \
                 isolated_main_workload(root/'runtime', baseline(), scenarios, measurement_cell=measurement_cell) as work:
+            _seed_native_eligibility(main.DB, scenario)
             database = Path(main.DB.engine.url.database).resolve()
             private_database = database == root/'runtime/runtime.sqlite'
             assert handlers.DB is main.DB and receipts.DB is main.DB

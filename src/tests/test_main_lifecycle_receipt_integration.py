@@ -77,6 +77,10 @@ def test_exit_signal_receipt_binds_only_same_buy_and_submit_generation(monkeypat
     stock["sell_submit_context_sha256"] = state_handlers._sell_submit_context_sha256(
         stock
     )
+    stock["_sell_submit_exit_signal_receipt"] = {
+        "generation": "submit-1",
+        "receipt": {**contract, "sha256": decision["exit_signal_contract_sha256"]},
+    }
     linked = state_handlers._exit_signal_submission_fields(
         stock,
         "123456",
@@ -93,6 +97,36 @@ def test_exit_signal_receipt_binds_only_same_buy_and_submit_generation(monkeypat
         )["exit_signal_binding_status"]
         == "source_gap_buy_generation_mismatch"
     )
+
+
+def test_competing_exit_signals_bind_the_submitting_generation(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers, "buy_fill_identity_from_runtime", lambda stock: "buy-1"
+    )
+    stock = {"id": 49578, "code": "196170", "strategy": "SCALPING", "buy_qty": 1}
+    rule = "scalp_trailing_take_profit"
+    first = state_handlers._exit_signal_receipt_fields(
+        stock, "196170", {"exit_rule": rule, "curr_price": 225500, "profit_rate": "-0.67"},
+        now_ts=1793314806.738966,
+    )
+    first_receipt = json.loads(first["exit_signal_contract"])
+    first_receipt["sha256"] = first["exit_signal_contract_sha256"]
+    second = state_handlers._exit_signal_receipt_fields(
+        stock, "196170", {"exit_rule": rule, "curr_price": 227000, "profit_rate": "-0.01"},
+        now_ts=1793314806.763843,
+    )
+    stock.update(state_handlers._new_sell_submit_context_fields(
+        stock, "196170", requested_qty=1, started_at=1793314806.8,
+        intended_route="NXT", intended_effective_venue="PREMARKET_KRX_LIKE",
+        intended_session_bucket="krx_like_premarket", decision_receipt=first_receipt,
+    ))
+    linked = state_handlers._exit_signal_submission_fields(stock, "196170", {"exit_rule": rule})
+    assert linked["exit_signal_id"] == first["exit_signal_id"]
+    assert linked["exit_signal_id"] != second["exit_signal_id"]
+    stock["_sell_submit_exit_signal_receipt"]["generation"] = "different-submit"
+    assert state_handlers._exit_signal_submission_fields(stock, "196170", {"exit_rule": rule})[
+        "exit_signal_binding_status"
+    ] == "source_gap_submit_signal_unbound"
 
 
 def test_holding_pipeline_emits_exit_decision_then_submit_reference(monkeypatch):
@@ -143,10 +177,12 @@ def test_holding_pipeline_emits_exit_decision_then_submit_reference(monkeypatch)
         "strategy": "SCALPING",
         "position_tag": "SCANNER",
     }
+    decision_sink = {}
     state_handlers._log_holding_pipeline(
         stock,
         "123456",
         "exit_signal",
+        _decision_receipt_sink=decision_sink,
         exit_rule="scalp_trailing_take_profit",
         exit_threshold_key="SCALP_TRAILING_LIMIT_WEAK",
         exit_threshold_effective_pct=0.4,
@@ -169,6 +205,9 @@ def test_holding_pipeline_emits_exit_decision_then_submit_reference(monkeypatch)
     stock["sell_submit_context_sha256"] = state_handlers._sell_submit_context_sha256(
         stock
     )
+    stock["_sell_submit_exit_signal_receipt"] = {
+        "generation": "submit-1", "receipt": decision_sink["receipt"]
+    }
     state_handlers._log_holding_pipeline(
         stock,
         "123456",

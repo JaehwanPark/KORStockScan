@@ -36,6 +36,25 @@ ORDER_SOURCE_KEYS = (
     "owner_registry_cancel_reconciliation_required",
     "entry_reprice_cancel_terminal_pending",
 )
+PROBE_TERMINAL_KEYS = (
+    "entry_split_probe_bundle_id",
+    "entry_bundle_id",
+    "entry_split_probe_phase",
+    "entry_split_probe_requested_qty",
+    "entry_split_probe_target_qty",
+    "entry_split_probe_actual_submitted_qty",
+    "entry_split_probe_residual_terminal_qty",
+    "entry_split_probe_order_no",
+    "entry_split_probe_fill_price",
+    "entry_split_probe_filled_at",
+    "entry_split_probe_terminal_at",
+    "entry_split_probe_terminal_outcome",
+    "entry_split_probe_terminal_abort_reason",
+    "entry_split_probe_residual_claimed",
+    "main_stop_probe_claim_resolved_at",
+    "entry_lifecycle_conflict",
+    "entry_split_initial_entry_lineage_conflict",
+)
 
 
 def order_source_projection(orders):
@@ -264,6 +283,47 @@ def _proven(proof, quantity, basis, at):
         status = (
             "full_fill" if quantity == bundle["requested_qty"] else "settled_partial"
         )
+    elif kind == "native_probe_terminal":
+        probe = proof.get("probe_terminal")
+        if not isinstance(probe, dict):
+            raise ValueError("native_probe_terminal_missing")
+        order = probe.get("entry_split_probe_order_no")
+        target = probe.get("entry_split_probe_target_qty")
+        filled_at = probe.get("entry_split_probe_filled_at")
+        terminal_at = probe.get("entry_split_probe_terminal_at")
+        claim_resolved_at = probe.get("main_stop_probe_claim_resolved_at")
+        if (
+            not isinstance(probe.get("entry_split_probe_bundle_id"), str)
+            or not probe["entry_split_probe_bundle_id"].strip()
+            or probe.get("entry_bundle_id") != probe["entry_split_probe_bundle_id"]
+            or probe.get("entry_split_probe_phase") != "aborted"
+            or probe.get("entry_split_probe_terminal_outcome") != "residual_not_submitted"
+            # This is a pre-submit leg decision in the native owner. Broker
+            # exceptions, missing order numbers and other aborts may represent
+            # an in-flight or accepted order and are never terminal proof.
+            or probe.get("entry_split_probe_terminal_abort_reason")
+            != "residual_leg_direction_deferred"
+            or not _integer(target) or target <= 1
+            or probe.get("entry_split_probe_requested_qty") != target
+            or type(probe.get("entry_split_probe_actual_submitted_qty")) is not int
+            or probe["entry_split_probe_actual_submitted_qty"] != 1
+            or type(probe.get("entry_split_probe_residual_terminal_qty")) is not int
+            or probe["entry_split_probe_residual_terminal_qty"] != target - 1
+            or probe.get("entry_split_probe_residual_claimed") is not True
+            or not _number(terminal_at) or not _number(claim_resolved_at)
+            or not terminal_at <= claim_resolved_at <= at
+            or probe.get("entry_lifecycle_conflict")
+            or probe.get("entry_split_initial_entry_lineage_conflict")
+            or not _number(filled_at) or not _number(terminal_at)
+            or not 0 < filled_at <= terminal_at <= at
+            or quantity != 1 or set(facts) != {order}
+            or facts[order]["filled_qty"] != 1
+            or facts[order]["ordered_qty"] != 1
+            or facts[order]["remaining_qty"] != 0
+            or probe.get("entry_split_probe_fill_price") != facts[order]["amount"]
+        ):
+            raise ValueError("native_probe_terminal_unverified")
+        status = "settled_partial"
     elif kind == "native_filled_order_census":
         orders = proof["orders"]
         if not isinstance(orders, list) or not orders or len(orders) > MAX_ORDERS:
@@ -417,7 +477,10 @@ def build_quantity_source(stock, *, at):
             else stock.get("initial_quantity_last_terminal_bundle")
         )
         orders = order_source_projection(stock.get("pending_entry_orders"))
-        if bundle is None and any(
+        probe_terminal = {
+            name: stock[name] for name in PROBE_TERMINAL_KEYS if name in stock
+        }
+        has_probe = bundle is None and any(
             stock.get(name)
             for name in (
                 "entry_split_probe_bundle_id",
@@ -428,11 +491,24 @@ def build_quantity_source(stock, *, at):
                 "entry_split_probe_abort_reason",
                 "entry_split_probe_partial_complete_qty",
             )
-        ):
+        )
+        if has_probe and probe_terminal.get("entry_split_probe_phase") == "partial_complete":
+            retained = stock.get(RETAINED_KEY)
+            if (
+                validate_quantity_source(
+                    retained, position_key=key, at=at, quantity=quantity,
+                    buy_basis_krw=basis,
+                )
+                and retained.get("evidence_kind") == "native_probe_terminal"
+                and retained["proof"]["fill_receipts"] == snapshot
+                and not orders
+            ):
+                return deepcopy(retained)
+        if has_probe and probe_terminal.get("entry_split_probe_phase") != "aborted":
             # Probe abort/rebase may replace requested quantities with holdings.
             # Exact fills of submitted orders alone do not settle unsent legs.
             raise ValueError("legacy_probe_target_generation_unverified")
-        if bundle is None and not orders:
+        if bundle is None and not orders and not has_probe:
             retained = stock.get(RETAINED_KEY)
             if (
                 validate_quantity_source(
@@ -470,6 +546,23 @@ def build_quantity_source(stock, *, at):
                 for o in orders
             ):
                 raise ValueError("native_buy_order_census_conflict")
+        elif has_probe:
+            if orders and any(
+                not isinstance(o, dict)
+                or o.get("ord_no") not in facts
+                or o.get("status") != "FILLED"
+                or o.get("qty") != 1
+                or o.get("filled_qty") != 1
+                or any(o.get(k) for k in (
+                    "cancel_terminal_pending", "owner_registry_cancel_reconciliation_required",
+                    "entry_reprice_cancel_terminal_pending",
+                ))
+                for o in orders
+            ):
+                raise ValueError("native_probe_order_census_conflict")
+            if orders and len(orders) != 1:
+                raise ValueError("native_probe_order_census_conflict")
+            proof.update(evidence_kind="native_probe_terminal", probe_terminal=probe_terminal)
         else:
             _bounded(orders)
             requested = stock.get("entry_requested_qty", stock.get("requested_buy_qty"))
