@@ -7719,3 +7719,34 @@ def test_p5_consumer_union_delta_checks_exact_complete_candidate(tmp_path, fault
     else:
         with pytest.raises(ValueError):
             handoff._verify_entry_code_delta(root, commit, origin, paths, expected)
+
+
+@pytest.mark.parametrize("family,expected", [
+    ("pre_submit_delay", "e6d6f6ce5e2643a9c762dd8230fc40069b8741330dd573bab0ccfb2b3b08e2d9"),
+    ("main_stop", "a3156cbcf62fd942979e2a9cf710335ae87f8163638b55406f840d2db49fcb07"),
+    ("holding_vote", "744784acb1d6127f9e2cc65f631e6334015bf782d5b21823fd0c6c63d7d793e0"),
+])
+@pytest.mark.parametrize("fault", [None, "origin", "transitive_missing"])
+def test_storage_integration_consumes_original_native_preopen_contract(tmp_path, family, expected, fault):
+    """Use the actual three sealed original contracts, not the last PID's code."""
+    import subprocess
+    from src.engine.scalping.pre_submit_delay_initial_policy import CONTRACT_PATHS
+    from src.engine.scalping import main_stop_policy as stop, holding_vote_experiment as vote
+
+    source = Path(handoff.__file__).resolve().parents[3]
+    root = tmp_path / "candidate"
+    subprocess.run(["git", "clone", "-q", "--shared", "--no-checkout", str(source), str(root)], check=True)
+    commit = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
+    subprocess.run(["git", "-C", str(root), "checkout", "-q", "--detach", commit], check=True)
+    origin = "52425f68fa5796887d2d7c1c65f51016042c938c"
+    paths = ({name: name for name in CONTRACT_PATHS} if family == "pre_submit_delay" else
+             {name: "src/engine/" + name for name in
+              (stop.implementation_paths() if family == "main_stop" else vote._code_paths())})
+    if fault == "origin": expected = "f" * 64
+    if fault == "transitive_missing":
+        (root / "src/engine/monitoring/sentinel_source_window.py").unlink()
+    if fault:
+        with pytest.raises(ValueError):
+            handoff._verify_entry_code_delta(root, commit, origin, paths, expected)
+    else:
+        assert handoff._verify_entry_code_delta(root, commit, origin, paths, expected)

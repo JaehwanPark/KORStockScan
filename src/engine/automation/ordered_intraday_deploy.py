@@ -28,6 +28,56 @@ from src.engine.infrastructure import runtime_release_router as R
 
 CONFIRM = "APPROVED_ORDERED_INTRADAY_DEPLOY_AND_RESTART"
 
+# Before selector publication the original selected release remains the native
+# policy reader. Keep its own source validation instead of impersonating that
+# release with candidate imports or a forged predecessor observation.
+_AUXILIARY_ORIGIN_SCRIPT = r'''
+import hashlib,json,sys
+from pathlib import Path
+from datetime import datetime
+from src.engine.scalping import reversal_auxiliary_intraday as A
+from src.engine.scalping import mechanistic_entry_runtime_policy as N
+from src.engine.infrastructure import runtime_release_router as R
+from src.engine.automation import ordered_intraday_deploy as D
+q=json.loads(sys.argv[1]); origin=Path.cwd(); data=Path(q['data_root'])
+selection=data/'runtime/runtime_release_selection.json'
+sha=lambda p: hashlib.sha256(Path(p).read_bytes()).hexdigest()
+def guard():
+    if (Path(A.__file__).resolve().parents[3]!=origin
+        or R.selected_release(data.parent)!=(origin,q['origin_commit'])
+        or sha(selection)!=q['selection_sha256'] or A.code_hashes()!=q['code_hashes']):
+        raise ValueError('auxiliary_native_origin_changed')
+    if q['operation']!='prepare' and (D._main_pids() or not D._session_absent()
+        or sha(data/'runtime/operator_startup_hold.json')!=q['hold_sha256']):
+        raise ValueError('auxiliary_native_transition_not_drained')
+guard()
+if sha(q['manifest_path'])!=q['manifest_sha256']:
+    raise ValueError('auxiliary_native_manifest_changed')
+manifest=A.read(q['manifest_path'])
+bundle=N.load_effective(data_root=data,target_date=q['day'])
+if q['operation']=='prepare':
+    result=A.prepare_contract_repair(data,bundle,expected_parent=manifest['expected_parent'],
+        now=datetime.fromisoformat(manifest['prepared_at']),repair_schema=manifest['schema'])
+elif q['operation']=='publish':
+    result=A.publish_contract_repair(data,manifest,expected_parent=manifest['expected_parent'],
+        confirm=A.CONTRACT_REPAIR_AUTHORITY)
+elif q['operation']=='rollback':
+    current=A.current(data,bundle,day=q['day'])
+    result=(A.rollback(data,expected_parent=current['artifact_content_sha256'],
+        reason='ordered_deployment_failed_before_selection',confirm=A.AUTHORITY)
+        if current and current.get('contract_repair_manifest_sha256')==manifest['artifact_content_sha256'] else None)
+else:
+    raise ValueError('auxiliary_native_operation_invalid')
+guard()
+reference=None
+if result is not None and q['operation']!='prepare':
+    path=A.root(data)/'generations'/(result['artifact_content_sha256']+'.json')
+    if A.read(path)!=result: raise ValueError('auxiliary_native_receipt_changed')
+    reference=dict(path=str(path),sha256=sha(path))
+print(json.dumps(dict(status='pass',operation=q['operation'],origin_root=str(origin),
+    origin_commit=q['origin_commit'],code_hashes=A.code_hashes(),record=result,reference=reference)))
+'''
+
 
 def verify_candidate_delay_code(day, root, commit):
     """Retain a natively verified prepared origin across the first live handoff."""
@@ -1369,22 +1419,16 @@ class Deployment:
         ):
             raise ValueError("deployment_auxiliary_repair_reference_invalid")
         from src.engine.scalping import reversal_auxiliary_intraday as auxiliary
-        from src.engine.scalping import mechanistic_entry_runtime_policy as native
 
         path = Path(self.auxiliary_repair_path)
         manifest, raw, _ = _owned_metadata(path)
         if _digest(raw) != self.auxiliary_repair_sha256 or auxiliary.read(path) != manifest:
             raise ValueError("deployment_auxiliary_repair_reference_changed")
         data = self.workspace / "data"
-        bundle = native.load_effective(data_root=data, target_date=self.day)
-        parent = auxiliary.current(data, bundle, day=self.day)
         prepared_at = datetime.fromisoformat(manifest["prepared_at"])
         if prepared_at.tzinfo is None or prepared_at > datetime.now(H.KST):
             raise ValueError("deployment_auxiliary_repair_clock_invalid")
-        original = auxiliary.prepare_contract_repair(
-            data, bundle, expected_parent=(parent or {}).get("artifact_content_sha256"),
-            now=prepared_at,
-        )
+        original = self.run_auxiliary_native("prepare", manifest)
         if original != manifest or manifest.get("day") != self.day:
             raise ValueError("deployment_auxiliary_repair_preparation_changed")
         consumption = auxiliary.read(
@@ -1400,7 +1444,7 @@ class Deployment:
             or consumption.get("bindings") != manifest["old_bindings"]):
             raise ValueError("deployment_auxiliary_repair_incumbent_binding_invalid")
         for mutable in (auxiliary.root(data) / "current.json",
-                        auxiliary.root(data) / "days" / self.day / (bundle["bundle_sha256"] + ".json")):
+                        auxiliary.root(data) / "days" / self.day / (manifest["base_bundle_sha256"] + ".json")):
             if str(mutable) in self.frozen:
                 raise ValueError("deployment_auxiliary_repair_pointer_frozen")
         additions = {str(path): _digest(raw), **manifest["source_hashes"]}
@@ -1410,6 +1454,60 @@ class Deployment:
         self.auxiliary_repair = manifest
         self.state["auxiliary_repair_preflight"] = dict(path=str(path), sha256=_digest(raw),
             manifest_sha256=manifest["artifact_content_sha256"], base_bundle_sha256=manifest["base_bundle_sha256"])
+
+    def run_auxiliary_native(self, operation, manifest):
+        """Invoke the original native reader and transfer its exact issued bytes."""
+        from src.engine.scalping import reversal_auxiliary_intraday as auxiliary
+
+        if operation not in {"prepare", "publish", "rollback"}:
+            raise ValueError("deployment_auxiliary_native_operation_invalid")
+        if self.selection.read_bytes() != self.before:
+            raise ValueError("deployment_auxiliary_native_selection_changed")
+        if operation != "prepare":
+            self.assert_hold()
+            if self.phase != "drained" or _main_pids() or not _session_absent():
+                raise ValueError("deployment_auxiliary_native_not_drained")
+        R.validate_release(self.workspace, dict(schema="runtime_release_selection_v1",
+            workspace=str(self.workspace), release_root=str(self.previous), git_commit=self.previous_commit))
+        path = Path(self.auxiliary_repair_path)
+        pinned, raw, _ = _owned_metadata(path)
+        if pinned != manifest or _digest(raw) != self.auxiliary_repair_sha256:
+            raise ValueError("deployment_auxiliary_native_manifest_changed")
+        codes = auxiliary.code_hashes()
+        request = dict(operation=operation, data_root=str(self.workspace / "data"), day=self.day,
+            origin_commit=self.previous_commit, selection_sha256=_digest(self.before),
+            code_hashes=codes, manifest_path=str(path), manifest_sha256=_digest(raw),
+            hold_sha256=(_digest(self.hold_bytes) if operation != "prepare" else None))
+        result = subprocess.run([str(self.previous / ".venv/bin/python"), "-B", "-c",
+            _AUXILIARY_ORIGIN_SCRIPT, json.dumps(request)], cwd=self.previous,
+            env={**os.environ, "PYTHONPATH": str(self.previous)}, capture_output=True, text=True, timeout=120)
+        _atomic(self.directory / (self.phase + "-auxiliary-native-" + operation + ".log"),
+                (result.stdout + result.stderr).encode())
+        if result.returncode:
+            raise ValueError("deployment_auxiliary_native_failed:" + operation)
+        value = json.loads(result.stdout)
+        if (value.get("status") != "pass" or value.get("operation") != operation
+            or value.get("origin_root") != str(self.previous)
+            or value.get("origin_commit") != self.previous_commit
+            or value.get("code_hashes") != codes or auxiliary.code_hashes() != codes
+            or self.selection.read_bytes() != self.before):
+            raise ValueError("deployment_auxiliary_native_result_invalid")
+        if _owned_metadata(path)[1] != raw:
+            raise ValueError("deployment_auxiliary_native_manifest_changed")
+        record = value.get("record")
+        if record is not None and operation != "prepare":
+            expected = auxiliary.root(self.workspace / "data") / "generations" / (record["artifact_content_sha256"] + ".json")
+            reference = value.get("reference") or {}
+            if (reference.get("path") != str(expected) or reference.get("sha256") != H._sha(expected)
+                or auxiliary.read(expected) != record):
+                raise ValueError("deployment_auxiliary_native_receipt_invalid")
+        R.validate_release(self.workspace, dict(schema="runtime_release_selection_v1",
+            workspace=str(self.workspace), release_root=str(self.previous), git_commit=self.previous_commit))
+        if operation != "prepare":
+            self.assert_hold()
+            if _main_pids() or not _session_absent():
+                raise ValueError("deployment_auxiliary_native_not_drained")
+        return record
 
     def pin_candidate_p5(self):
         self.candidate_p5 = verify_candidate_p5(
@@ -2187,11 +2285,7 @@ class Deployment:
             if getattr(self, "auxiliary_repair", None) is not None:
                 from src.engine.scalping import reversal_auxiliary_intraday as auxiliary
 
-                overlay = auxiliary.publish_contract_repair(
-                    self.workspace / "data", self.auxiliary_repair,
-                    expected_parent=self.auxiliary_repair["expected_parent"],
-                    confirm=auxiliary.CONTRACT_REPAIR_AUTHORITY,
-                )
+                overlay = self.run_auxiliary_native("publish", self.auxiliary_repair)
                 if (overlay.get("bindings") != self.auxiliary_repair["new_bindings"]
                     or overlay.get("contract_repair_manifest_sha256") != self.auxiliary_repair["artifact_content_sha256"]):
                     raise ValueError("deployment_auxiliary_repair_publication_invalid")
@@ -2375,19 +2469,8 @@ class Deployment:
             try:
                 self.assert_hold()
                 if self.selection.read_bytes() == self.before:
-                    from src.engine.scalping import reversal_auxiliary_intraday as auxiliary
-                    from src.engine.scalping import mechanistic_entry_runtime_policy as native
-
-                    data = self.workspace / "data"
-                    bundle = native.load_effective(data_root=data, target_date=self.day)
-                    overlay = auxiliary.current(data, bundle, day=self.day)
-                    if (overlay and overlay.get("contract_repair_manifest_sha256")
-                        == self.auxiliary_repair["artifact_content_sha256"]):
-                        reverted = auxiliary.rollback(
-                            data, expected_parent=overlay["artifact_content_sha256"],
-                            reason="ordered_deployment_failed_before_selection",
-                            confirm=auxiliary.AUTHORITY,
-                        )
+                    reverted = self.run_auxiliary_native("rollback", self.auxiliary_repair)
+                    if reverted is not None:
                         if reverted.get("bindings") != self.auxiliary_repair["old_bindings"]:
                             raise ValueError("deployment_auxiliary_rollback_binding_invalid")
                         self.state["auxiliary_repair_unwind"] = dict(

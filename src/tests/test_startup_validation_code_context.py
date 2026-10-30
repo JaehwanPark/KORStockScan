@@ -4682,6 +4682,19 @@ def test_storage_integration_registered_for_both_native_readers():
                 assert digest == H.REVIEWED_STORAGE_INTEGRATION_PROFILE[name], name
 
 
+def test_reviewed_predecessor_composition_keeps_unknown_and_disconnected_edges_out():
+    edges = {("a", "b"), ("b", "c"), ("x", "y"), ("b", "a")}
+    assert C.reviewed_predecessor_origins("c", edges) == {"a", "b", "c"}
+    assert C.reviewed_predecessor_origins("unknown", edges) == {"unknown"}
+    name = "src/engine/monitoring/submission_bottleneck_monitor.py"
+    current = C.REVIEWED_STORAGE_INTEGRATION_TRANSITION[name][1]
+    origins = C.reviewed_storage_origins(name)
+    assert C.REVIEWED_SUBMISSION_MONITOR_TRANSITION[name][0] in origins
+    assert "f" * 64 not in origins
+    assert all((H.reviewed_formatting_predecessor(name, old), current) in
+               H.REVIEWED_STORAGE_INTEGRATION_PAIRS[name] for old in origins)
+
+
 @pytest.mark.parametrize("fault", [None, "missing", "mixed", "origin", "future"])
 def test_storage_integration_requires_complete_profile(tmp_path, fault):
     for name, expected in C.REVIEWED_STORAGE_INTEGRATION_PROFILE.items():

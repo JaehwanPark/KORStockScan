@@ -13920,13 +13920,15 @@ REVIEWED_STORAGE_INTEGRATION_HASHES = {
     **{name: pair[1] for name, pair in
        _preparation_code.REVIEWED_STORAGE_INTEGRATION_TRANSITION.items()},
     "src/engine/infrastructure/startup_validation_code_context.py":
-        "074c07ee3ead746277a20ee7fc7bfb0e1acf167428840ad37f7c581ec5234a85",
+        "668d8057672fbb0429cd744dc4c1138bd237372d70e1f22c0fb11ee3cc80c532",
 }
 REVIEWED_STORAGE_INTEGRATION_PROFILE = {
     **REVIEWED_P5_CONSUMER_UNION_PROFILE, **REVIEWED_STORAGE_INTEGRATION_HASHES,
 }
 REVIEWED_STORAGE_INTEGRATION_PAIRS = {
-    name: {pair} for name, pair in
+    name: {(reviewed_formatting_predecessor(name, origin), pair[1])
+           for origin in _preparation_code.reviewed_storage_origins(name)}
+    for name, pair in
     _preparation_code.REVIEWED_STORAGE_INTEGRATION_TRANSITION.items()
 }
 REVIEWED_STORAGE_INTEGRATION_PAIRS[
@@ -14023,6 +14025,27 @@ for _name, _old in {
         "4603eddbd2477548aa383eaed6d8bb02ad26ea1e6197a6d9e48fe4d52102ffae",
 }.items():
     REVIEWED_INTERRUPTED_CUSTODY_PAIRS[_name].add((_old, REVIEWED_INTERRUPTED_CUSTODY_HASHES[_name]))
+
+
+# Retain original native policy issuers through the complete reviewed chain,
+# rather than requiring an intermediate release to run. Use the handoff's
+# original comparison edges; physical formatting aliases stay in their owner.
+for _name, _current in REVIEWED_STORAGE_INTEGRATION_HASHES.items():
+    _endpoint = REVIEWED_P5_CONSUMER_UNION_PROFILE.get(_name)
+    if _name in _preparation_code.REVIEWED_STORAGE_INTEGRATION_TRANSITION:
+        _endpoint = _preparation_code.REVIEWED_STORAGE_INTEGRATION_TRANSITION[_name][0]
+    if _endpoint is None:
+        continue
+    _endpoint = reviewed_formatting_predecessor(_name, _endpoint)
+    _edges = set()
+    for _registry in (REVIEWED_ENTRY_COST_PAIRS, REVIEWED_SUBMISSION_MONITOR_PRIOR_PAIRS,
+                      REVIEWED_SUBMISSION_MONITOR_PAIRS, REVIEWED_COMMON_SUPPORT_PAIRS,
+                      REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PAIRS,
+                      REVIEWED_INTERRUPTED_CUSTODY_PAIRS, REVIEWED_P5_CONSUMER_UNION_PAIRS):
+        _edges.update(_registry.get(_name, ()))
+    REVIEWED_STORAGE_INTEGRATION_PAIRS.setdefault(_name, set()).update(
+        (origin, _current) for origin in
+        _preparation_code.reviewed_predecessor_origins(_endpoint, _edges))
 
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):

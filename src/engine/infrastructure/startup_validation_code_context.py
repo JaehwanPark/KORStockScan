@@ -3793,7 +3793,7 @@ REVIEWED_P5_CONSUMER_UNION_PROFILE = {
 # handoff.  Include transitive archive readers even where the previous profile
 # did not enumerate them. Issued predecessor profiles remain unchanged.
 REVIEWED_STORAGE_INTEGRATION_TRANSITION = {
-    "src/engine/automation/ordered_intraday_deploy.py": ("914d5a48c783b3afdd6537a796cd5e8ca120aea03ea60c705cffff76f3148374", "3ca1a2ae39d43019570c42b95e90ddd238a0ab7f5980a1e5322ea3f0d638c240"),
+    "src/engine/automation/ordered_intraday_deploy.py": ("914d5a48c783b3afdd6537a796cd5e8ca120aea03ea60c705cffff76f3148374", "310acd9437e826f8e105d1f74bbe7b6d1ba3dea9197798e36edc11e6b342ec1b"),
     "src/engine/monitoring/submission_bottleneck_monitor.py": ("f3a09a8c7890b3946a3c28fa3465056ae41dfd0bd2e149be77e7ae3bdf33eaae", "858db84b920533dc4fa39430a5ea70468dae92c0552924582624e20154b2f240"),
     "src/engine/buy_funnel_sentinel.py": ("680ba5cce5ecff77d573457141e604051fb6bdc2216f9f649353693e4ccaf510", "117360cda23c8afab8a0ed4a606fd74d879b312ed2a8a26e0cdaf82ae7cda014"),
     "src/engine/holding_exit_sentinel.py": ("e2bb53a00436e5574ec9117d2514deba798baf675d500b44e7a31eafa2d4dd93", "0c618b5c5852e294765a3c42aa1f82adb379e7b6994384b2f8d634dacc42dab1"),
@@ -3807,6 +3807,35 @@ REVIEWED_STORAGE_INTEGRATION_PROFILE = {
     **REVIEWED_P5_CONSUMER_UNION_PROFILE,
     **{name: pair[1] for name, pair in REVIEWED_STORAGE_INTEGRATION_TRANSITION.items()},
 }
+
+
+def reviewed_predecessor_origins(endpoint, edges):
+    """Follow only connected, explicitly registered predecessor edges."""
+    origins = {endpoint}
+    while True:
+        predecessors = {old for old, current in edges if current in origins}
+        if predecessors <= origins:
+            return frozenset(origins)
+        origins.update(predecessors)
+
+
+def reviewed_storage_origins(relative):
+    """Compose only registered predecessor edges for this exact successor."""
+    transition = REVIEWED_STORAGE_INTEGRATION_TRANSITION.get(relative)
+    if transition is None:
+        return frozenset()
+    edges = set(REVIEWED_PREPARATION_HISTORY.get(relative, ()))
+    for registry in (REVIEWED_PREPARATION_SOURCES,
+                     REVIEWED_SUBMISSION_MONITOR_PRIOR_TRANSITION,
+                     REVIEWED_SUBMISSION_MONITOR_TRANSITION,
+                     REVIEWED_COMMON_SUPPORT_TRANSITION,
+                     REVIEWED_INTERRUPTED_CUSTODY_TRANSITION,
+                     REVIEWED_P5_CONSUMER_UNION_TRANSITION):
+        if relative in registry:
+            edges.add(registry[relative])
+    return reviewed_predecessor_origins(transition[0], edges)
+
+
 REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PROFILE = {
     **REVIEWED_COMMON_SUPPORT_PROFILE,
     "src/engine/automation/ordered_intraday_deploy.py":
@@ -3836,7 +3865,7 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
             return False
         transition = REVIEWED_STORAGE_INTEGRATION_TRANSITION.get(relative)
         if transition is not None:
-            return (old, current) == transition
+            return current == transition[1] and old in reviewed_storage_origins(relative)
     union_generation = any(
         (comparison_root / name).is_file()
         and not (comparison_root / name).is_symlink()

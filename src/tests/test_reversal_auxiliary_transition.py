@@ -293,6 +293,15 @@ def test_ordered_owner_uses_native_prompt_publisher_and_native_unwind(prepared, 
     monkeypatch.setattr(I, "publish_contract_repair", lambda _data, *args, **kwargs: native_publish(root, *args, **kwargs))
     monkeypatch.setattr(I, "current", lambda _data, *args, **kwargs: native_current(root, *args, **kwargs))
     monkeypatch.setattr(I, "rollback", lambda _data, **kwargs: native_rollback(root, **kwargs))
+    def origin_native(operation, manifest):
+        if operation == "publish":
+            return I.publish_contract_repair(root, manifest, expected_parent=manifest["expected_parent"],
+                                             confirm=I.CONTRACT_REPAIR_AUTHORITY)
+        assert operation == "rollback"
+        overlay = I.current(root, bundle, day=d.day)
+        return I.rollback(root, expected_parent=overlay["artifact_content_sha256"],
+                          reason="ordered_deployment_failed_before_selection", confirm=I.AUTHORITY)
+    monkeypatch.setattr(d, "run_auxiliary_native", origin_native)
     if fail_selection:
         atomic = D._atomic
         def fail_selected(path, value):

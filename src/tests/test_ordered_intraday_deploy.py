@@ -4483,6 +4483,9 @@ def test_auxiliary_repair_preflight_binds_exact_incumbent_before_hold(driver, mo
     monkeypatch.setattr(auxiliary, "read", lambda p: manifest if Path(p) == path else consumed)
     monkeypatch.setattr(auxiliary, "prepare_contract_repair", lambda *args, **kwargs:
                         {**manifest, "expected_parent": "other"} if fault == "parent" else manifest)
+    monkeypatch.setattr(d, "run_auxiliary_native", lambda operation, body:
+                        auxiliary.prepare_contract_repair(d.workspace / "data", bundle)
+                        if operation == "prepare" else pytest.fail("preflight mutated native policy"))
     monkeypatch.setattr(auxiliary, "publish_contract_repair", lambda *args, **kwargs: pytest.fail("preflight published"))
     before = d.selection.read_bytes()
     if fault:
@@ -4501,6 +4504,59 @@ def test_auxiliary_repair_refuses_transition_without_selected_p5_before_prefligh
     with pytest.raises(ValueError, match="deployment_auxiliary_repair_selected_p5_required"):
         D.execute(driver)
     assert not driver.hold.exists()
+
+
+@pytest.mark.parametrize("operation", ["prepare", "publish", "rollback"])
+@pytest.mark.parametrize("fault", [None, "origin", "code", "manifest", "selection", "process", "receipt"])
+def test_auxiliary_native_original_reader_transfers_exact_bytes(driver, monkeypatch, operation, fault):
+    from types import SimpleNamespace
+    from src.engine.scalping import reversal_auxiliary_intraday as auxiliary
+    from src.engine.scalping import continuous_reversal_postclose as proof
+
+    d = driver
+    manifest = proof.seal(dict(schema=auxiliary.CONTRACT_REPAIR_SCHEMA, day=d.day))
+    path = d.workspace / "repair.json"
+    path.write_bytes(D._json_bytes(manifest))
+    d.auxiliary_repair_path, d.auxiliary_repair_sha256 = path, D.H._sha(path)
+    if operation != "prepare":
+        d.acquire_hold()
+        d.phase = "drained"
+    monkeypatch.setattr(D, "_main_pids", lambda: [])
+    monkeypatch.setattr(D, "_session_absent", lambda: True)
+    checked = []
+    monkeypatch.setattr(D.R, "validate_release", lambda workspace, value: checked.append(value))
+    record = (manifest if operation == "prepare" else proof.seal(dict(schema=auxiliary.SCHEMA, bindings={"scope": "new"})))
+    canonical = auxiliary.root(d.workspace / "data") / "generations" / (record["artifact_content_sha256"] + ".json")
+    canonical.parent.mkdir(parents=True)
+    canonical.write_bytes(D._json_bytes(record))
+    reference = dict(path=str(canonical), sha256=D.H._sha(canonical))
+    value = dict(status="pass", operation=operation, origin_root=str(d.previous),
+                 origin_commit=d.previous_commit, code_hashes=auxiliary.code_hashes(),
+                 record=record, reference=reference)
+    if fault == "origin": value["origin_root"] = str(d.candidate)
+    if fault == "code": value["code_hashes"] = {}
+    if fault == "receipt": reference["sha256"] = "f" * 64
+    def run(args, **kwargs):
+        assert args[:3] == [str(d.previous / ".venv/bin/python"), "-B", "-c"]
+        compile(args[3], "native_auxiliary_origin", "exec")
+        request = json.loads(args[4])
+        assert request["operation"] == operation
+        assert request["origin_commit"] == d.previous_commit
+        assert request["selection_sha256"] == D._digest(d.before)
+        assert kwargs["cwd"] == d.previous and kwargs["env"]["PYTHONPATH"] == str(d.previous)
+        if fault == "manifest": path.write_text("{}")
+        if fault == "selection": d.selection.write_text("{}")
+        return SimpleNamespace(returncode=1 if fault == "process" else 0,
+                               stdout=json.dumps(value), stderr="")
+    monkeypatch.setattr(D.subprocess, "run", run)
+    rejected = bool(fault and not (fault == "receipt" and operation == "prepare"))
+    if rejected:
+        with pytest.raises(ValueError, match="deployment_auxiliary_native_"):
+            d.run_auxiliary_native(operation, manifest)
+    else:
+        assert d.run_auxiliary_native(operation, manifest) == record
+        assert len(checked) == 2
+        assert all(row["release_root"] == str(d.previous) and row["git_commit"] == d.previous_commit for row in checked)
 
 
 @pytest.mark.parametrize("selector_failure", [False, True])
@@ -4529,6 +4585,12 @@ def test_auxiliary_repair_publication_is_drained_and_unwinds_before_selection(dr
         calls.append(("rollback", kwargs))
         return dict(bindings={"scope": "old"}, artifact_content_sha256="d" * 64)
     monkeypatch.setattr(auxiliary, "rollback", rollback)
+    monkeypatch.setattr(d, "run_auxiliary_native", lambda operation, manifest:
+                        auxiliary.publish_contract_repair(d.workspace / "data", manifest,
+                            expected_parent=manifest["expected_parent"], confirm=auxiliary.CONTRACT_REPAIR_AUTHORITY)
+                        if operation == "publish" else auxiliary.rollback(d.workspace / "data",
+                            expected_parent=overlay["artifact_content_sha256"], reason="ordered_deployment_failed_before_selection",
+                            confirm=auxiliary.AUTHORITY))
     if selector_failure:
         original = D._atomic
         def fail_selection(path, raw):

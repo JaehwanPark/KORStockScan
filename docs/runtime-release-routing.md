@@ -412,7 +412,12 @@ For an explicitly authorized repair in an ordered deployment, provide both
 `--auxiliary-repair-path` and `--auxiliary-repair-sha256`, with the latter
 binding the manifest's actual file bytes. Before acquiring the hold the owner
 verifies the native prepared manifest, unchanged parent and original sources,
-and all incumbent PID bindings. After drain it invokes the native publisher;
+and all incumbent PID bindings. Until selection changes, preparation, publication
+and any preselection rollback run in the original selected release's native
+reader. The ordered owner validates that clean issuer, exact reader hashes,
+selector and owned drained hold, then independently rereads the issued generation
+and its byte hash. Candidate imports cannot impersonate an original policy
+reader. After drain it invokes that native publisher;
 the selected preparation and native P5 then validate the resulting generation
 before launch. Attestation checks the successor PID's complete auxiliary
 binding receipt. A preselection failure rolls back a published repair only with
@@ -428,6 +433,13 @@ it does not relabel the existing index with its own code digest. Missing,
 writable, linked, changed or unreviewed issuer files fail before cache writes.
 Preserve the issuer through the final historical and rollback reader, and
 include it in portable provenance while either reader still requires it.
+
+Storage succession composes only the owning preparation registry's already
+reviewed predecessor edges into the exact new successor. Both independent and
+handoff readers keep their full physical/comparison profiles and original policy
+digest checks; a disconnected, unknown or mixed origin remains invalid. This
+retains older actually consumed policy issuers without starting intermediate
+releases solely to acquire another code receipt.
 
 Raw response evidence is diagnostic, bounded and captured before frozen validation. Receiving a raw PASS, passing the response contract and remaining executable at Main are separate stages. Signature-bound digest reuse skips only previously verified file hashing; semantic/source/identity checks run each time, and prepare/publication force full hashing. Missing or conflicting evidence remains source gap. Code fixtures and PID consumption do not establish natural latency or economics. See the [implementation review](audits/main-nonfixed-submit-bottleneck-implementation-review-2026-10-14.md).
 
