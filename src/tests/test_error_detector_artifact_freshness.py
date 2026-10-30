@@ -7370,9 +7370,10 @@ def test_pending_is_warning_and_cannot_clear_prior_daemon_failure(
     assert "artifact_freshness" in state
 
 
+@pytest.mark.parametrize("mount", [False, True])
 @pytest.mark.parametrize("projection", [None,"native","legacy","unknown","missing","changed","writable","symlink","reader_changed"])
 def test_current_observer_generation_requires_exact_selector_and_code(
-    tmp_path, monkeypatch, projection
+    tmp_path, monkeypatch, projection, mount
 ):
     from src.engine.monitoring import submission_bottleneck_monitor as monitor
 
@@ -7404,7 +7405,11 @@ def test_current_observer_generation_requires_exact_selector_and_code(
         "semantic_status": "validated",
         "observer_generation": generation,
     }
-    assert mod._submission_observer_generation_issue(payload, root) is None
+    call_root = root
+    if mount:
+        call_root = Path(selection["release_root"])
+        (call_root / "data").symlink_to(root / "data", target_is_directory=True)
+    assert mod._submission_observer_generation_issue(payload, call_root) is None
     if projection is not None:
         import subprocess
         from src.engine.monitoring import sentinel_source_window as window
@@ -7428,23 +7433,23 @@ def test_current_observer_generation_requires_exact_selector_and_code(
         elif projection=="reader_changed":source_path.write_bytes(source_path.read_bytes()+b'\n# unreviewed\n')
         payload['source_gap_semantics']=dict(sources=dict(probe=dict(
             coverage_basis='verified_forward_sentinel_source_window_v1',projection_contract=contract)))
-        issue=mod._submission_observer_generation_issue(payload,root)
+        issue=mod._submission_observer_generation_issue(payload,call_root)
         assert issue==(None if projection in {'native','legacy'} else 'observer_source_window_code_mismatch')
         if issue is not None:return
     generation["sha256"] = "0" * 64
     assert (
-        mod._submission_observer_generation_issue(payload, root)
+        mod._submission_observer_generation_issue(payload, call_root)
         == "observer_generation_invalid"
     )
     generation["sha256"] = monitor._observer_seal(generation)
     code_path.write_bytes(b"mutated observer\n")
     assert (
-        mod._submission_observer_generation_issue(payload, root)
+        mod._submission_observer_generation_issue(payload, call_root)
         == "observer_generation_code_mismatch"
     )
     sp.write_text(json.dumps({**selection, "actual_pid_consumed": False}))
     assert (
-        mod._submission_observer_generation_issue(payload, root)
+        mod._submission_observer_generation_issue(payload, call_root)
         == "observer_generation_not_current"
     )
 

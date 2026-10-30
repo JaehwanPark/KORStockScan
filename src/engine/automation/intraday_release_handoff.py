@@ -14128,6 +14128,30 @@ for _name, _current in REVIEWED_STORAGE_HEALTH_HASHES.items():
         (reviewed_formatting_predecessor(_name, origin), _current) for origin in _origins}
 
 
+REVIEWED_STORAGE_MOUNT_HASHES = {
+    **{name: pair[1] for name, pair in _preparation_code.REVIEWED_STORAGE_MOUNT_TRANSITION.items()},
+    "src/engine/infrastructure/startup_validation_code_context.py":
+        "efa10d2c2ab09b5400856af7886cb20020ebca3d5af5f893e2a0859c8152d1b2",
+}
+REVIEWED_STORAGE_MOUNT_PROFILE = {**REVIEWED_STORAGE_HEALTH_PROFILE, **REVIEWED_STORAGE_MOUNT_HASHES}
+REVIEWED_STORAGE_MOUNT_VARIANTS = {
+    (key[0], REVIEWED_STORAGE_MOUNT_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_sha256": REVIEWED_STORAGE_MOUNT_HASHES.get(value["selector_path"], value["selector_sha256"]),
+        "dependencies": {name: REVIEWED_STORAGE_MOUNT_HASHES.get(name, sha) for name, sha in value["dependencies"].items()},
+        "contract_extensions": {origin: {name: REVIEWED_STORAGE_MOUNT_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in members.items()} for origin, members in value["contract_extensions"].items()},
+    } for key, value in REVIEWED_STORAGE_HEALTH_VARIANTS.items()
+}
+REVIEWED_STORAGE_MOUNT_PAIRS = {**REVIEWED_STORAGE_HEALTH_PAIRS}
+for _name, _current in REVIEWED_STORAGE_MOUNT_HASHES.items():
+    _origins = (_preparation_code.reviewed_storage_origins(_name, mount=True)
+                if _name in _preparation_code.REVIEWED_STORAGE_MOUNT_TRANSITION else
+                {node for pair in REVIEWED_STORAGE_HEALTH_PAIRS.get(_name, ()) for node in pair})
+    REVIEWED_STORAGE_MOUNT_PAIRS[_name] = {
+        (reviewed_formatting_predecessor(_name, origin), _current) for origin in _origins}
+
+
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
     """Read-only code projection shared by pre-stop and selected handoff checks."""
     import ast
@@ -15346,14 +15370,21 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         (source := candidate_bytes(name, optional=True)) is not None
         and hashlib.sha256(source).hexdigest() == pair[1]
         for name, pair in _preparation_code.REVIEWED_STORAGE_HEALTH_TRANSITION.items())
-    storage_integration_present = storage_latest_present or storage_prior_present or storage_health_present
-    storage_profile = (REVIEWED_STORAGE_HEALTH_PROFILE if storage_health_present else
+    storage_mount_present = any(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == pair[1]
+        for name, pair in _preparation_code.REVIEWED_STORAGE_MOUNT_TRANSITION.items())
+    storage_integration_present = storage_latest_present or storage_prior_present or storage_health_present or storage_mount_present
+    storage_profile = (REVIEWED_STORAGE_MOUNT_PROFILE if storage_mount_present else
+                       REVIEWED_STORAGE_HEALTH_PROFILE if storage_health_present else
                        REVIEWED_STORAGE_INTEGRATION_PROFILE if storage_latest_present
                        else REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE)
-    storage_variants = (REVIEWED_STORAGE_HEALTH_VARIANTS if storage_health_present else
+    storage_variants = (REVIEWED_STORAGE_MOUNT_VARIANTS if storage_mount_present else
+                       REVIEWED_STORAGE_HEALTH_VARIANTS if storage_health_present else
                         REVIEWED_STORAGE_INTEGRATION_VARIANTS if storage_latest_present
                         else REVIEWED_STORAGE_INTEGRATION_PRIOR_VARIANTS)
-    storage_pairs = (REVIEWED_STORAGE_HEALTH_PAIRS if storage_health_present else
+    storage_pairs = (REVIEWED_STORAGE_MOUNT_PAIRS if storage_mount_present else
+                       REVIEWED_STORAGE_HEALTH_PAIRS if storage_health_present else
                      REVIEWED_STORAGE_INTEGRATION_PAIRS if storage_latest_present
                      else REVIEWED_STORAGE_INTEGRATION_PRIOR_PAIRS)
     p5_union_present = any(

@@ -519,7 +519,8 @@ def _submission_observer_generation_issue(payload, root, *, selection_path=None)
                 if window._contract() != source_sha:
                     return "observer_source_window_code_mismatch"
                 try:
-                    window._predecessor_issuer(Path(root) / "data", contract)
+                    # Resolve the declared shared mount, retaining no-follow checks below it.
+                    window._predecessor_issuer((Path(root) / "data").resolve(strict=True), contract)
                 except (OSError, ValueError, TypeError, KeyError):
                     return "observer_source_window_code_mismatch"
     except (OSError, ValueError, TypeError):

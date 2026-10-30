@@ -3837,6 +3837,19 @@ REVIEWED_STORAGE_HEALTH_PROFILE = {
 }
 
 
+# Preserve the issued health generation; the successor changes only the
+# caller's declared shared-data mount boundary, not issuer authentication.
+REVIEWED_STORAGE_MOUNT_TRANSITION = {
+    "src/engine/error_detectors/artifact_freshness.py": (
+        "29be2dedbf2b58b86d7b2c066aec6288b6292391123a54f16079405cfefe1e45",
+        "840aa5dc54849a6db50e244a8767285da4296bb5efe78c206642022ae17337cd"),
+}
+REVIEWED_STORAGE_MOUNT_PROFILE = {
+    **REVIEWED_STORAGE_HEALTH_PROFILE,
+    **{name: pair[1] for name, pair in REVIEWED_STORAGE_MOUNT_TRANSITION.items()},
+}
+
+
 def reviewed_predecessor_origins(endpoint, edges):
     """Follow only connected, explicitly registered predecessor edges."""
     origins = {endpoint}
@@ -3847,9 +3860,10 @@ def reviewed_predecessor_origins(endpoint, edges):
         origins.update(predecessors)
 
 
-def reviewed_storage_origins(relative, *, prior=False, health=False):
+def reviewed_storage_origins(relative, *, prior=False, health=False, mount=False):
     """Compose only registered predecessor edges for this exact successor."""
-    transition = ((REVIEWED_STORAGE_HEALTH_TRANSITION.get(relative) if health else None)
+    transition = ((REVIEWED_STORAGE_MOUNT_TRANSITION.get(relative) if mount else None)
+                  or (REVIEWED_STORAGE_HEALTH_TRANSITION.get(relative) if health else None)
                   or (REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION if prior else
                       REVIEWED_STORAGE_INTEGRATION_TRANSITION).get(relative))
     if transition is None:
@@ -3861,7 +3875,9 @@ def reviewed_storage_origins(relative, *, prior=False, health=False):
                      REVIEWED_SUBMISSION_MONITOR_TRANSITION,
                      REVIEWED_COMMON_SUPPORT_TRANSITION,
                      REVIEWED_INTERRUPTED_CUSTODY_TRANSITION,
-                     REVIEWED_P5_CONSUMER_UNION_TRANSITION):
+                     REVIEWED_P5_CONSUMER_UNION_TRANSITION,
+                     REVIEWED_STORAGE_INTEGRATION_TRANSITION,
+                     REVIEWED_STORAGE_HEALTH_TRANSITION):
         if relative in registry:
             edges.add(registry[relative])
     return reviewed_predecessor_origins(transition[0], edges)
@@ -3880,6 +3896,10 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
     comparison_root = ROOT if root is None else Path(root)
     if not comparison_root.is_absolute() or comparison_root.resolve() != comparison_root:
         return False
+    storage_mount = any((comparison_root / name).is_file()
+        and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == pair[1]
+        for name, pair in REVIEWED_STORAGE_MOUNT_TRANSITION.items())
     storage_health = any((comparison_root / name).is_file()
         and not (comparison_root / name).is_symlink()
         and _sha(comparison_root / name) == pair[1]
@@ -3897,8 +3917,9 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
         and _sha(comparison_root / name) == pair[1]
         for name, pair in REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION.items()
     )
-    storage_generation = storage_latest or storage_prior or storage_health
-    storage_profile = (REVIEWED_STORAGE_HEALTH_PROFILE if storage_health else
+    storage_generation = storage_latest or storage_prior or storage_health or storage_mount
+    storage_profile = (REVIEWED_STORAGE_MOUNT_PROFILE if storage_mount else
+                       REVIEWED_STORAGE_HEALTH_PROFILE if storage_health else
                        REVIEWED_STORAGE_INTEGRATION_PROFILE if storage_latest
                        else REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE)
     if storage_generation:
@@ -3909,11 +3930,12 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
             for name, expected in storage_profile.items()
         ):
             return False
-        transition = ((REVIEWED_STORAGE_HEALTH_TRANSITION.get(relative) if storage_health else None)
+        transition = ((REVIEWED_STORAGE_MOUNT_TRANSITION.get(relative) if storage_mount else None)
+                      or (REVIEWED_STORAGE_HEALTH_TRANSITION.get(relative) if storage_health else None)
                       or (REVIEWED_STORAGE_INTEGRATION_TRANSITION if storage_latest
                           else REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION).get(relative))
         if transition is not None:
-            return current == transition[1] and old in reviewed_storage_origins(relative, prior=not storage_latest, health=storage_health)
+            return current == transition[1] and old in reviewed_storage_origins(relative, prior=not storage_latest, health=storage_health, mount=storage_mount)
     union_generation = any(
         (comparison_root / name).is_file()
         and not (comparison_root / name).is_symlink()
