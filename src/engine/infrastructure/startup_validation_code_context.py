@@ -3792,7 +3792,7 @@ REVIEWED_P5_CONSUMER_UNION_PROFILE = {
 # One change-scoped registration for both independent preparation and ordered
 # handoff.  Include transitive archive readers even where the previous profile
 # did not enumerate them. Issued predecessor profiles remain unchanged.
-REVIEWED_STORAGE_INTEGRATION_TRANSITION = {
+REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION = {
     "src/engine/automation/ordered_intraday_deploy.py": ("914d5a48c783b3afdd6537a796cd5e8ca120aea03ea60c705cffff76f3148374", "310acd9437e826f8e105d1f74bbe7b6d1ba3dea9197798e36edc11e6b342ec1b"),
     "src/engine/monitoring/submission_bottleneck_monitor.py": ("f3a09a8c7890b3946a3c28fa3465056ae41dfd0bd2e149be77e7ae3bdf33eaae", "858db84b920533dc4fa39430a5ea70468dae92c0552924582624e20154b2f240"),
     "src/engine/buy_funnel_sentinel.py": ("680ba5cce5ecff77d573457141e604051fb6bdc2216f9f649353693e4ccaf510", "117360cda23c8afab8a0ed4a606fd74d879b312ed2a8a26e0cdaf82ae7cda014"),
@@ -3803,8 +3803,21 @@ REVIEWED_STORAGE_INTEGRATION_TRANSITION = {
     "src/engine/monitoring/sentinel_summary_contract.py": ("44a81aea08b43a5be7a1b33aea70a231fd8b4e445d3cee6e0f8b930cb1fe41fd", "73160cbc1239ce787e23e53cc797dc88b8a3717114ace5376ffcd0b307b81beb"),
     "src/engine/sentinel_event_cache.py": ("2a9adf8c6936718163c9a57af112d7f0fe5edefec65248e58a76a9487caef70b", "92c4eacc2bfa5be319ea0c72bedba22a079afa9fd296b9eb3e553366de6cdc69"),
 }
-REVIEWED_STORAGE_INTEGRATION_PROFILE = {
+REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE = {
     **REVIEWED_P5_CONSUMER_UNION_PROFILE,
+    **{name: pair[1] for name, pair in REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION.items()},
+}
+REVIEWED_STORAGE_INTEGRATION_TRANSITION = {
+    **REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION,
+    "src/engine/automation/ordered_intraday_deploy.py": (
+        "310acd9437e826f8e105d1f74bbe7b6d1ba3dea9197798e36edc11e6b342ec1b",
+        "7b2be5f79240ddcaded0a9627d08be13d907f8babc9481275dc3d08f77eccce5"),
+    "src/engine/scalping/reversal_code_handoff.py": (
+        "21760885de2a28bd7d5c5a021af3eb88c0fd0f31c890855b94be0e81f8b7b93c",
+        "df41ee6d93f1842bcd689940c8920d58aec021530e97fff252e4ceb9bb794ff3"),
+}
+REVIEWED_STORAGE_INTEGRATION_PROFILE = {
+    **REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE,
     **{name: pair[1] for name, pair in REVIEWED_STORAGE_INTEGRATION_TRANSITION.items()},
 }
 
@@ -3819,13 +3832,15 @@ def reviewed_predecessor_origins(endpoint, edges):
         origins.update(predecessors)
 
 
-def reviewed_storage_origins(relative):
+def reviewed_storage_origins(relative, *, prior=False):
     """Compose only registered predecessor edges for this exact successor."""
-    transition = REVIEWED_STORAGE_INTEGRATION_TRANSITION.get(relative)
+    transition = (REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION if prior else
+                  REVIEWED_STORAGE_INTEGRATION_TRANSITION).get(relative)
     if transition is None:
         return frozenset()
     edges = set(REVIEWED_PREPARATION_HISTORY.get(relative, ()))
     for registry in (REVIEWED_PREPARATION_SOURCES,
+                     REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION,
                      REVIEWED_SUBMISSION_MONITOR_PRIOR_TRANSITION,
                      REVIEWED_SUBMISSION_MONITOR_TRANSITION,
                      REVIEWED_COMMON_SUPPORT_TRANSITION,
@@ -3849,23 +3864,34 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
     comparison_root = ROOT if root is None else Path(root)
     if not comparison_root.is_absolute() or comparison_root.resolve() != comparison_root:
         return False
-    storage_generation = any(
+    storage_latest = any(
         (comparison_root / name).is_file()
         and not (comparison_root / name).is_symlink()
         and _sha(comparison_root / name) == pair[1]
         for name, pair in REVIEWED_STORAGE_INTEGRATION_TRANSITION.items()
+        if pair[1] != REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE.get(name)
     )
+    storage_prior = any(
+        (comparison_root / name).is_file()
+        and not (comparison_root / name).is_symlink()
+        and _sha(comparison_root / name) == pair[1]
+        for name, pair in REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION.items()
+    )
+    storage_generation = storage_latest or storage_prior
+    storage_profile = (REVIEWED_STORAGE_INTEGRATION_PROFILE if storage_latest
+                       else REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE)
     if storage_generation:
         if any(
             (comparison_root / name).is_symlink()
             or not (comparison_root / name).is_file()
             or _sha(comparison_root / name) != expected
-            for name, expected in REVIEWED_STORAGE_INTEGRATION_PROFILE.items()
+            for name, expected in storage_profile.items()
         ):
             return False
-        transition = REVIEWED_STORAGE_INTEGRATION_TRANSITION.get(relative)
+        transition = (REVIEWED_STORAGE_INTEGRATION_TRANSITION if storage_latest
+                      else REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION).get(relative)
         if transition is not None:
-            return current == transition[1] and old in reviewed_storage_origins(relative)
+            return current == transition[1] and old in reviewed_storage_origins(relative, prior=not storage_latest)
     union_generation = any(
         (comparison_root / name).is_file()
         and not (comparison_root / name).is_symlink()
@@ -3877,14 +3903,14 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
             (comparison_root / name).is_symlink()
             or not (comparison_root / name).is_file()
             or _sha(comparison_root / name) != expected
-            for name, expected in (REVIEWED_STORAGE_INTEGRATION_PROFILE if storage_generation
+            for name, expected in (storage_profile if storage_generation
                                    else REVIEWED_P5_CONSUMER_UNION_PROFILE).items()
         ):
             return False
         transition = REVIEWED_P5_CONSUMER_UNION_TRANSITION.get(relative)
         if transition is not None:
             return current == transition[1] and old == transition[0]
-    interrupted_profile = (REVIEWED_STORAGE_INTEGRATION_PROFILE if storage_generation
+    interrupted_profile = (storage_profile if storage_generation
                            else REVIEWED_P5_CONSUMER_UNION_PROFILE if union_generation
                            else REVIEWED_INTERRUPTED_CUSTODY_PROFILE)
     prior_owner = "src/engine/automation/ordered_intraday_deploy.py"
@@ -3935,7 +3961,7 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
             (comparison_root / name).is_symlink()
             or not (comparison_root / name).is_file()
             or _sha(comparison_root / name) != expected
-            for name, expected in (REVIEWED_STORAGE_INTEGRATION_PROFILE if storage_generation
+            for name, expected in (storage_profile if storage_generation
                                    else interrupted_profile if interrupted_generation
                                    else REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PROFILE if interrupted_prior
                                    else REVIEWED_COMMON_SUPPORT_PROFILE).items()
@@ -3956,7 +3982,7 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
             or not (comparison_root / name).is_file()
             or _sha(comparison_root / name) != expected
             for name, expected in (
-                REVIEWED_STORAGE_INTEGRATION_PROFILE if storage_generation
+                storage_profile if storage_generation
                 else interrupted_profile if interrupted_generation
                 else REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PROFILE if interrupted_prior
                 else REVIEWED_COMMON_SUPPORT_PROFILE if support_generation

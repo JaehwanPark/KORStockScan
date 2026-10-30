@@ -408,6 +408,19 @@ The approved B0–B4 repair uses exact original PREOPEN-to-candidate pairs in `i
 
 The auxiliary common-support repair is issued by `reversal_auxiliary_intraday.prepare_contract_repair` and `publish_contract_repair`, using `APPROVED_REVIEWED_COMMON_SUPPORT_CONTRACT_REPAIR`. Preparation is read-only. Publication, after the incumbent has drained, uses the existing auxiliary and native publisher locks, parent/pointer/code CAS and a sealed full-scope manifest. Only the exact English ASCII clarification is appended to immutable successor prompts. Validator, projector, input/schema, provider/model/options, machine bundle/family/membership and original PREOPEN/env/manifest bytes remain bound. Issue exact-source reader compatibility from the preserved original readers and complete binding parity before the candidate reads those sources. Preserve confirmation-time selection for historical claims; invalid historical PASS output remains invalid. Rollback restores the prior bindings through the existing owner and retains the repair manifest as historical evidence.
 
+An active machine code handoff freezes original auxiliary generations and their
+native lineage, not `auxiliary/current.json`. That alias is owned by the auxiliary
+publisher. The origin reader resolves its originally observed physical SHA to
+the exact sealed immutable generation before omitting the mutable alias from a
+successor receipt. A legacy changed alias requires the native common-support
+manifest, full source/code/scope validation, exact parent and old/new bindings,
+current native generation and an aware nonfuture publication clock. Unknown,
+missing or conflicting originals and unreviewed successors remain failures.
+Legacy discovery is bounded to128 generation records and8MiB; new receipts name
+their immutable generations directly. Original receipts/bytes are retained.
+An old alias observed while checking another day or bundle is custody evidence,
+never that day's consumed policy or economic evidence.
+
 For an explicitly authorized repair in an ordered deployment, provide both
 `--auxiliary-repair-path` and `--auxiliary-repair-sha256`, with the latter
 binding the manifest's actual file bytes. Before acquiring the hold the owner
@@ -424,6 +437,12 @@ binding receipt. A preselection failure rolls back a published repair only with
 the original selector, owned hold and no live Main; later failures retain their
 selected generation and hold for native recovery. No prompt publication is
 implicit when the two repair arguments are absent.
+
+Stopped recovery may inherit a repair already issued by the exact failed
+transition. It authenticates the original prepared manifest, native overlay,
+current pointer, base policy and source bytes, retains the failed transition,
+and reuses that generation without another publication or rollback. Final
+selected P5 and actual successor PID checks still require its complete bindings.
 
 When an existing sentinel source-window index is bound to a reviewed predecessor
 issuer, keep that issuer's exact original bytes in the content-addressed

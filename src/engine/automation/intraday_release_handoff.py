@@ -13916,14 +13916,34 @@ REVIEWED_P5_CONSUMER_UNION_PAIRS = {
     name: {(REVIEWED_INTERRUPTED_CUSTODY_PROFILE[name], current)}
     for name, current in REVIEWED_P5_CONSUMER_UNION_HASHES.items()
 }
+REVIEWED_STORAGE_INTEGRATION_PRIOR_HASHES = {
+    **{name: pair[1] for name, pair in
+       _preparation_code.REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION.items()},
+    "src/engine/infrastructure/startup_validation_code_context.py":
+        "668d8057672fbb0429cd744dc4c1138bd237372d70e1f22c0fb11ee3cc80c532",
+}
+REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE = {
+    **REVIEWED_P5_CONSUMER_UNION_PROFILE, **REVIEWED_STORAGE_INTEGRATION_PRIOR_HASHES,
+}
+REVIEWED_STORAGE_INTEGRATION_PRIOR_PAIRS = {
+    name: {(reviewed_formatting_predecessor(name, origin), pair[1])
+           for origin in _preparation_code.reviewed_storage_origins(name, prior=True)}
+    for name, pair in _preparation_code.REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION.items()
+}
+REVIEWED_STORAGE_INTEGRATION_PRIOR_PAIRS[
+    "src/engine/infrastructure/startup_validation_code_context.py"
+] = {(origin, REVIEWED_STORAGE_INTEGRATION_PRIOR_HASHES[
+    "src/engine/infrastructure/startup_validation_code_context.py"])
+    for pair in REVIEWED_P5_CONSUMER_UNION_PAIRS[
+        "src/engine/infrastructure/startup_validation_code_context.py"] for origin in pair}
 REVIEWED_STORAGE_INTEGRATION_HASHES = {
     **{name: pair[1] for name, pair in
        _preparation_code.REVIEWED_STORAGE_INTEGRATION_TRANSITION.items()},
     "src/engine/infrastructure/startup_validation_code_context.py":
-        "668d8057672fbb0429cd744dc4c1138bd237372d70e1f22c0fb11ee3cc80c532",
+        "8fd4f67c278a01a4221842d888e7158a882594c94013f0d14bcdc035e0915807",
 }
 REVIEWED_STORAGE_INTEGRATION_PROFILE = {
-    **REVIEWED_P5_CONSUMER_UNION_PROFILE, **REVIEWED_STORAGE_INTEGRATION_HASHES,
+    **REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE, **REVIEWED_STORAGE_INTEGRATION_HASHES,
 }
 REVIEWED_STORAGE_INTEGRATION_PAIRS = {
     name: {(reviewed_formatting_predecessor(name, origin), pair[1])
@@ -13996,6 +14016,17 @@ REVIEWED_P5_CONSUMER_UNION_VARIANTS = {
     }
     for key, value in REVIEWED_INTERRUPTED_CUSTODY_VARIANTS.items()
 }
+REVIEWED_STORAGE_INTEGRATION_PRIOR_VARIANTS = {
+    (key[0], REVIEWED_STORAGE_INTEGRATION_PRIOR_HASHES.get(key[0], key[1])): {
+        **value,
+        "selector_sha256": REVIEWED_STORAGE_INTEGRATION_PRIOR_HASHES.get(value["selector_path"], value["selector_sha256"]),
+        "dependencies": {name: REVIEWED_STORAGE_INTEGRATION_PRIOR_HASHES.get(name, sha)
+                         for name, sha in value["dependencies"].items()},
+        "contract_extensions": {origin: {
+            name: REVIEWED_STORAGE_INTEGRATION_PRIOR_HASHES.get(os.path.normpath(name), sha)
+            for name, sha in members.items()} for origin, members in value["contract_extensions"].items()},
+    } for key, value in REVIEWED_P5_CONSUMER_UNION_VARIANTS.items()
+}
 REVIEWED_STORAGE_INTEGRATION_VARIANTS = {
     (key[0], REVIEWED_STORAGE_INTEGRATION_HASHES.get(key[0], key[1])): {
         **value,
@@ -14008,7 +14039,7 @@ REVIEWED_STORAGE_INTEGRATION_VARIANTS = {
                      for name, sha in members.items()}
             for origin, members in value["contract_extensions"].items()},
     }
-    for key, value in REVIEWED_P5_CONSUMER_UNION_VARIANTS.items()
+    for key, value in REVIEWED_STORAGE_INTEGRATION_PRIOR_VARIANTS.items()
 }
 REVIEWED_INTERRUPTED_CUSTODY_PAIRS = {
     name: {(origin, current) for origin in (
@@ -14030,22 +14061,28 @@ for _name, _old in {
 # Retain original native policy issuers through the complete reviewed chain,
 # rather than requiring an intermediate release to run. Use the handoff's
 # original comparison edges; physical formatting aliases stay in their owner.
-for _name, _current in REVIEWED_STORAGE_INTEGRATION_HASHES.items():
-    _endpoint = REVIEWED_P5_CONSUMER_UNION_PROFILE.get(_name)
-    if _name in _preparation_code.REVIEWED_STORAGE_INTEGRATION_TRANSITION:
-        _endpoint = _preparation_code.REVIEWED_STORAGE_INTEGRATION_TRANSITION[_name][0]
-    if _endpoint is None:
-        continue
-    _endpoint = reviewed_formatting_predecessor(_name, _endpoint)
-    _edges = set()
-    for _registry in (REVIEWED_ENTRY_COST_PAIRS, REVIEWED_SUBMISSION_MONITOR_PRIOR_PAIRS,
-                      REVIEWED_SUBMISSION_MONITOR_PAIRS, REVIEWED_COMMON_SUPPORT_PAIRS,
-                      REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PAIRS,
-                      REVIEWED_INTERRUPTED_CUSTODY_PAIRS, REVIEWED_P5_CONSUMER_UNION_PAIRS):
-        _edges.update(_registry.get(_name, ()))
-    REVIEWED_STORAGE_INTEGRATION_PAIRS.setdefault(_name, set()).update(
-        (origin, _current) for origin in
-        _preparation_code.reviewed_predecessor_origins(_endpoint, _edges))
+for _hashes, _transitions, _profile, _pairs in (
+    (REVIEWED_STORAGE_INTEGRATION_PRIOR_HASHES,
+     _preparation_code.REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION,
+     REVIEWED_P5_CONSUMER_UNION_PROFILE, REVIEWED_STORAGE_INTEGRATION_PRIOR_PAIRS),
+    (REVIEWED_STORAGE_INTEGRATION_HASHES,
+     _preparation_code.REVIEWED_STORAGE_INTEGRATION_TRANSITION,
+     REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE, REVIEWED_STORAGE_INTEGRATION_PAIRS),
+):
+    for _name, _current in _hashes.items():
+        _endpoint = _transitions[_name][0] if _name in _transitions else _profile.get(_name)
+        if _endpoint is None:
+            continue
+        _endpoint = reviewed_formatting_predecessor(_name, _endpoint)
+        _edges = set()
+        for _registry in (REVIEWED_ENTRY_COST_PAIRS, REVIEWED_SUBMISSION_MONITOR_PRIOR_PAIRS,
+                          REVIEWED_SUBMISSION_MONITOR_PAIRS, REVIEWED_COMMON_SUPPORT_PAIRS,
+                          REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PAIRS,
+                          REVIEWED_INTERRUPTED_CUSTODY_PAIRS, REVIEWED_P5_CONSUMER_UNION_PAIRS,
+                          REVIEWED_STORAGE_INTEGRATION_PRIOR_PAIRS):
+            _edges.update(_registry.get(_name, ()))
+        _pairs.setdefault(_name, set()).update((origin, _current) for origin in
+            _preparation_code.reviewed_predecessor_origins(_endpoint, _edges))
 
 
 def _verify_entry_code_delta(root, commit, origin, paths, expected):
@@ -15251,11 +15288,24 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         (source := candidate_bytes("src/engine/automation/ordered_intraday_deploy.py", optional=True)) is not None
         and hashlib.sha256(source).hexdigest() == REVIEWED_INTERRUPTED_CUSTODY_PRIOR_HASHES["src/engine/automation/ordered_intraday_deploy.py"]
     )
-    storage_integration_present = any(
+    storage_latest_present = any(
         (source := candidate_bytes(name, optional=True)) is not None
         and hashlib.sha256(source).hexdigest() == pair[1]
         for name, pair in _preparation_code.REVIEWED_STORAGE_INTEGRATION_TRANSITION.items()
+        if pair[1] != REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE.get(name)
     )
+    storage_prior_present = any(
+        (source := candidate_bytes(name, optional=True)) is not None
+        and hashlib.sha256(source).hexdigest() == pair[1]
+        for name, pair in _preparation_code.REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION.items()
+    )
+    storage_integration_present = storage_latest_present or storage_prior_present
+    storage_profile = (REVIEWED_STORAGE_INTEGRATION_PROFILE if storage_latest_present
+                       else REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE)
+    storage_variants = (REVIEWED_STORAGE_INTEGRATION_VARIANTS if storage_latest_present
+                        else REVIEWED_STORAGE_INTEGRATION_PRIOR_VARIANTS)
+    storage_pairs = (REVIEWED_STORAGE_INTEGRATION_PAIRS if storage_latest_present
+                     else REVIEWED_STORAGE_INTEGRATION_PRIOR_PAIRS)
     p5_union_present = any(
         (source := candidate_bytes(name, optional=True)) is not None
         and hashlib.sha256(source).hexdigest() == pair[1]
@@ -15270,7 +15320,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
         # original contract omits one of the historical dependency triggers.
         # A new/partial consumer inventory must not silently skip the census.
         for name, sha in (
-            REVIEWED_STORAGE_INTEGRATION_PROFILE if storage_integration_present
+            storage_profile if storage_integration_present
             else REVIEWED_P5_CONSUMER_UNION_PROFILE if p5_union_present
             else REVIEWED_INTERRUPTED_CUSTODY_PROFILE if interrupted_custody_present
             else REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PROFILE if interrupted_custody_prior_present
@@ -15284,7 +15334,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                 raise ValueError("entry_consumer_reviewed_dependency_unreviewed:" + name)
             if source != revision_bytes(commit, name):
                 raise ValueError("entry_consumer_reviewed_dependency_dirty:" + name)
-        prepared_hashes = (REVIEWED_STORAGE_INTEGRATION_PROFILE if storage_integration_present
+        prepared_hashes = (storage_profile if storage_integration_present
                            else REVIEWED_P5_CONSUMER_UNION_PROFILE if p5_union_present
                            else REVIEWED_INTERRUPTED_CUSTODY_PROFILE if interrupted_custody_present
                            else REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PROFILE if interrupted_custody_prior_present
@@ -15292,7 +15342,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
                            else REVIEWED_STOP_INCIDENT_PROFILE if stop_incident_present
                            else REVIEWED_SUBMISSION_MONITOR_PRIOR_PROFILE if prior_monitor_present
                            else REVIEWED_SUBMISSION_MONITOR_PROFILE)
-        prepared_variants = (REVIEWED_STORAGE_INTEGRATION_VARIANTS if storage_integration_present
+        prepared_variants = (storage_variants if storage_integration_present
                              else REVIEWED_P5_CONSUMER_UNION_VARIANTS if p5_union_present
                              else REVIEWED_INTERRUPTED_CUSTODY_VARIANTS if interrupted_custody_present
                              else REVIEWED_INTERRUPTED_CUSTODY_PRIOR_VARIANTS if interrupted_custody_prior_present
@@ -15737,7 +15787,7 @@ def _verify_entry_code_delta(root, commit, origin, paths, expected):
             continue
         pair = (hashlib.sha256(before).hexdigest(), hashlib.sha256(after).hexdigest())
         if (
-            (storage_integration_present and pair in REVIEWED_STORAGE_INTEGRATION_PAIRS.get(repository_name(name), ()))
+            (storage_integration_present and pair in storage_pairs.get(repository_name(name), ()))
             or (p5_union_present and pair in REVIEWED_P5_CONSUMER_UNION_PAIRS.get(repository_name(name), ()))
             or pair in REVIEWED_INTERRUPTED_CUSTODY_PAIRS.get(repository_name(name), ())
             or pair in REVIEWED_INTERRUPTED_CUSTODY_PRIOR_PAIRS.get(repository_name(name), ())

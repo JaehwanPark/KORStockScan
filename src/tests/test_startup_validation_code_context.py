@@ -4696,13 +4696,19 @@ def test_reviewed_predecessor_composition_keeps_unknown_and_disconnected_edges_o
 
 
 @pytest.mark.parametrize("fault", [None, "missing", "mixed", "origin", "future"])
-def test_storage_integration_requires_complete_profile(tmp_path, fault):
-    for name, expected in C.REVIEWED_STORAGE_INTEGRATION_PROFILE.items():
+@pytest.mark.parametrize("generation", ["prior", "current"])
+def test_storage_integration_requires_complete_profile(tmp_path, fault, generation):
+    profile = (C.REVIEWED_STORAGE_INTEGRATION_PRIOR_PROFILE if generation == "prior"
+               else C.REVIEWED_STORAGE_INTEGRATION_PROFILE)
+    for name, expected in profile.items():
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes((ROOT / name).read_bytes())
+        path.write_bytes(subprocess.check_output(["git", "-C", str(ROOT), "show", "f1648286c:" + name])
+                         if generation == "prior" else (ROOT / name).read_bytes())
         assert C._sha(path) == expected
-    name, (old, current) = next(iter(C.REVIEWED_STORAGE_INTEGRATION_TRANSITION.items()))
+    transition = (C.REVIEWED_STORAGE_INTEGRATION_PRIOR_TRANSITION if generation == "prior"
+                  else C.REVIEWED_STORAGE_INTEGRATION_TRANSITION)
+    name, (old, current) = next(iter(transition.items()))
     dependency = tmp_path / "src/engine/monitoring/sentinel_source_window.py"
     if fault == "missing":
         dependency.unlink()

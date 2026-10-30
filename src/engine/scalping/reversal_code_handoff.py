@@ -55,6 +55,87 @@ def validate_receipt(receipt, *, day, commit, root, bundle_sha, pointer_sha):
     return receipt
 
 
+def _auxiliary_pointer_origin(data_root, day, bundle_sha, expected):
+    """Resolve an observed auxiliary alias to its exact immutable native bytes.
+
+    A code-only receipt does not freeze the auxiliary publisher's current alias.
+    Legacy aliases may advance only through the fully verified native citation
+    repair; no policy, source hash or sealed predecessor is rewritten.
+    """
+    from src.engine.scalping import mechanistic_entry_runtime_policy as N
+    from src.engine.scalping import reversal_auxiliary_intraday as A
+
+    data = Path(data_root).resolve()
+    directory = A.root(data) / "generations"
+    pointer = A.root(data) / "current.json"
+    if directory.is_symlink() or pointer.is_symlink():
+        raise ValueError("active_policy_auxiliary_pointer_path_invalid")
+    signature = lambda s: (s.st_dev, s.st_ino, s.st_mtime_ns, s.st_ctime_ns)
+    before = signature(directory.stat())
+    candidates = sorted(directory.glob("*.json"))
+    if len(candidates) > 128:
+        raise ValueError("active_policy_auxiliary_origin_inventory_unbounded")
+    scanned, original, origin_path = 0, None, None
+    for candidate in candidates:
+        if candidate.is_symlink() or not candidate.is_file():
+            raise ValueError("active_policy_auxiliary_origin_path_invalid")
+        scanned += candidate.stat().st_size
+        if scanned > 8 * 1024 * 1024:
+            raise ValueError("active_policy_auxiliary_origin_inventory_unbounded")
+        if P.file_hash(candidate) != expected:
+            continue
+        original = A.read(candidate)
+        if (candidate.name != original["artifact_content_sha256"] + ".json"
+            or original.get("schema") != A.SCHEMA
+            or original.get("authority") != A.AUTHORITY):
+            raise ValueError("active_policy_auxiliary_origin_invalid")
+        origin_path = candidate
+        break
+    if original is None or signature(directory.stat()) != before:
+        raise ValueError("active_policy_auxiliary_original_generation_missing")
+    if not N.source_receipt_matches(dict(path=str(origin_path), sha256=expected), data_root=data):
+        raise ValueError("active_policy_auxiliary_original_generation_changed")
+    pointer_before = N._signature(pointer)
+    observed_sha = P.file_hash(pointer)
+    current = None
+    if observed_sha != expected:
+        observed = A.read(pointer)
+        current_day = observed.get("day")
+        current_bundle_sha = observed.get("base_bundle_sha256")
+        bundle = N._read(N.root(data) / "generations" / (current_bundle_sha + ".json"))
+        N.validate(bundle, target_date=current_day)
+        current = A.current(data, bundle, day=current_day)
+        if (current is None or current != observed
+            or datetime.fromisoformat(current["effective_from"]) > datetime.now(P.KST)
+            or not current.get("contract_repair_manifest_sha256")):
+            raise ValueError("active_policy_auxiliary_pointer_successor_unverified")
+        manifest_path = A.root(data) / "contract_repairs" / (current["contract_repair_manifest_sha256"] + ".json")
+        manifest = A.read(manifest_path)
+        A.validate_contract_repair_manifest(data, manifest, bundle, force_source_hashes=True)
+        active_original = (original if original.get("day") == current_day
+                           and original.get("base_bundle_sha256") == current_bundle_sha else None)
+        parent = active_original["artifact_content_sha256"] if active_original else None
+        if (manifest.get("schema") != A.CONTRACT_REPAIR_SCHEMA
+            or current.get("contract_repair_authority") != A.CONTRACT_REPAIR_AUTHORITY
+            or current.get("previous_overlay_sha256") != parent
+            or manifest.get("expected_parent") != parent
+            or manifest.get("new_bindings") != current["bindings"]
+            or manifest.get("old_bindings") != A._contract_repair_incumbents(data, bundle, active_original)):
+            raise ValueError("active_policy_auxiliary_pointer_lineage_invalid")
+    refs = {str(origin_path): expected}
+    if current is not None:
+        for reference in A.lineage_sources(data, bundle, current):
+            refs[reference["path"]] = reference["sha256"]
+    if N._signature(pointer) != pointer_before or P.file_hash(origin_path) != expected:
+        raise ValueError("active_policy_auxiliary_pointer_generation_changed")
+    return dict(source_hashes=refs, observation=dict(
+        path=str(pointer), original_sha256=expected, observed_sha256=observed_sha,
+        original_generation=str(origin_path), original_overlay_sha256=original["artifact_content_sha256"],
+        current_overlay_sha256=(current or {}).get("artifact_content_sha256"),
+        origin_target_date=day, origin_machine_bundle_sha256=bundle_sha,
+        role="mutable_auxiliary_publication_alias_not_machine_policy_input"))
+
+
 def _validated_origin_receipt(
     data_root, day, origin_root, origin_commit, bundle_sha, pointer_sha
 ):
@@ -73,20 +154,27 @@ def _validated_origin_receipt(
         bundle_sha=bundle_sha,
         pointer_sha=pointer_sha,
     )
+    refs = {**receipt["source_hashes"], **receipt["code_hashes"]}
+    auxiliary_observation = None
     for name, expected in {
         **receipt["source_hashes"],
         **receipt["code_hashes"],
     }.items():
-        if not N.source_receipt_matches(
+        if name == str((Path(data_root).resolve() / "runtime/mechanistic_entry_policy/auxiliary/current.json")):
+            resolved = _auxiliary_pointer_origin(data_root, day, bundle_sha, expected)
+            refs.pop(name, None)
+            refs.update(resolved["source_hashes"])
+            auxiliary_observation = resolved["observation"]
+        elif not N.source_receipt_matches(
             dict(path=name, sha256=expected), data_root=data_root
         ):
             raise ValueError("active_policy_origin_receipt_source_changed:" + name)
-    refs = {**receipt["source_hashes"], **receipt["code_hashes"]}
     refs[str(source.resolve())] = P.file_hash(source)
     return dict(
         bundle_sha256=bundle_sha,
         source_hashes=refs,
         verification_basis="native_sealed_code_handoff_pipeline_references",
+        auxiliary_pointer_observation=auxiliary_observation,
     )
 
 
@@ -367,7 +455,9 @@ def validate(bundle, data_root, *, original_error):
     if set(r["code_hashes"]) != current:
         raise ValueError("active_policy_code_membership_changed")
     for name, expected in {**r["source_hashes"], **r["code_hashes"]}.items():
-        if not N.source_receipt_matches(
+        if name == str((Path(data_root).resolve() / "runtime/mechanistic_entry_policy/auxiliary/current.json")):
+            _auxiliary_pointer_origin(data_root, r["target_date"], bundle["bundle_sha256"], expected)
+        elif not N.source_receipt_matches(
             dict(path=name, sha256=expected), data_root=data_root
         ):
             raise ValueError("active_policy_code_handoff_source_changed:" + name)
@@ -1151,6 +1241,12 @@ def issue(
     ):
         raise ValueError("active_policy_code_handoff_parent_changed")
     sources = dict(checked["source_hashes"])
+    auxiliary_observation = checked.get("auxiliary_pointer_observation")
+    auxiliary_pointer = Path(data_root).resolve() / "runtime/mechanistic_entry_policy/auxiliary/current.json"
+    if str(auxiliary_pointer) in sources:
+        resolved = _auxiliary_pointer_origin(data_root, day, bundle["bundle_sha256"], sources.pop(str(auxiliary_pointer)))
+        sources.update(resolved["source_hashes"])
+        auxiliary_observation = resolved["observation"]
     # A successor of a code-only release observes its predecessor selector.
     # This is transition provenance, not an immutable policy input: validate()
     # independently binds the current selector to this exact candidate root
@@ -1210,6 +1306,7 @@ def issue(
             origin_commit=previous,
             bundle_sha256=bundle["bundle_sha256"],
             origin_selection_sha256=selection_sha,
+            origin_auxiliary_pointer_observation=auxiliary_observation,
             origin_transition_observation=transition_observation,
             origin_closed_observation=closed_parent,
             current_pointer_sha256=P.file_hash(pointer),

@@ -1509,6 +1509,42 @@ class Deployment:
                 raise ValueError("deployment_auxiliary_native_not_drained")
         return record
 
+    def inherit_auxiliary_repair(self, origin, active_check):
+        """Keep an already-issued repair across native stopped recovery."""
+        published = origin["failed"].get("auxiliary_repair_published")
+        if not published:
+            return {}
+        from src.engine.scalping import reversal_auxiliary_intraday as auxiliary
+        from src.engine.scalping import mechanistic_entry_runtime_policy as native
+
+        before = origin["failed"].get("auxiliary_repair_preflight") or {}
+        path = Path(before.get("path") or "")
+        manifest, raw, _ = _owned_metadata(path)
+        data = self.workspace / "data"
+        bundle_sha = active_check["bundle_sha256"]
+        bundle = native._read(native.root(data) / "generations" / (bundle_sha + ".json"))
+        native.validate(bundle, target_date=self.day)
+        overlay = auxiliary.current(data, bundle, day=self.day)
+        if (_digest(raw) != before.get("sha256") or auxiliary.read(path) != manifest
+            or manifest.get("artifact_content_sha256") != before.get("manifest_sha256")
+            or manifest.get("base_bundle_sha256") != bundle_sha
+            or overlay is None or overlay.get("artifact_content_sha256") != published
+            or overlay.get("contract_repair_manifest_sha256") != manifest["artifact_content_sha256"]
+            or overlay.get("bindings") != manifest["new_bindings"]):
+            raise ValueError("deployment_recovery_auxiliary_repair_unbound")
+        auxiliary.validate_contract_repair_manifest(data, manifest, bundle, force_source_hashes=True)
+        generation = auxiliary.root(data) / "generations" / (published + ".json")
+        if auxiliary.read(generation) != overlay:
+            raise ValueError("deployment_recovery_auxiliary_generation_changed")
+        self.auxiliary_repair_path, self.auxiliary_repair_sha256 = path, _digest(raw)
+        self.auxiliary_repair, self.auxiliary_overlay = manifest, overlay
+        self.auxiliary_repair_reused = dict(manifest_path=str(path), manifest_sha256=_digest(raw),
+            overlay_path=str(generation), overlay_sha256=H._sha(generation),
+            source_transition=str(origin["failed_path"]), source_transition_sha256=_digest(origin["failed_raw"]))
+        return {**manifest["source_hashes"], str(path): _digest(raw),
+                str(generation): H._sha(generation),
+                str(auxiliary.root(data) / "current.json"): H._sha(auxiliary.root(data) / "current.json")}
+
     def pin_candidate_p5(self):
         self.candidate_p5 = verify_candidate_p5(
             self.workspace,
@@ -2285,12 +2321,22 @@ class Deployment:
             if getattr(self, "auxiliary_repair", None) is not None:
                 from src.engine.scalping import reversal_auxiliary_intraday as auxiliary
 
-                overlay = self.run_auxiliary_native("publish", self.auxiliary_repair)
+                reused = getattr(self, "auxiliary_repair_reused", None)
+                if reused:
+                    overlay = auxiliary.read(Path(reused["overlay_path"]))
+                    if (overlay != self.auxiliary_overlay
+                        or H._sha(reused["overlay_path"]) != reused["overlay_sha256"]
+                        or auxiliary.read(auxiliary.root(self.workspace / "data") / "current.json") != overlay):
+                        raise ValueError("deployment_recovery_auxiliary_generation_changed")
+                else:
+                    overlay = self.run_auxiliary_native("publish", self.auxiliary_repair)
                 if (overlay.get("bindings") != self.auxiliary_repair["new_bindings"]
                     or overlay.get("contract_repair_manifest_sha256") != self.auxiliary_repair["artifact_content_sha256"]):
                     raise ValueError("deployment_auxiliary_repair_publication_invalid")
                 self.auxiliary_overlay = overlay
-                self.checkpoint("drained", auxiliary_repair_published=overlay["artifact_content_sha256"])
+                self.checkpoint("drained", **(
+                    {"auxiliary_repair_reused": reused} if reused else
+                    {"auxiliary_repair_published": overlay["artifact_content_sha256"]}))
                 self.assert_unchanged()
             _atomic(self.selection, self.published)
             if getattr(self, "preserve_editable_checklist", False):
@@ -2465,6 +2511,7 @@ class Deployment:
         if not hasattr(self, "state"):
             return
         if (getattr(self, "auxiliary_repair", None) is not None
+            and not getattr(self, "auxiliary_repair_reused", None)
             and self.phase == "drained" and not _main_pids()):
             try:
                 self.assert_hold()
@@ -2832,6 +2879,7 @@ class StoppedDeploymentRecovery(Deployment):
                 self.workspace, self.candidate, self.day
             ),
         )
+        auxiliary_sources = self.inherit_auxiliary_repair(origin, checks["active"])
         self.prepared_delay_check = checks["delay"]
         self.directory = (
             self.workspace / "data/runtime/release_transitions" / self.day / self.commit
@@ -2839,6 +2887,7 @@ class StoppedDeploymentRecovery(Deployment):
         self.directory.mkdir(parents=True, exist_ok=False)
         self.old = prior
         self.frozen = {**native["frozen_files"], **preparation_sources}
+        self.frozen.update(auxiliary_sources)
         self.frozen.update(
             (checks["delay"].get("prepared_code_origin") or {}).get("sources", {})
         )
@@ -2888,6 +2937,8 @@ class StoppedDeploymentRecovery(Deployment):
             ),
         )
         self.state["candidate_p5"] = self.candidate_p5
+        if getattr(self, "auxiliary_repair_reused", None):
+            self.state["auxiliary_repair_reused"] = self.auxiliary_repair_reused
         self.state["candidate_report_currentness"] = checks["reports"]
         self.observe_report_consumers("candidate")
         self.failed_hold_adoption = dict(

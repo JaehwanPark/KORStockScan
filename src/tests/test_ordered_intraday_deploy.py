@@ -4646,3 +4646,51 @@ def test_auxiliary_repair_attestation_requires_successor_pid_binding(driver, mon
     else:
         assert d.attest()["status"] == "pass"
         assert d.state["auxiliary_repair_pid_consumption"]["sha256"] == D.H._sha(path)
+
+
+@pytest.mark.parametrize("fault", [None, "manifest", "published", "binding", "generation"])
+def test_stopped_recovery_inherits_published_auxiliary_without_republication(driver, monkeypatch, fault):
+    from src.engine.scalping import reversal_auxiliary_intraday as auxiliary
+    from src.engine.scalping import continuous_reversal_postclose as proof
+    from src.engine.scalping import mechanistic_entry_runtime_policy as native
+
+    d = driver
+    data = d.workspace / "data"
+    bundle = dict(bundle_sha256="b" * 64)
+    bundle_path = native.root(data) / "generations" / ("b" * 64 + ".json")
+    bundle_path.parent.mkdir(parents=True, exist_ok=True)
+    bundle_path.write_bytes(D._json_bytes(bundle))
+    manifest = proof.seal(dict(base_bundle_sha256="b" * 64,
+        old_bindings={"scope": "old"}, new_bindings={"scope": "new"}, source_hashes={}))
+    path = d.workspace / "native-repair.json"
+    path.write_bytes(D._json_bytes(manifest))
+    overlay = proof.seal(dict(contract_repair_manifest_sha256=manifest["artifact_content_sha256"],
+                             bindings=manifest["new_bindings"]))
+    generation = auxiliary.root(data) / "generations" / (overlay["artifact_content_sha256"] + ".json")
+    generation.parent.mkdir(parents=True, exist_ok=True)
+    generation.write_bytes(D._json_bytes(overlay))
+    (auxiliary.root(data) / "current.json").write_bytes(D._json_bytes(overlay))
+    previous = dict(auxiliary_repair_published=overlay["artifact_content_sha256"],
+        auxiliary_repair_preflight=dict(path=str(path), sha256=D.H._sha(path),
+            manifest_sha256=manifest["artifact_content_sha256"]))
+    origin = dict(failed=previous, failed_path=d.workspace / "failed.json", failed_raw=b"failed")
+    monkeypatch.setattr(native, "validate", lambda *a, **kw: bundle)
+    monkeypatch.setattr(auxiliary, "current", lambda *a, **kw: overlay)
+    monkeypatch.setattr(auxiliary, "validate_contract_repair_manifest", lambda *a, **kw: None)
+    monkeypatch.setattr(d, "run_auxiliary_native", lambda *a: pytest.fail("already published repair must not be issued again"))
+    if fault == "manifest": previous["auxiliary_repair_preflight"]["sha256"] = "f" * 64
+    if fault == "published": previous["auxiliary_repair_published"] = "f" * 64
+    if fault == "binding": overlay = {**overlay, "bindings": {"scope": "wrong"}}
+    if fault == "generation": generation.write_bytes(D._json_bytes(proof.seal(dict(bindings={"scope": "other"}))))
+    if fault:
+        with pytest.raises(ValueError, match="deployment_recovery_auxiliary_"):
+            d.inherit_auxiliary_repair(origin, bundle)
+    else:
+        refs = d.inherit_auxiliary_repair(origin, bundle)
+        assert refs[str(generation)] == D.H._sha(generation)
+        d.acquire_hold(); d.phase = "drained"
+        monkeypatch.setattr(D, "_main_pids", lambda: [])
+        d.publish()
+        assert d.state["auxiliary_repair_reused"]["overlay_sha256"] == D.H._sha(generation)
+        assert "auxiliary_repair_published" not in d.state
+        assert d.selection.read_bytes() == d.published

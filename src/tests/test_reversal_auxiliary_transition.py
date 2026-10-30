@@ -186,6 +186,56 @@ def wire_repair_prepared(prepared, monkeypatch):
     return root, bundle, clock, parent
 
 
+@pytest.mark.parametrize("fault", [None, "original_missing", "unknown_pointer", "source_changed", "future", "symlink"])
+def test_code_handoff_retains_original_auxiliary_bytes_after_native_pointer_advance(wire_repair_prepared, monkeypatch, fault):
+    from datetime import timedelta
+    from src.engine.scalping import reversal_code_handoff as code
+
+    root, bundle, clock, parent = wire_repair_prepared
+    pointer = I.root(root) / "current.json"
+    original_sha = P.file_hash(pointer)
+    original_generation = I.root(root) / "generations" / (parent["artifact_content_sha256"] + ".json")
+    repair = I.prepare_contract_repair(root, bundle, expected_parent=parent["artifact_content_sha256"], now=clock + timedelta(seconds=1))
+    new = I.publish_contract_repair(root, repair, expected_parent=parent["artifact_content_sha256"],
+                                    confirm=I.CONTRACT_REPAIR_AUTHORITY, now=clock + timedelta(seconds=1))
+    assert P.file_hash(pointer) != original_sha
+    fixed = root / "unchanged-code.py"
+    fixed.write_text("native original code\n")
+    receipt = P.seal(dict(schema=code.SCHEMA, authority=code.AUTHORITY, target_date="2026-10-08",
+        release_commit="a" * 40, release_root=str(root), bundle_sha256=bundle["bundle_sha256"],
+        current_pointer_sha256=P.file_hash(N.root(root) / "current.json"), policy_reselected=False,
+        provider_called=False, source_hashes={str(pointer): original_sha},
+        code_hashes={str(fixed): P.file_hash(fixed)}))
+    path = code.path(root, "2026-10-08", "a" * 40, bundle["bundle_sha256"])
+    P.write(path, receipt)
+    sealed_before = path.read_bytes()
+    if fault == "original_missing": original_generation.unlink()
+    if fault == "source_changed":
+        source = Path(next(iter(repair["source_hashes"])))
+        source.write_text("{}")
+    if fault in {"unknown_pointer", "future"}:
+        changed = dict(new)
+        if fault == "unknown_pointer": changed.pop("contract_repair_manifest_sha256")
+        else:
+            changed.update(day="2099-10-08", effective_from="2099-10-08T15:01:01+09:00")
+        changed = P.seal(changed)
+        N._atomic_write_json(pointer, changed)
+        N._atomic_write_json(I.root(root) / "generations" / (changed["artifact_content_sha256"] + ".json"), changed)
+    if fault == "symlink":
+        pointer.unlink(); pointer.symlink_to(I.root(root) / "generations" / (new["artifact_content_sha256"] + ".json"))
+    kwargs = dict(data_root=root, day="2026-10-08", origin_root=root, origin_commit="a" * 40,
+                  bundle_sha=bundle["bundle_sha256"], pointer_sha=receipt["current_pointer_sha256"])
+    if fault:
+        with pytest.raises((ValueError, KeyError)):
+            code._validated_origin_receipt(**kwargs)
+    else:
+        result = code._validated_origin_receipt(**kwargs)
+        assert str(pointer) not in result["source_hashes"]
+        assert result["source_hashes"][str(original_generation)] == original_sha
+        assert result["auxiliary_pointer_observation"]["current_overlay_sha256"] == new["artifact_content_sha256"]
+        assert path.read_bytes() == sealed_before
+
+
 def test_prompt_contract_repair_keeps_mixed_incumbents_and_cas(prepared, monkeypatch):
     root, bundle, _, scopes, old_id, compact_id = prepared
     manifest = bundle["continuous_reversal"]["operating_manifest"]
