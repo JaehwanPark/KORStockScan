@@ -2210,11 +2210,16 @@ def test_validation_plan_successor_gets_immutable_evidence_and_native_reader(tmp
     original = old_path.read_bytes()
     code = generation.code_generation(family)
     plan = validation.plan_identity(family)
+    historical_payload = dict(date=DAY, generated_at=DAY + "T21:00:00+09:00")
+    historical = generation.native(historical_payload, family=family, day=DAY, data_root=data,
+        source_state="valid_empty", comparison_state="insufficient_sample", handoff_state="incumbent_carried")
     changed = {**plan, validation.PLANS[family][0]: "f" * 64}
     monkeypatch.setattr(validation, "plan_identity", lambda name: changed)
     path = validation.fixture_path(data, family)
     assert generation.code_generation(family) == code
     assert path != old_path
+    assert generation.inspect(historical, family=family, day=DAY,
+        payload=historical_payload, data_root=data)["status"] == "verified"
     with pytest.raises(FileNotFoundError):
         validation.verify_fixture(data, family)
     payload = dict(date=DAY, generated_at=DAY + "T21:00:00+09:00")

@@ -235,7 +235,6 @@ def inspect(contract, *, family, day, payload=None, data_root=None):
     )
     if verified and data_root is not None:
         from src.engine.scalping.main_stop_policy import bounded_object
-        from .policy_generation_validation import plan_identity
 
         reference = c["fixture_receipt"]
         path = Path(reference["path"])
@@ -254,7 +253,10 @@ def inspect(contract, *, family, day, payload=None, data_root=None):
             and value.get("code_sha256") == c["code_sha256"]
             and value.get("family") == family
             and value.get("closure_tests")
-            and value.get("validation_plan") == plan_identity(family)
+            and (path.name == f"{family}_{c['code_sha256']}.json"
+                 or (isinstance(value.get("validation_plan"), dict)
+                     and path.name == (f"{family}_{c['code_sha256']}_"
+                                       f"{digest(value['validation_plan'])}.json")))
             and value.get("unresolved_findings") == []
             and value.get("receipt_sha256")
             == digest({k: v for k, v in value.items() if k != "receipt_sha256"})
