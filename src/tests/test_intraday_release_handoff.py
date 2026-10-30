@@ -7630,7 +7630,7 @@ def test_interrupted_custody_delta_checks_complete_combined_candidate(tmp_path, 
     expected = hashlib.sha256(json.dumps(parent, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")).hexdigest()
     dependency = root / "src/engine/scalping/reversal_auxiliary_intraday.py"
     if fault == "missing": dependency.unlink()
-    elif fault == "mixed": dependency.write_bytes(subprocess.check_output(["git", "-C", str(root), "show", origin + ":src/engine/scalping/reversal_auxiliary_intraday.py"]))
+    elif fault == "mixed": dependency.write_bytes(subprocess.check_output(["git", "-C", str(root), "show", "3e3d5da2c:src/engine/scalping/reversal_auxiliary_intraday.py"]))
     elif fault == "dirty": dependency.write_bytes(dependency.read_bytes() + b"\n# unreviewed\n")
     if fault is None:
         assert set(handoff._verify_entry_code_delta(root, commit, origin, paths, expected)) == set(paths)

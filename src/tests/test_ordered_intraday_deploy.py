@@ -4358,3 +4358,43 @@ def test_live_interrupted_custody_failure_admits_exact_owned_hold(driver, monkey
         d.acquire_hold()
         assert d.hold.read_bytes() != before[0]
         assert failed_path.read_bytes() == before[1] and d.selection.read_bytes() == before[2]
+
+@pytest.mark.parametrize("reject", [False, True])
+def test_selected_p5_callback_checks_native_profile_after_real_hold_and_publication(driver, monkeypatch, reject):
+    from contextlib import nullcontext
+    from src.engine.infrastructure import startup_validation_code_context as C
+
+    d = driver
+    d.candidate = Path(D.__file__).resolve().parents[3]
+    d.commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=d.candidate, text=True).strip()
+    _candidate_p5_fixture(d, d.commit)
+    old = dict(schema="intraday_closed_consumption_observation_v1", pid_identity=d.identity)
+    d.closed_predecessor = dict(closed_observation=old)
+    monkeypatch.setattr(D.H, "closed_consumption_observation", lambda *_: old)
+    monkeypatch.setattr(D, "_main_pids", lambda: [])
+    monkeypatch.setattr(D, "_session_absent", lambda: True)
+    monkeypatch.setattr(D, "_predecessor_observer", lambda *a: {})
+    monkeypatch.setattr(D, "inherit_prepared_delay_code", lambda *a: None)
+    monkeypatch.setattr(D, "_source_database_epoch", lambda *a: nullcontext())
+    monkeypatch.setattr(D, "sentinel_preparation_lock", lambda *a: nullcontext())
+    monkeypatch.setattr(d, "preflight", lambda: None)
+    monkeypatch.setattr(d, "prepare", lambda: d.checkpoint("prepared"))
+    calls = []
+    monkeypatch.setattr(d, "start", lambda: calls.append("start"))
+    monkeypatch.setattr(d, "attest", lambda: {"status": "pass"})
+    def selected_p5(driver):
+        assert driver.phase == "prepared"
+        assert driver.hold.read_bytes() == driver.hold_bytes
+        selected = json.loads(driver.selection.read_bytes())
+        assert selected["git_commit"] == driver.commit and selected["actual_pid_consumed"] is False
+        relative = "src/engine/automation/ordered_intraday_deploy.py"
+        old_hash, new_hash = C.REVIEWED_INTERRUPTED_CUSTODY_TRANSITION[relative]
+        assert C.reviewed_preparation_pair(relative, old_hash, new_hash, root=driver.candidate)
+        if reject: raise ValueError("native selected P5 failed")
+    if reject:
+        with pytest.raises(ValueError, match="native selected P5 failed"):
+            D.execute(d, validate_prepared=selected_p5)
+        assert not calls
+    else:
+        assert D.execute(d, validate_prepared=selected_p5)["status"] == "pass"
+        assert calls == ["start"]
