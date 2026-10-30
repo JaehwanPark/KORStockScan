@@ -39,7 +39,7 @@ README, 런북(runbook), Plan Rebase, prompt, AGENTS 같은 기준 문서는 사
 ## 날짜별 Checklist
 
 - `checklists/YYYY-MM-DD-stage2-todo-checklist.md`: `build_next_stage2_checklist.py`가 생성하는 신규 checklist 위치.
-- `2026-04-20-stage2-todo-checklist.md`부터 `2026-05-15-stage2-todo-checklist.md`까지의 legacy root checklist는 `checklists/`로 이동 완료했다. 루트 `docs/`에는 날짜별 stage2 checklist를 새로 두지 않는다.
+- 루트 `docs/`에는 날짜별 stage2 checklist를 새로 두지 않는다.
 - 완료된 checklist의 `[x]` 항목은 증적이며 현재 OPEN owner로 보지 않는다. 현재 owner는 Plan Rebase와 최신 checklist에서 확인한다.
 
 ## 하위 디렉터리
@@ -48,7 +48,7 @@ README, 런북(runbook), Plan Rebase, prompt, AGENTS 같은 기준 문서는 사
 - `audit-reports/`: Plan Rebase, OFI/QI, hotfix, 운영 감리 보고서.
 - `code-improvement-workorders/`: 코드 개선 전용 workorder.
 - `code-reviews/`: 스나이퍼 엔진 코드리뷰, 성능 감사, holding flow override 리뷰.
-- `checklists/`: 신규 날짜별 checklist와 이동 완료된 legacy checklist.
+- `checklists/`: 보존 중인 날짜별 checklist.
 - `proposals/`: 스캐너 개선, preclose sell target 등 운영 제안서.
 - `personal/`: 개인 보조 메모. 실행 판정의 `Source`로 쓰지 않는다.
 - `reference/`: API 문서, AI coding instruction 등 일반 참조 문서.
@@ -65,7 +65,7 @@ README, 런북(runbook), Plan Rebase, prompt, AGENTS 같은 기준 문서는 사
 
 루트에 남은 `workorder-*.md`, `deepseek-*.md` 중 일부는 완료된 과거 문서지만 현재 checklist, Plan Rebase, acceptance spec에서 절대경로로 직접 참조한다. 링크 안정성과 parser 입력 보존을 위해 아래 조건 중 하나에 해당하면 이동하지 않는다.
 
-- Plan Rebase 또는 `2026-05-13-stage2-todo-checklist.md`가 직접 참조한다.
+- Plan Rebase가 직접 참조한다.
 - 과거 checklist의 `Source`로 남아 감사 추적성이 필요한 문서다.
 - acceptance spec, audit report, build report가 루트 경로를 전제로 참조한다.
 - 이동하려면 참조 링크 보정과 parser 검증을 같은 변경 세트에서 수행해야 한다.

@@ -8,6 +8,8 @@
 
 문서 자동 현행화의 owner는 [서버 스케줄·API·게시 검증](./monitoring-instruction-refresh.md)이다. 문서 열람·인용·수정 요청은 장중 모니터링, 정책 변경, 재기동 또는 주문 실행 지시가 아니다.
 
+장중 관측의 보존 대상 원본·영수증·스냅샷은 `tmp`가 아닌 `data/audit/intraday-observations/<source-date>/<run-id>/`에 둔다. 수집기는 원본 세대가 바뀐 경우에만 필요한 사본을 남기고, run owner·원천 해시·실제 소비자·종료 상태를 함께 기록한다. 임시 계산물은 수집 종료 후 마지막 소비를 검증하고 제거하며, 운영·롤백·정책·미완료 작업이 소비하는 자료는 그 소비를 이관하거나 종료하기 전까지 유지한다. 과거 날짜 자체를 보존 근거로 삼지 않으며, 정식 장후 입력의 누적 정책창과 단기 관측 사본을 별도로 관리한다.
+
 공통 원칙과 active/observe/OFF·rollback은 [Plan Rebase §1–§8](./plan-korStockScanPerformanceOptimization.rebase.md), 실행할 OPEN ID·시각·Acceptance는 현재 KST의 `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md`, 실행·복구 권한은 [runbook](./time-based-operations-runbook.md), producer/consumer 연결은 [traceability](./report-based-automation-traceability.md)를 따른다. 서로 충돌하면 `contract_drift`로 fail-closed하며 과거 receipt나 mtime으로 현행 상태를 추정하지 않는다.
 
 명시적으로 이 지시문에 따른 모니터링을 요청받으면 도래한 체크리스트 항목을 §4.1에 따라 점검하고, 확인된 source-quality·parser/schema·계측·report 결함은 §4.3과 §7의 허용 범위에서 최소 수리한다. 그 요청만으로 실주문, bot/episode process 재기동, live env·정책·threshold·provider·수량·cap·broker/order/safety 변경 권한은 생기지 않는다.

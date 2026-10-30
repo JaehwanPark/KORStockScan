@@ -272,6 +272,69 @@ def test_native_preparation_context_keeps_cli_full_scope_and_cold_invocation_bou
     assert not (data / "runtime/validation_digests").exists()
 
 
+@pytest.mark.parametrize("fault", [None, "changed", "wrong_date", "after_child", "oversized"])
+def test_native_recheck_transfers_bytes_to_real_cli_and_rechecks_owner(
+    native_preparation_cli, monkeypatch, fault
+):
+    """The real child runs semantics; only its authenticated bytes are reused."""
+    from src.engine.infrastructure import startup_validation_code_context as C
+    from src.engine.infrastructure.validation_digest_session import identity
+
+    code, data = native_preparation_cli
+    source = data / "source.bin"
+    entry = dict(identity=identity(source), digest=hashlib.sha256(source.read_bytes()).hexdigest(), created=time.time())
+    proof = dict(target_date=DAY, selected_release_root=str(code),
+                 native_verification=dict(source_date="2026-10-16"),
+                 closure=dict(digest_entries={str(source): entry}))
+
+    # Isolate this native CLI transport seam. The real closure owner and its
+    # sealed policy/source negatives are exercised by the code-context suite.
+    def check(value):
+        for name, row in value["closure"]["digest_entries"].items():
+            if identity(name) != row["identity"]:
+                raise ValueError("startup_main_digest_generation_changed")
+
+    monkeypatch.setattr(C, "_check_native_closure", check)
+    monkeypatch.setattr(validation, "ROOT", code)
+    (code / "src/engine/infrastructure/startup_validation_code_context.py").write_text(
+        "from src.engine.infrastructure.validation_digest_session import identity\n"
+        "def _check_native_closure(p):\n"
+        "    for name,row in p['closure']['digest_entries'].items():\n"
+        "        if identity(name)!=row['identity']:\n"
+        "            raise ValueError('startup_main_digest_generation_changed')\n"
+    )
+    if fault == "changed":
+        source.write_bytes(b"b" * source.stat().st_size)
+    elif fault == "wrong_date":
+        proof["target_date"] = "2026-10-20"
+    elif fault == "after_child":
+        original = validation._run_native_validation
+
+        def mutate_after_child(*args, **kwargs):
+            result = original(*args, **kwargs)
+            source.write_bytes(b"b" * source.stat().st_size)
+            return result
+
+        monkeypatch.setattr(validation, "_run_native_validation", mutate_after_child)
+    elif fault == "oversized":
+        proof["padding"] = "x" * validation.MAX_JSON
+    if fault and fault != "oversized":
+        with pytest.raises(ValueError, match="startup_.*(?:changed|scope_invalid)"):
+            validation._native_preparation_check(code, DAY, "2026-10-16", False, proof)
+        return
+    result = validation._native_preparation_check(code, DAY, "2026-10-16", False, proof)
+    stats = result["native_validation_io"]["stats"]
+    assert result["validation_scope"] == "current_full_contract"
+    if fault == "oversized":
+        assert stats["full_reads"] == 1
+        assert stats["reused_reads"] == 1
+        return
+    assert stats["full_reads"] == 0
+    assert stats["reused_reads"] == 2
+    assert stats["admitted_native_bytes"] == 2 * 1024 * 1024
+    assert not (data / "runtime/validation_digests").exists()
+
+
 def test_closed_predecessor_uses_clean_candidate_full_native_cli(
     native_preparation_cli, monkeypatch
 ):

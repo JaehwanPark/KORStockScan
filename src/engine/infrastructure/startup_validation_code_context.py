@@ -3645,6 +3645,20 @@ for _name, _current in REVIEWED_CRON_PHASE_BINDING_CHANGED.items():
     _history.update((origin, _current) for origin in REVIEWED_CRON_PHASE_BINDING_ORIGINS[_name]
                     if origin != _current)
 
+# The P5 recheck transfers only native byte identities; semantic validation is
+# still performed in its own child. The full preceding profile remains required.
+_P5_RECHECK_OWNER = "src/engine/automation/main_startup_validation.py"
+_P5_RECHECK_CURRENT = "3874cb131182242f74184dd65ea25629c7ecfb8eeebdecf25eb51fb5e12f5dde"
+REVIEWED_P5_RECHECK_PROFILE = {
+    **REVIEWED_CRON_PHASE_BINDING_PROFILE,
+    _P5_RECHECK_OWNER: _P5_RECHECK_CURRENT,
+}
+_p5_history = REVIEWED_PREPARATION_HISTORY.setdefault(_P5_RECHECK_OWNER, set())
+_p5_origins = {value for pair in _p5_history for value in pair}
+_p5_origins.add(REVIEWED_CRON_PHASE_BINDING_PROFILE[_P5_RECHECK_OWNER])
+_p5_history.update((origin, _P5_RECHECK_CURRENT) for origin in _p5_origins
+                   if origin != _P5_RECHECK_CURRENT)
+
 
 REVIEWED_SCHEDULED_SUFFIX_DEPENDENCIES = {
     "src/engine/automation/postclose_finalization_generation.py":
@@ -3670,7 +3684,7 @@ REVIEWED_SUBMISSION_MONITOR_TRANSITION = {
     ),
 }
 REVIEWED_SUBMISSION_MONITOR_PROFILE = {
-    **REVIEWED_CRON_PHASE_BINDING_PROFILE,
+    **REVIEWED_P5_RECHECK_PROFILE,
     **{name: pair[1] for name, pair in REVIEWED_SUBMISSION_MONITOR_TRANSITION.items()},
 }
 
@@ -3720,6 +3734,31 @@ def reviewed_preparation_pair(relative, old, current, *, root=None):
         # predicates in the shared cron-profile branch below.
     # The report/recovery owner remains outside the startup-required profile.
     # Its new comparison endpoint requires its actual native calendar reader.
+    p5_path = comparison_root / _P5_RECHECK_OWNER
+    p5_recheck = (p5_path.is_file() and not p5_path.is_symlink()
+                  and _sha(p5_path) == _P5_RECHECK_CURRENT)
+    if p5_recheck:
+        if (relative not in REVIEWED_PREPARATION_SOURCES
+                and relative not in REVIEWED_PREPARATION_HISTORY
+                or any((comparison_root / name).is_symlink() or not (comparison_root / name).is_file()
+                       or _sha(comparison_root / name) != expected
+                       for name, expected in (
+                           REVIEWED_SUBMISSION_MONITOR_PROFILE if monitor_generation
+                           else REVIEWED_P5_RECHECK_PROFILE
+                       ).items())):
+            return False
+        endpoint = comparison_root / relative
+        if endpoint.is_symlink() or not endpoint.is_file() or _sha(endpoint) != current:
+            return False
+        if (REVIEWED_PREPARATION_SOURCES.get(relative) == (old, current)
+                or (old, current) in REVIEWED_PREPARATION_HISTORY.get(relative, ())):
+            return True
+        from src.engine.automation.intraday_release_handoff import reviewed_formatting_predecessor
+        predecessor = reviewed_formatting_predecessor(relative, current)
+        origin = reviewed_formatting_predecessor(relative, old)
+        return (predecessor != current and origin == predecessor
+                or REVIEWED_PREPARATION_SOURCES.get(relative) == (origin, predecessor)
+                or (origin, predecessor) in REVIEWED_PREPARATION_HISTORY.get(relative, ()))
     cron_phase_binding = any(
         (comparison_root / name).is_file() and not (comparison_root / name).is_symlink()
         and _sha(comparison_root / name) == expected

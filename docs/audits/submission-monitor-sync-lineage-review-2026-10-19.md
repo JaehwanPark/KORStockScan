@@ -32,7 +32,7 @@
 
 후속 전환 검토에서 동일 report-only 코드의 변경 endpoint를 배포 인계와 독립 준비 context에 각각 등록해야 했던 중복 소유를 확인했다. `REVIEWED_SUBMISSION_MONITOR_TRANSITION`을 독립 준비 context의 단일 등록으로 두고, 배포 인계도 그 등록에서 새 profile을 도출한다. 기존70개 물리 준비 profile과164개 reviewed-formatting 배포 profile은 각 계약대로 완전 검증한다. 원본 profile은 변경하지 않는다. 특히 원 계약에 과거 trigger가 없는 부분 소비자 목록에서도 새 profile 전체를 검사하며, 새/누락/dirty/alias/혼합 입력과 미등록 endpoint는 거절한다. 이는 report-only 의미 결손을 새 기동 필수조건으로 추가하지 않는다.
 
-확장된 실제 준비 회귀는 predecessor manifest의 reader 비교가 후보 위치를 암묵 사용하던 phase 결함도 드러냈다. `reviewed_preparation_pair`의 기본은 실행 root를 유지하고, 원 manifest를 대사하는 parent/독립 reader 두 호출만 인증된 selected root를 명시한다. 실제 Git 두 세대를 사용한 original/reviewed/unreviewed/workflow/issuer-workflow5경우가 통과했으며 alias·잘못된 root·새 세대 거절을 추가했다. 과거 generic docstring fixture는 실제524 원 monitor·reader를 함께 보존하고, 최신 native shard/child 검증은 별도 완전 현 세대 fixture를 사용한다. private source-review 시험도 원본/후보 profile 사실을 각각 보존하며 native predicate의 verdict를 대체하지 않는다.
+확장된 실제 준비 회귀는 predecessor manifest의 reader 비교가 후보 위치를 암묵 사용하던 phase 결함도 드러냈다. `reviewed_preparation_pair`의 기본은 실행 root를 유지하고, 원 manifest를 대사하는 parent/독립 reader 두 호출만 인증된 selected root를 명시한다. 실제 Git 두 세대를 사용한 original/reviewed/unreviewed/workflow/issuer-workflow5경우가 통과했으며 alias·잘못된 root·새 세대 거절을 추가했다. 과거 generic docstring fixture는 실제003 원 monitor·reader를 함께 보존하고, 최신 native shard/child 검증은 별도 완전 현 세대 fixture를 사용한다. private source-review 시험도 원본/후보 profile 사실을 각각 보존하며 native predicate의 verdict를 대체하지 않는다.
 
 | 소비자와 호출 | 역할/단계 | 처리 |
 | --- | --- | --- |
@@ -50,3 +50,11 @@ Dependency disposition: 원 collection/trace/payload와 source29 계산·정리 
 Replacement/removal: 기존 두 검증기와 발행 entrypoint는 현재 소비자를 유지하므로 `retained`다. 이번 monitor endpoint 중복 등록은 공유 선언으로 `consolidated`; legacy exact profile/원 reader는 기존 receipt 소비를 위해 `retained`다. 신규 module/worker/주문·provider·threshold·수량 변경은 없다. 자연 분기 및 전체 시장 원천/비용 수용은 실제 표본으로만 닫는다. 배포 전·후/PID 상태와 최종 검증 수는 완료 후 아래에 기록한다.
 
 후보 전 capacity census: 등록 worktree311개, 그중 managed release215개, managed 디렉터리 전체220개다. `MAX_RELEASE_SET_UNITS=256`은 systemd unit 검사 한도이며 release/worktree 개수 제한으로 사용하지 않는다. 현재 native release-set 검사passed, 추정 checkout156,485,945B/2,770파일, 후보·복구 여유2개에312,971,890B를 예약하고 가용35,192,725,504B를 확인했다. 이 배포를 위한 삭제나 한도 변경은 필요하지 않았다. 후보 생성 직전에 actor/selector·가용량을 다시 확인한다.
+
+사용자 추가 승인00386500788c5ee8ff36cd8b6493dd8bf992d250을 같은 통합에 포함한다. 원 후보 `startup-io-retention-20261030-003865007`의P5 `9cdb852cea2344279797005ca9cb1fbb` passed와 담당 세션287검사는 원 후보 증거로 보존한다. 최종 공통 profile은003의 native source-digest recheck를 부모로 하고 monitor/독립 reader endpoint만 추가한다. 원 source proof는 동일 호출의 인증된 byte identity 재사용에만 전달되며 child의 native 의미 검증·변경/누락 거절·원 실행기한은 유지한다. 593ecfae9의 문서 정리 이력도 Git ancestor로 보존하고 여기서 추가 운영 삭제를 수행하지 않는다. 최종 통합본에는 새 candidate/selected P5와 실제PID 소비가 필요하며, 원 후보PASS를 재사용하지 않는다.
+
+현재 세대 시험은 최종70/164 source profile과 physical/logical 비교를 함께 사용하고, 역사 시험은 원 Git archive에서 실제 코드 세대를 대사한다. 과거 overlay를 현재 코드의 근거로 삼던 중복 assertion을 하나의 시험 helper로 통합했다. native predicate와 unknown/dirty/mixed 거절은 그대로 실행한다. 공유 체크리스트 원본SHA `0ebc83a47345a6d59e4c29ed4c7fb75cb2b361cb4ce8a26a746d0e19e931a611`은 새 owner 블록을 제외하면 후보와 동일함을 확인했다. native 달력의 다음 거래일은11/2이며, 최초 journal 생성 전 자연 분기의11/2 08:00~09:15 수용은 같은 owner를OPEN으로 유지한다.
+
+최종 source gate: 감시기·감지기2193, native 인계213, 독립 준비/ordered transition/기동2073의 고유4479경우가 통과했다. 전환2073은 동일 최종 source에서 prefix905와 후속 범위·수정된 역사 시험을 대사한 집합이며 단일 무중단 전체 실행으로 표시하지 않는다. 원 실패 XML/log도 [회귀 manifest](../../data/audit/submission_monitor/2026-10-30-incident/integrated-validation/manifest.json)에 보존했다. 구 storage 원본은81b의 원 reader로 검증하며 현재 reader의 세대 trigger로 재해석하지 않는다. Python compile, diff whitespace, 문서 parser print-only 및 각 최종 profile 대사는 통과했다. 코드리뷰의 미결 in-scope finding은0이고 운영 배포/PID/현재 observer 수용은 아직 별도다.
+
+변경량 기준은 사용자 인계003865007이다. 비시험 source3파일354추가/115삭제, 시험3파일688추가/99삭제다. 이 기록 추가 전 문서는3파일60추가/6삭제이며 incoming593/003의 기존 문서 정리는 별도 ancestor로 유지한다. source 순증은 원천·동기/비진입 분류, 하나의 공유 endpoint 선언 및 phase-root 명시이며 새 module/worker/Provider/정책 owner는 없다. 시험 순증은 두 실제 Git root, 전체 소비자 census와 누락/혼합/unknown 반례다. 역사 assertion 중복은 helper로 통합하고 원 profile/reader와 실패 증거는 유지했다.

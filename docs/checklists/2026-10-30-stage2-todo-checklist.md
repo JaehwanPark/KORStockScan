@@ -42,10 +42,10 @@
 
 ## 실행 항목
 
-- [ ] `[SubmissionMonitorSyncLineage1019] 제출 관측 원천·동기 평가 판정 수리와 최종 소비` (`Due: 2026-10-30`, `Slot: INTRADAY`, `TimeWindow: 08:00~20:10`, `Track: RuntimeStability`)
+- [ ] `[SubmissionMonitorSyncLineage1019] 제출 관측 원천·동기 평가 판정 수리와 최종 소비` (`Due: 2026-11-02`, `Slot: PREOPEN`, `TimeWindow: 08:00~09:15`, `Track: RuntimeStability`)
   - 08:10/08:15 경보의 원본·미확인 원천을 보존하고 동기 PASS의 비동기 오분류, 미발행 auxiliary 원천의 판단별 분류 및 불완전 관측 성공 표시를 수리했다. 수리본1b34e8cbf의 감시기·감지기2193검사 통과와 운영 배포는 별도 상태다.
   - 독립 준비·배포 인계의 동일 변경 중복 등록을 한 원천에서 공유하고 각 전체 profile·누락/변조/혼합/새 소비자 거절을 실제 reader로 검증한다. 후보·선택 후P5, 정책 불변, 실제PID 소비, native observer·현재 health를 확인한 후 배포 수용을 판단한다.
-  - 자연 수용: 배포 후 같은 실제PID·정책·session/route에서 해당 동기 평가 또는 native 비진입 분기가 발생한 첫 관측을 대사한다. 무표본·경보 부재·격리 재생은 자연 수용으로 표시하지 않고, 미확인 원천·비용 null과 기존 현재 결함은 유지한다. [원인·소비자·검증 기록](../audits/submission-monitor-sync-lineage-review-2026-10-19.md#2026-10-30-source-coverage-and-shared-registration).
+  - 자연 수용: 배포 후 같은 실제PID·정책·session/route의 동기 평가/native 비진입 분기를 대사하고, native 달력상 다음 거래일11/2 08:00~08:15의 최초 journal 생성 전 분기를 확인한다. 무표본·경보 부재·격리 재생은 자연 수용으로 표시하지 않고, 미확인 원천·비용 null과 기존 현재 결함은 유지한다. [원인·소비자·검증 기록](../audits/submission-monitor-sync-lineage-review-2026-10-19.md#2026-10-30-source-coverage-and-shared-registration).
 
 - [ ] `[DirectFamilyPreopenPolicyHandoff] direct family 날짜별 정책·bootstrap 장전 소비 확인` (`Due: 2026-10-30`, `Slot: PREOPEN`, `TimeWindow: 07:35~09:15`, `Track: RuntimeStability`)
   - 08:05:36 종료 확인: 같은 Main PID/시작 세대의 소비 ready, 선택본 native 검증·장후 terminal 결속 오류0, 현재 건강5PASS·2WARNING·FAIL0. 복구 실행·실제 다음 기동 수용은 완료했으며 이 OPEN은09:00~09:15 SOR/_AL 자연 분기 확인만 별도로 유지한다. 비용/의미 검증은 해당 기존 source-repair owner, 다음 source30→11/2 무개입 완주는 장후 owner에 남긴다. [최종 실제 소비·현재 건강](../../data/audit/storage_cleanup/2026-10-29-1312/overnight-20261030/final-live-acceptance-and-storage-reference.json).
