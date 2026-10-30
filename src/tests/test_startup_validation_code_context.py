@@ -48,9 +48,9 @@ def _assert_current_code_profile(relative, current):
     """Current source assertions use both final readers, not a dated overlay."""
     raw = (ROOT / relative).read_bytes()
     assert hashlib.sha256(raw).hexdigest() == current
-    if relative in C.REVIEWED_STOP_INCIDENT_PROFILE:
-        assert current == C.REVIEWED_STOP_INCIDENT_PROFILE[relative]
-    expected = H.REVIEWED_STOP_INCIDENT_PROFILE[relative]
+    if relative in C.REVIEWED_STORAGE_INTEGRATION_PROFILE:
+        assert current == C.REVIEWED_STORAGE_INTEGRATION_PROFILE[relative]
+    expected = H.REVIEWED_STORAGE_INTEGRATION_PROFILE[relative]
     compared = H.reviewed_formatting_source(relative, raw)
     assert hashlib.sha256(compared).hexdigest() == expected
 
