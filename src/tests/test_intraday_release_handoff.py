@@ -7639,14 +7639,16 @@ def test_interrupted_custody_delta_checks_complete_combined_candidate(tmp_path, 
 
 
 @pytest.mark.parametrize("fault", [None, "missing", "mixed", "dirty", "unknown", "suppressed_triggers", "variant_valid", "variant_missing", "variant_unknown", "variant_new_missing"])
-def test_p5_consumer_union_delta_checks_exact_complete_candidate(tmp_path, fault, monkeypatch):
+@pytest.mark.parametrize("generation", ["issued_p5", "storage_integration"])
+def test_p5_consumer_union_delta_checks_exact_complete_candidate(tmp_path, fault, monkeypatch, generation):
     import hashlib, json, subprocess
     from src.engine.infrastructure import startup_validation_code_context as C
 
     source = Path(handoff.__file__).resolve().parents[3]
     root = tmp_path / "candidate"
     subprocess.run(["git", "clone", "-q", "--shared", "--no-checkout", str(source), str(root)], check=True)
-    commit = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
+    revision = "85ede0d1190ccd9bf112666050bfa451092bc843" if generation == "issued_p5" else "HEAD"
+    commit = subprocess.check_output(["git", "-C", str(source), "rev-parse", revision], text=True).strip()
     subprocess.run(["git", "-C", str(root), "checkout", "-q", "--detach", commit], check=True)
     origin = "23fbecf2874e618680883ccf8fd4c0947a52f6a0"
     paths = {name: name for name in handoff.REVIEWED_P5_CONSUMER_UNION_HASHES}
@@ -7691,10 +7693,14 @@ def test_p5_consumer_union_delta_checks_exact_complete_candidate(tmp_path, fault
     elif fault in {"variant_valid", "variant_missing", "variant_unknown", "variant_new_missing"}:
         # This source is deliberately outside the common profile: the selected
         # sniper trigger owns its separate native dependency verification.
-        trigger, variant = next(iter(handoff.REVIEWED_P5_CONSUMER_UNION_VARIANTS.items()))
+        variants = (handoff.REVIEWED_P5_CONSUMER_UNION_VARIANTS if generation == "issued_p5"
+                    else handoff.REVIEWED_STORAGE_INTEGRATION_VARIANTS)
+        profile = (handoff.REVIEWED_P5_CONSUMER_UNION_PROFILE if generation == "issued_p5"
+                   else handoff.REVIEWED_STORAGE_INTEGRATION_PROFILE)
+        trigger, variant = next(iter(variants.items()))
         if fault == "variant_new_missing":
             monkeypatch.setitem(variant["dependencies"], "src/engine/new_missing_consumer.py", "0" * 64)
-        name = next(n for n in variant["dependencies"] if n not in handoff.REVIEWED_P5_CONSUMER_UNION_PROFILE)
+        name = next(n for n in variant["dependencies"] if n not in profile)
         extra = root / name
         if fault == "variant_missing":
             extra.unlink()
