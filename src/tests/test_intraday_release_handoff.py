@@ -4760,6 +4760,14 @@ def test_closed_observer_handoff_requires_exact_reader_and_source_epoch(
         "interrupted_clock",
         "interrupted_manifest",
         "interrupted_changed",
+        "interrupted_main_after_thread",
+        "interrupted_thread_after_main",
+        "interrupted_main_before_receipt",
+        "interrupted_thread_before_receipt",
+        "interrupted_main_future",
+        "interrupted_thread_future",
+        "interrupted_main_naive",
+        "interrupted_thread_naive",
     ],
 )
 def test_closed_consumption_requires_native_terminal_stop_eod_and_frozen_consumption(
@@ -4865,6 +4873,22 @@ def test_closed_consumption_requires_native_terminal_stop_eod_and_frozen_consump
         )
         if fault == "interrupted_clock":
             collector["generated_at"] = DAY + "T20:00:00"
+        if fault == "interrupted_main_after_thread":
+            heartbeat["main_loop"]["last_beat"] = DAY + "T20:00:01+09:00"
+        elif fault == "interrupted_thread_after_main":
+            terminal["last_beat"] = DAY + "T20:00:01+09:00"
+        elif fault == "interrupted_main_before_receipt":
+            heartbeat["main_loop"]["last_beat"] = DAY + "T19:57:59+09:00"
+        elif fault == "interrupted_thread_before_receipt":
+            terminal["last_beat"] = DAY + "T19:57:59+09:00"
+        elif fault == "interrupted_main_future":
+            heartbeat["main_loop"]["last_beat"] = DAY + "T23:00:00+09:00"
+        elif fault == "interrupted_thread_future":
+            terminal["last_beat"] = DAY + "T23:00:00+09:00"
+        elif fault == "interrupted_main_naive":
+            heartbeat["main_loop"]["last_beat"] = DAY + "T20:00:00"
+        elif fault == "interrupted_thread_naive":
+            terminal["last_beat"] = DAY + "T20:00:00"
         _json(
             data / "runtime/scalp_micro_reversion_forward_collector/latest.json",
             collector,
@@ -4920,12 +4944,15 @@ def test_closed_consumption_requires_native_terminal_stop_eod_and_frozen_consump
     now = NOW.replace(hour=22) + (
         timedelta(days=1) if fault == "midnight" else timedelta()
     )
-    if fault not in (None, "midnight", "interrupted"):
+    interrupted_valid = (
+        "interrupted", "interrupted_main_after_thread", "interrupted_thread_after_main"
+    )
+    if fault not in (None, "midnight", *interrupted_valid):
         with pytest.raises((ValueError, OSError)):
             handoff.closed_consumption_observation(now=now)
         return
     proof = handoff.closed_consumption_observation(now=now)
-    if fault == "interrupted":
+    if fault in interrupted_valid:
         assert (
             proof["terminal_verified"] is False
             and proof["source_admission"] == "unverified_interrupted_epoch"

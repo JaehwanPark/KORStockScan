@@ -518,7 +518,10 @@ def closed_consumption_observation(day=None, *, now=None):
             or beat.tzinfo is None
             or observed.tzinfo is None
             or terminal_at.tzinfo is None
-            or not recorded <= beat <= terminal_at <= current
+            # Independent writers have no relative heartbeat ordering. Both
+            # observations must belong to this consumed process lifetime.
+            or not recorded <= beat <= current
+            or not recorded <= terminal_at <= current
             or not recorded <= observed <= current
             or (heartbeat.get("main_loop") or {}).get("pid") != identity["pid"]
             or circuit.get("pid") != identity["pid"]
