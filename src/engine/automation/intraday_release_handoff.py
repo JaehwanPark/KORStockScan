@@ -13920,6 +13920,7 @@ REVIEWED_INTERRUPTED_CUSTODY_PAIRS = {
     name: {(origin, current) for origin in (
         {value for pair in REVIEWED_ENTRY_COST_PAIRS.get(name, ()) for value in pair}
         | {REVIEWED_COMMON_SUPPORT_PROFILE[name]}
+        | {REVIEWED_STOP_INCIDENT_PROFILE[name]}
     ) if origin != current}
     for name, current in REVIEWED_INTERRUPTED_CUSTODY_HASHES.items()
 }
