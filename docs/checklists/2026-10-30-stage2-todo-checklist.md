@@ -256,6 +256,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 ## 미완료 원천 진단 인계
 
 - [ ] `[PrePostcloseStorageSequencing] 오늘 Main 종료 후 정리와 장후 순서 검증` (`Due: 2026-10-30`, `Slot: POSTCLOSE`, `TimeWindow: 20:00~20:30`, `Track: RuntimeStability`)
+  - 16:58 후속0ac79ed31/PID1264804의 정책·프롬프트·첫 source/observer 및 네 계열 검증 소비 확인. 네 policy_generation 경고는 해소됐고 현재 bounded source 관측대기·과거 지연 이력은 보존한다. 추가 negative에서 과거 plan을 새 주소에 복사하면 native report 생성기만 수용하는 비일치를 재현·수리했고1804회귀 PASS. 마지막 native predicate 보완을 새 clean 후보의 original-report review/4fixture·P5/실제PID/health로 확인한 뒤 배포 수용을 종료한다.
   - 16:32 통합3deb89f38/PID1164213 실제 기동·정책·수리 프롬프트128개 소비, 후보/선택P5, 첫 source/observer 및16:33 건강5PASS/2WARNING/0FAIL 확인. source-window 오류는 해소됐다. 전체 건강 소비의 새 검증-plan 충돌(코드가 같아도 시험 계획이 달라 기존 영수증 재사용 불가)을 원본 보존 후 기존 publisher/reader에서 수리한다. 현재 Main을 유지하며 원 보고서→새 코드 review·4계열 native fixture·후속 선택/PID/health까지 OPEN; 과거 장후 지연·null/자연 수용은 별도 보존한다.
   - 16:10 통합2fe611daa/PID1003260 실제 기동·정책·수리 프롬프트128개 소비와 후보/선택P5는 완료했다. 첫 건강의 source-window 원 writer 검증은 운영 공유 data symlink 경계 누락으로 실패하여 정확 원본 재현 후 기존 호출부를 수리한다. 현재 Main은 유지하며 successor 전체 코드 profile·진단 proof·P5/ordered 전환·현재 observer/health까지 계속한다. 원 첫 실패·late recovery·자연 수용은 보존한다.
   - 14:36 통합 f1648286c 전환은 Main377636의 협력 종료·프롬프트 수리 발행 뒤 preparation에서 실패했다. 과거10/16 auxiliary 포인터를 고정 정책 입력으로 봉인한 기존 code-handoff가 원인이며, 원본 세대·실패·hold는 보존한다. 원본 바이트와 정상 native 갱신 계보를 재현해 검증했고, 중지 복구는 이미 발행한 동일 프롬프트를 승계한다. 새 clean 후보의 parity·후보/선택P5·실제PID 및 현재 observer/health까지 수용 OPEN이다.

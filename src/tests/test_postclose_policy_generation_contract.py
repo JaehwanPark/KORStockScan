@@ -46,13 +46,14 @@ def test_code_cache_invalidates_only_corrected_file_and_never_caches_costs(
 
 def attest(root, family):
     code = generation.code_generation(family)
-    from src.engine.monitoring.policy_generation_validation import fixture_path
+    from src.engine.monitoring.policy_generation_validation import fixture_path, plan_identity
 
     path = fixture_path(root, family)
     body = dict(
         schema="postclose_generation_fixture_receipt_v1",
         family=family,
         code_sha256=code,
+        validation_plan=plan_identity(family),
         status="pass",
         closure_tests=["synthetic_eligible_source_to_native_reader"],
         unresolved_findings=[],

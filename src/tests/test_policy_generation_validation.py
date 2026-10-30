@@ -2233,7 +2233,22 @@ def test_validation_plan_successor_gets_immutable_evidence_and_native_reader(tmp
     assert old_path.read_bytes() == original
     # A stale plan cannot be copied under the successor's address.
     path.write_bytes(original)
+    assert generation.native(payload, **args)["fixture_receipt"] is None
+    forged = {**contract, "fixture_receipt": dict(path=str(path), sha256=validation.file_sha(path))}
+    forged["contract_sha256"] = generation.digest({k:v for k,v in forged.items() if k != "contract_sha256"})
+    assert generation.inspect(forged, family=family, day=DAY, payload=payload, data_root=data)["status"] == "unverified"
     with pytest.raises(ValueError, match="fixture_identity_or_authority_invalid"):
         validation.verify_fixture(data, family)
     with pytest.raises(ValueError, match="successor_historical_fixture_path_invalid"):
         handoff._historical_fixture({**contract, "fixture_receipt": dict(path=str(path), sha256=validation.file_sha(path))}, data, family)
+
+
+def test_native_missing_validation_plan_preserves_unverified_report(tmp_path, monkeypatch):
+    def missing(_):
+        raise FileNotFoundError("validation plan source missing")
+    monkeypatch.setattr(validation, "plan_identity", missing)
+    result = generation.native(dict(date=DAY), family="auxiliary", day=DAY,
+        data_root=tmp_path, source_state="valid_empty", comparison_state="valid_empty",
+        handoff_state="incumbent_carried")
+    assert result["fixture_receipt"] is None
+    assert all(v["verification"] == "unverified" for v in result["components"].values())
